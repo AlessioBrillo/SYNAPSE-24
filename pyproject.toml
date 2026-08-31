@@ -124,6 +124,20 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "scipy.*",
+    "numpy.*",
+    "pandas.*",
+    "sklearn.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "synapse24.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
