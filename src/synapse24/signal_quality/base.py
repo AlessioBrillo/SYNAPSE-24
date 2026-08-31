@@ -70,31 +70,21 @@ class SignalQualityMetrics:
                 self.r_peak_sensitivity >= self.thresholds.r_peak_sensitivity_min
             )
         if self.r_peak_ppv is not None:
-            results["r_peak_ppv"] = (
-                self.r_peak_ppv >= self.thresholds.r_peak_ppv_min
-            )
+            results["r_peak_ppv"] = self.r_peak_ppv >= self.thresholds.r_peak_ppv_min
         if self.rmssd_mae_ms is not None:
-            results["rmssd_mae"] = (
-                self.rmssd_mae_ms <= self.thresholds.rmssd_mae_max_ms
-            )
+            results["rmssd_mae"] = self.rmssd_mae_ms <= self.thresholds.rmssd_mae_max_ms
         if self.ppg_sqi is not None:
             results["ppg_sqi"] = self.ppg_sqi >= self.thresholds.ppg_sqi_min
         if self.perfusion_index is not None:
-            results["perfusion_index"] = (
-                self.perfusion_index >= self.thresholds.perfusion_index_min
-            )
+            results["perfusion_index"] = self.perfusion_index >= self.thresholds.perfusion_index_min
         if self.motion_artifact_prob is not None:
-            results["motion_artifact"] = (
-                self.motion_artifact_prob <= self.thresholds.map_max
-            )
+            results["motion_artifact"] = self.motion_artifact_prob <= self.thresholds.map_max
         if self.spectral_flatness is not None:
             results["spectral_flatness"] = (
                 self.spectral_flatness <= self.thresholds.spectral_flatness_max
             )
         if self.alpha_band_ratio is not None:
-            results["alpha_ratio"] = (
-                self.alpha_band_ratio >= self.thresholds.alpha_ratio_min
-            )
+            results["alpha_ratio"] = self.alpha_band_ratio >= self.thresholds.alpha_ratio_min
         return results
 
     def overall_pass(self) -> bool:

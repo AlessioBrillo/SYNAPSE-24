@@ -84,10 +84,10 @@ class TestMITBIHIngestion:
 
         fs = 360  # MIT-BIH native rate
         duration = 10
-        t = np.arange(0, duration, 1/fs)
+        t = np.arange(0, duration, 1 / fs)
         # Synthetic ECG at ~72 BPM
         ecg = np.sin(2 * np.pi * 1.2 * t)
-        r_times = np.arange(0, duration, 1/1.2)
+        r_times = np.arange(0, duration, 1 / 1.2)
         r_indices = (r_times * fs).astype(int)
         for idx in r_indices:
             if idx < len(ecg):
@@ -179,6 +179,7 @@ class TestConfiguration:
         assert pyproject.exists()
 
         import tomllib
+
         with open(pyproject, "rb") as f:
             config = tomllib.load(f)
         assert "project" in config

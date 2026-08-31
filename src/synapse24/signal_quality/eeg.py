@@ -42,9 +42,7 @@ def spectral_flatness(eeg_signal: np.ndarray, sampling_rate: int) -> float:
     return float(geometric_mean / arithmetic_mean)
 
 
-def alpha_band_power_ratio(
-    eeg_signal: np.ndarray, sampling_rate: int
-) -> float:
+def alpha_band_power_ratio(eeg_signal: np.ndarray, sampling_rate: int) -> float:
     """Compute alpha band power ratio (alpha / total power).
 
     For eyes-closed resting state, alpha (8-13 Hz) should dominate.
@@ -136,8 +134,7 @@ def compute_eeg_quality(
         "alpha_band_ratio": alpha_ratio,
         "band_powers": band_powers,
         "quality_pass": (
-            sf <= expectations["flatness_max"]
-            and alpha_ratio >= expectations["alpha_ratio_min"]
+            sf <= expectations["flatness_max"] and alpha_ratio >= expectations["alpha_ratio_min"]
         ),
         "state": state,
     }

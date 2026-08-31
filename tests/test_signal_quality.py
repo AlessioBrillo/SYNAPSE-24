@@ -29,7 +29,7 @@ class TestECGQuality:
         """Test R-peak detection on synthetic ECG."""
         fs = 1000
         duration = 10
-        t = np.arange(0, duration, 1/fs)
+        t = np.arange(0, duration, 1 / fs)
         # Simple synthetic ECG: 1 Hz heart rate = 60 BPM
         ecg = np.sin(2 * np.pi * 1 * t) + 0.5 * np.sin(2 * np.pi * 2 * t)
         # Add QRS-like spikes
@@ -66,7 +66,7 @@ class TestECGQuality:
 
         sens, ppv = r_peak_detection_quality(det_peaks, ref_peaks, fs)
         assert sens == 0.8  # 4/5 detected
-        assert ppv == 0.8   # 4/5 correct
+        assert ppv == 0.8  # 4/5 correct
 
     def test_hrv_metrics(self):
         """Test HRV metric computation."""
@@ -95,7 +95,7 @@ class TestPPGQuality:
     def test_ppg_sqi_clean_signal(self):
         """Test SQI on clean synthetic PPG."""
         fs = 100
-        t = np.arange(0, 30, 1/fs)
+        t = np.arange(0, 30, 1 / fs)
         # Clean 1 Hz PPG
         ppg = 100 + 10 * np.sin(2 * np.pi * 1 * t)
         sqi = compute_ppg_sqi(ppg, fs)
@@ -104,7 +104,7 @@ class TestPPGQuality:
     def test_ppg_sqi_noisy_signal(self):
         """Test SQI on noisy PPG."""
         fs = 100
-        t = np.arange(0, 30, 1/fs)
+        t = np.arange(0, 30, 1 / fs)
         # Noisy signal with fixed seed for reproducibility
         rng = np.random.default_rng(42)
         ppg = rng.normal(0, 50, size=len(t))
@@ -114,7 +114,7 @@ class TestPPGQuality:
     def test_motion_artifact_probability(self):
         """Test MAP computation."""
         fs = 100
-        t = np.arange(0, 10, 1/fs)
+        t = np.arange(0, 10, 1 / fs)
         ppg = 100 + 10 * np.sin(2 * np.pi * 1 * t)
         # High motion
         accel = np.abs(np.sin(2 * np.pi * 2 * t)) * 10
@@ -134,7 +134,7 @@ class TestEEGQuality:
     def test_spectral_flatness_tonal(self):
         """Test spectral flatness on tonal signal."""
         fs = 256
-        t = np.arange(0, 10, 1/fs)
+        t = np.arange(0, 10, 1 / fs)
         # Pure alpha rhythm at 10 Hz
         eeg = 10 * np.sin(2 * np.pi * 10 * t)
         sf = spectral_flatness(eeg, fs)
@@ -150,7 +150,7 @@ class TestEEGQuality:
     def test_alpha_ratio_eyes_closed(self):
         """Test alpha ratio on eyes-closed like signal."""
         fs = 256
-        t = np.arange(0, 20, 1/fs)
+        t = np.arange(0, 20, 1 / fs)
         # Strong alpha
         eeg = 20 * np.sin(2 * np.pi * 10 * t) + 5 * np.random.randn(len(t))
         ratio = alpha_band_power_ratio(eeg, fs)
@@ -159,9 +159,13 @@ class TestEEGQuality:
     def test_alpha_ratio_eyes_open(self):
         """Test alpha ratio on eyes-open like signal (less alpha)."""
         fs = 256
-        t = np.arange(0, 20, 1/fs)
+        t = np.arange(0, 20, 1 / fs)
         # More beta, less alpha
-        eeg = 10 * np.sin(2 * np.pi * 20 * t) + 5 * np.sin(2 * np.pi * 10 * t) + 5 * np.random.randn(len(t))
+        eeg = (
+            10 * np.sin(2 * np.pi * 20 * t)
+            + 5 * np.sin(2 * np.pi * 10 * t)
+            + 5 * np.random.randn(len(t))
+        )
         ratio = alpha_band_power_ratio(eeg, fs)
         assert ratio < 0.3
 
@@ -215,9 +219,9 @@ class TestIntegration:
         """Test full ECG quality pipeline."""
         fs = 1000
         duration = 30
-        t = np.arange(0, duration, 1/fs)
+        t = np.arange(0, duration, 1 / fs)
         ecg = np.sin(2 * np.pi * 1.2 * t) + 0.3 * np.sin(2 * np.pi * 2.4 * t)
-        r_times = np.arange(0, duration, 1/1.2)
+        r_times = np.arange(0, duration, 1 / 1.2)
         r_indices = (r_times * fs).astype(int)
         for idx in r_indices:
             if idx < len(ecg):
@@ -233,7 +237,7 @@ class TestIntegration:
         """Test full PPG quality pipeline."""
         fs = 100
         duration = 30
-        t = np.arange(0, duration, 1/fs)
+        t = np.arange(0, duration, 1 / fs)
         ppg = 100 + 10 * np.sin(2 * np.pi * 1.2 * t)
         accel = np.zeros_like(ppg)
 
@@ -248,7 +252,7 @@ class TestIntegration:
         """Test full EEG quality pipeline."""
         fs = 256
         duration = 20
-        t = np.arange(0, duration, 1/fs)
+        t = np.arange(0, duration, 1 / fs)
         eeg = 20 * np.sin(2 * np.pi * 10 * t) + 3 * np.random.randn(len(t))
 
         quality = compute_eeg_quality(eeg, fs, "resting_eyes_closed")

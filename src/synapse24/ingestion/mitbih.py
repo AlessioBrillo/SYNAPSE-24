@@ -19,11 +19,54 @@ from synapse24.signal_quality import (
 )
 
 MITBIH_RECORDS = [
-    "100", "101", "102", "103", "104", "105", "106", "107", "108", "109",
-    "111", "112", "113", "114", "115", "116", "117", "118", "119", "121",
-    "122", "123", "124", "200", "201", "202", "203", "205", "207", "208",
-    "209", "210", "212", "213", "214", "215", "217", "219", "220", "221",
-    "222", "223", "228", "230", "231", "232", "233", "234",
+    "100",
+    "101",
+    "102",
+    "103",
+    "104",
+    "105",
+    "106",
+    "107",
+    "108",
+    "109",
+    "111",
+    "112",
+    "113",
+    "114",
+    "115",
+    "116",
+    "117",
+    "118",
+    "119",
+    "121",
+    "122",
+    "123",
+    "124",
+    "200",
+    "201",
+    "202",
+    "203",
+    "205",
+    "207",
+    "208",
+    "209",
+    "210",
+    "212",
+    "213",
+    "214",
+    "215",
+    "217",
+    "219",
+    "220",
+    "221",
+    "222",
+    "223",
+    "228",
+    "230",
+    "231",
+    "232",
+    "233",
+    "234",
 ]
 
 MITBIH_URL = "https://physionet.org/files/mitdb/1.0.0/"
@@ -94,9 +137,7 @@ def process_mitbih_record(
     mae = rmssd_mae(detected_peaks, reference_peaks, fs)
 
     # Full ECG quality assessment
-    ecg_quality = compute_ecg_quality(
-        ecg_signal, fs, reference_peaks=reference_peaks
-    )
+    ecg_quality = compute_ecg_quality(ecg_signal, fs, reference_peaks=reference_peaks)
 
     return {
         "record_id": record_id,
@@ -108,7 +149,6 @@ def process_mitbih_record(
         "rmssd_mae_ms": mae,
         "ecg_quality": ecg_quality.to_dict(),
     }
-
 
 
 def ingest_mitbih(

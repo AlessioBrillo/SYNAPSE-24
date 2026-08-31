@@ -8,9 +8,7 @@ import numpy as np
 from .base import QualityThresholds, SignalQualityMetrics
 
 
-def detect_r_peaks_neurokit(
-    ecg_signal: np.ndarray, sampling_rate: int
-) -> np.ndarray:
+def detect_r_peaks_neurokit(ecg_signal: np.ndarray, sampling_rate: int) -> np.ndarray:
     """Detect R-peaks using NeuroKit2's ECG processing pipeline.
 
     Args:
@@ -62,9 +60,7 @@ def r_peak_detection_quality(
     return sensitivity, ppv
 
 
-def compute_hrv_metrics(
-    r_peaks: np.ndarray, sampling_rate: int
-) -> dict[str, float]:
+def compute_hrv_metrics(r_peaks: np.ndarray, sampling_rate: int) -> dict[str, float]:
     """Compute time and frequency domain HRV metrics from R-peaks.
 
     Args:
@@ -94,11 +90,13 @@ def compute_hrv_metrics(
     # Frequency domain (using NeuroKit2)
     try:
         hrv_freq = nk.hrv_frequency(r_peaks, sampling_rate=sampling_rate, show=False)
-        hrv.update({
-            "lf_power": float(hrv_freq["HRV_LF"].iloc[0]),
-            "hf_power": float(hrv_freq["HRV_HF"].iloc[0]),
-            "lf_hf_ratio": float(hrv_freq["HRV_LFHF"].iloc[0]),
-        })
+        hrv.update(
+            {
+                "lf_power": float(hrv_freq["HRV_LF"].iloc[0]),
+                "hf_power": float(hrv_freq["HRV_HF"].iloc[0]),
+                "lf_hf_ratio": float(hrv_freq["HRV_LFHF"].iloc[0]),
+            }
+        )
     except Exception:
         pass
 
@@ -164,9 +162,7 @@ def compute_ecg_quality(
 
     # Validate against reference if provided
     if reference_peaks is not None and len(reference_peaks) > 0:
-        sensitivity, ppv = r_peak_detection_quality(
-            detected_peaks, reference_peaks, sampling_rate
-        )
+        sensitivity, ppv = r_peak_detection_quality(detected_peaks, reference_peaks, sampling_rate)
         metrics.r_peak_sensitivity = sensitivity
         metrics.r_peak_ppv = ppv
         metrics.rmssd_mae_ms = rmssd_mae(detected_peaks, reference_peaks, sampling_rate)

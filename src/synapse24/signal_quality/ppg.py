@@ -98,12 +98,7 @@ def compute_ppg_sqi(ppg_signal: np.ndarray, sampling_rate: int) -> float:
         regularity_score = 0.0
 
     # Weighted combination (weights from literature)
-    sqi = (
-        0.3 * pi_score
-        + 0.25 * entropy_score
-        + 0.2 * kurtosis_score
-        + 0.25 * regularity_score
-    )
+    sqi = 0.3 * pi_score + 0.25 * entropy_score + 0.2 * kurtosis_score + 0.25 * regularity_score
 
     return float(np.clip(sqi, 0.0, 1.0))
 
@@ -162,11 +157,7 @@ def ppg_motion_artifact_probability(
     # Spectral flatness: motion increases flatness
     # HF ratio: motion increases HF energy
     # Accel correlation: motion increases correlation
-    map_score = (
-        0.4 * spectral_flatness
-        + 0.3 * min(hf_ratio * 3, 1.0)
-        + 0.3 * accel_score
-    )
+    map_score = 0.4 * spectral_flatness + 0.3 * min(hf_ratio * 3, 1.0) + 0.3 * accel_score
 
     return float(np.clip(map_score, 0.0, 1.0))
 
