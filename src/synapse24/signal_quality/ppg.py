@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import welch, butter, filtfilt
-from scipy.stats import kurtosis, entropy
+from scipy.signal import butter, filtfilt, find_peaks, welch
+from scipy.stats import kurtosis
 
 
 def perfusion_index(ppg_signal: np.ndarray) -> float:

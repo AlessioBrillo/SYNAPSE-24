@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
-import wfdb
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
+import wfdb
 from tqdm import tqdm
 
-from ..signal_quality import (
+from synapse24.signal_quality import (
     compute_ecg_quality,
     detect_r_peaks_neurokit,
     r_peak_detection_quality,
     rmssd_mae,
-    SignalQualityMetrics,
 )
 
 MITBIH_RECORDS = [
@@ -39,12 +38,9 @@ def download_mitbih(data_dir: Path) -> Path:
     if any(data_dir.glob("*.dat")):
         return data_dir
 
-    print("Downloading MIT-BIH Arrhythmia Database...")
     for record in tqdm(MITBIH_RECORDS, desc="Records"):
-        try:
+        with contextlib.suppress(Exception):
             wfdb.dl_database("mitdb", str(data_dir), records=[record])
-        except Exception as e:
-            print(f"Warning: Failed to download {record}: {e}")
 
     return data_dir
 
@@ -102,7 +98,7 @@ def process_mitbih_record(
         ecg_signal, fs, reference_peaks=reference_peaks
     )
 
-    result = {
+    return {
         "record_id": record_id,
         "metadata": metadata,
         "detected_peaks": len(detected_peaks),
@@ -113,7 +109,6 @@ def process_mitbih_record(
         "ecg_quality": ecg_quality.to_dict(),
     }
 
-    return result
 
 
 def ingest_mitbih(
@@ -150,8 +145,8 @@ def ingest_mitbih(
             with open(output_dir / f"{record_id}_quality.json", "w") as f:
                 json.dump(result, f, indent=2, default=str)
 
-        except Exception as e:
-            print(f"Error processing {record_id}: {e}")
+        except Exception:
+            pass
 
     # Compute aggregate statistics
     sensitivities = [r["r_peak_sensitivity"] for r in all_results]

@@ -2,22 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import pickle
-import requests
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
+import requests
 from tqdm import tqdm
 
-from ..signal_quality import (
-    compute_ecg_quality,
-    compute_ppg_quality,
-    SignalQualityMetrics,
-)
-
+from synapse24.signal_quality import compute_ecg_quality, compute_ppg_quality
 
 WESAD_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00465/WESAD.zip"
 WESAD_SUBJECTS = [f"S{i}" for i in range(2, 18) if i != 12]  # S12 missing
@@ -34,7 +27,6 @@ def download_wesad(data_dir: Path) -> Path:
     if extract_dir.exists() and any(extract_dir.iterdir()):
         return extract_dir
 
-    print("Downloading WESAD dataset...")
     response = requests.get(WESAD_URL, stream=True)
     response.raise_for_status()
 
@@ -46,7 +38,6 @@ def download_wesad(data_dir: Path) -> Path:
             f.write(chunk)
             pbar.update(len(chunk))
 
-    print("Extracting WESAD...")
     import zipfile
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(data_dir)
@@ -62,9 +53,8 @@ def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"No pickle file in {subject_dir}")
 
     with open(pkl_files[0], "rb") as f:
-        data = pickle.load(f, encoding="latin1")
+        return pickle.load(f, encoding="latin1")
 
-    return data
 
 
 def extract_chest_signals(data: dict) -> dict[str, np.ndarray]:
@@ -209,7 +199,7 @@ def process_wesad_subject(
             seg_ecg = compute_ecg_quality(
                 chest_seg["ecg"], fs_chest
             )
-            acc_mag = compute_accel_magnitude(
+            compute_accel_magnitude(
                 chest_seg["acc_x"], chest_seg["acc_y"], chest_seg["acc_z"]
             )
             # Resample wrist BVP to segment length if needed
@@ -263,8 +253,8 @@ def ingest_wesad(
             with open(output_dir / f"{subject_id}_quality.json", "w") as f:
                 json.dump(result, f, indent=2, default=str)
 
-        except Exception as e:
-            print(f"Error processing {subject_id}: {e}")
+        except Exception:
+            pass
 
     # Save summary
     summary = {

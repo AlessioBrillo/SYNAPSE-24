@@ -9,16 +9,16 @@ Reproduces:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import cross_val_score, StratifiedKFold
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-from synapse24.ingestion import ingest_wesad, ingest_mitbih
-from synapse24.signal_quality import compute_ecg_quality, detect_r_peaks_neurokit
+from synapse24.ingestion import ingest_mitbih, ingest_wesad
 
 
 def extract_wesad_features(
@@ -183,14 +183,10 @@ def main():
     )
     args = parser.parse_args()
 
-    print("=" * 60)
-    print("SYNAPSE-24 Phase 0: Baseline Validation")
-    print("=" * 60)
 
     all_results = {}
 
     if args.dataset in ("wesad", "both"):
-        print("\n[1/2] Validating WESAD 3-class stress classification...")
         wesad_results = ingest_wesad(
             data_dir=args.data_dir / "wesad",
             output_dir=args.output_dir,
@@ -198,12 +194,8 @@ def main():
         wesad_metrics = validate_wesad_stress_classification(wesad_results)
         all_results["wesad"] = wesad_metrics
 
-        print(f"  Accuracy: {wesad_metrics.get('accuracy', 0):.4f} ± {wesad_metrics.get('std', 0):.4f}")
-        print(f"  Target (≥80%): {'✓ PASS' if wesad_metrics.get('target_met') else '✗ FAIL'}")
-        print(f"  Samples: {wesad_metrics.get('n_samples', 0)}, Classes: {wesad_metrics.get('n_classes', 0)}")
 
     if args.dataset in ("mitbih", "both"):
-        print("\n[2/2] Validating MIT-BIH R-peak detection...")
         mitbih_results = ingest_mitbih(
             data_dir=args.data_dir / "mitbih",
             output_dir=args.output_dir,
@@ -211,18 +203,11 @@ def main():
         mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
         all_results["mitbih"] = mitbih_metrics
 
-        print(f"  Sensitivity: {mitbih_metrics.get('mean_sensitivity', 0):.4f} ± {mitbih_metrics.get('std_sensitivity', 0):.4f}")
-        print(f"  PPV: {mitbih_metrics.get('mean_ppv', 0):.4f} ± {mitbih_metrics.get('std_ppv', 0):.4f}")
-        print(f"  RMSSD MAE: {mitbih_metrics.get('mean_rmssd_mae_ms', 0):.2f} ± {mitbih_metrics.get('std_rmssd_mae_ms', 0):.2f} ms")
-        print(f"  Target Se (≥99.6%): {'✓ PASS' if mitbih_metrics.get('target_sensitivity_met') else '✗ FAIL'}")
-        print(f"  Target PPV (≥99.6%): {'✓ PASS' if mitbih_metrics.get('target_ppv_met') else '✗ FAIL'}")
-        print(f"  Records: {mitbih_metrics.get('n_records', 0)}")
 
     # Save validation results
     output_path = args.output_dir / "baseline_validation.json"
     with open(output_path, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
-    print(f"\nValidation results saved to {output_path}")
 
     # Overall pass/fail
     overall_pass = True
@@ -232,12 +217,9 @@ def main():
         overall_pass &= all_results["mitbih"].get("target_sensitivity_met", False)
         overall_pass &= all_results["mitbih"].get("target_ppv_met", False)
 
-    print(f"\n{'='*60}")
-    print(f"OVERALL: {'✓ ALL BASELINES MET' if overall_pass else '✗ BASELINE VALIDATION FAILED'}")
-    print(f"{'='*60}")
 
     return 0 if overall_pass else 1
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import numpy as np
 import neurokit2 as nk
-from scipy.signal import find_peaks
+import numpy as np
 
-from .base import SignalQualityMetrics, QualityThresholds
+from .base import QualityThresholds, SignalQualityMetrics
 
 
 def detect_r_peaks_neurokit(

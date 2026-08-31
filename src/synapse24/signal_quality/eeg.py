@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.signal import welch
-from scipy.stats import entropy
 
 
 def spectral_flatness(eeg_signal: np.ndarray, sampling_rate: int) -> float:

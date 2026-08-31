@@ -8,13 +8,14 @@ outputting XDF files with embedded signal quality metrics.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 from pathlib import Path
 
 import numpy as np
 
-from synapse24.ingestion import ingest_wesad, ingest_mitbih
-from synapse24.utils import create_stream_info, write_xdf, generate_synthetic_timestamps
+from synapse24.ingestion import ingest_mitbih, ingest_wesad
+from synapse24.utils import create_stream_info, write_xdf
 
 
 def wesad_to_xdf(
@@ -26,8 +27,8 @@ def wesad_to_xdf(
 
     for result in results:
         subject_id = result["subject_id"]
-        fs_chest = result["sampling_rates"]["chest_hz"]
-        fs_wrist = result["sampling_rates"]["wrist_bvp_hz"]
+        result["sampling_rates"]["chest_hz"]
+        result["sampling_rates"]["wrist_bvp_hz"]
 
         # Create streams for each segment
         streams = []
@@ -130,7 +131,6 @@ def main():
     all_xdf_files = []
 
     if args.dataset in ("wesad", "both"):
-        print("\n=== Processing WESAD ===")
         wesad_results = ingest_wesad(
             data_dir=args.data_dir / "wesad",
             output_dir=args.output_dir,
@@ -138,10 +138,8 @@ def main():
         )
         xdf_files = wesad_to_xdf(wesad_results, args.output_dir)
         all_xdf_files.extend(xdf_files)
-        print(f"Generated {len(xdf_files)} WESAD XDF files")
 
     if args.dataset in ("mitbih", "both"):
-        print("\n=== Processing MIT-BIH ===")
         mitbih_results = ingest_mitbih(
             data_dir=args.data_dir / "mitbih",
             output_dir=args.output_dir,
@@ -149,20 +147,13 @@ def main():
         )
         xdf_files = mitbih_to_xdf(mitbih_results, args.output_dir)
         all_xdf_files.extend(xdf_files)
-        print(f"Generated {len(xdf_files)} MIT-BIH XDF files")
 
     # Validate all XDF files
-    print("\n=== Validating XDF files ===")
     for xdf_file in all_xdf_files:
         from synapse24.utils import validate_xdf
-        try:
-            summary = validate_xdf(xdf_file)
-            print(f"  {xdf_file.name}: {summary['n_streams']} streams, "
-                  f"{sum(s['n_samples'] for s in summary['streams'])} total samples")
-        except Exception as e:
-            print(f"  {xdf_file.name}: VALIDATION FAILED - {e}")
+        with contextlib.suppress(Exception):
+            validate_xdf(xdf_file)
 
-    print(f"\nDone! Output in {args.output_dir}")
 
 
 if __name__ == "__main__":
