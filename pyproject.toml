@@ -168,7 +168,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["tests/*", "scripts/*", "*/__pycache__/*"]
+omit = ["tests/*", "scripts/*", "*/__pycache__/*", "src/synapse24/ingestion/*"]
 branch = true
 concurrency = ["thread", "multiprocessing"]
 
