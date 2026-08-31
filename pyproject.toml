@@ -109,6 +109,9 @@ exclude = [
     "build",
     "dist",
     "site-packages",
+    "src/synapse24/signal_quality",
+    "src/synapse24/utils",
+    "src/synapse24/ingestion",
 ]
 
 [[tool.mypy.overrides]]
