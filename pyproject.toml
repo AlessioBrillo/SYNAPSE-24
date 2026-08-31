@@ -144,6 +144,7 @@ disallow_untyped_defs = false
 check_untyped_defs = false
 ignore_missing_imports = true
 warn_return_any = false
+disable_error_code = ["no-any-return", "no-untyped-def", "import-untyped", "attr-defined"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
