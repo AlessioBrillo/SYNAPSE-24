@@ -100,10 +100,12 @@ def validate_wesad_stress_classification(
         return {"accuracy": 0.0, "error": "Less than 3 classes present"}
 
     # Random Forest with CV
-    pipeline = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)),
-    ])
+    pipeline = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)),
+        ]
+    )
 
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     scores = cross_val_score(pipeline, X, y, cv=cv, scoring="accuracy", n_jobs=-1)
@@ -183,7 +185,6 @@ def main():
     )
     args = parser.parse_args()
 
-
     all_results = {}
 
     if args.dataset in ("wesad", "both"):
@@ -194,7 +195,6 @@ def main():
         wesad_metrics = validate_wesad_stress_classification(wesad_results)
         all_results["wesad"] = wesad_metrics
 
-
     if args.dataset in ("mitbih", "both"):
         mitbih_results = ingest_mitbih(
             data_dir=args.data_dir / "mitbih",
@@ -202,7 +202,6 @@ def main():
         )
         mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
         all_results["mitbih"] = mitbih_metrics
-
 
     # Save validation results
     output_path = args.output_dir / "baseline_validation.json"
@@ -216,7 +215,6 @@ def main():
     if "mitbih" in all_results:
         overall_pass &= all_results["mitbih"].get("target_sensitivity_met", False)
         overall_pass &= all_results["mitbih"].get("target_ppv_met", False)
-
 
     return 0 if overall_pass else 1
 

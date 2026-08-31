@@ -31,14 +31,16 @@ def download_wesad(data_dir: Path) -> Path:
     response.raise_for_status()
 
     total_size = int(response.headers.get("content-length", 0))
-    with open(zip_path, "wb") as f, tqdm(
-        total=total_size, unit="B", unit_scale=True, desc="WESAD"
-    ) as pbar:
+    with (
+        open(zip_path, "wb") as f,
+        tqdm(total=total_size, unit="B", unit_scale=True, desc="WESAD") as pbar,
+    ):
         for chunk in response.iter_content(chunk_size=8192):
             f.write(chunk)
             pbar.update(len(chunk))
 
     import zipfile
+
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(data_dir)
 
@@ -54,7 +56,6 @@ def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
 
     with open(pkl_files[0], "rb") as f:
         return pickle.load(f, encoding="latin1")
-
 
 
 def extract_chest_signals(data: dict) -> dict[str, np.ndarray]:
@@ -151,21 +152,16 @@ def process_wesad_subject(
 
     # Resample wrist ACC to match BVP for MAP computation
     from scipy.signal import resample
-    wrist_acc_mag = compute_accel_magnitude(
-        wrist["acc_x"], wrist["acc_y"], wrist["acc_z"]
-    )
+
+    wrist_acc_mag = compute_accel_magnitude(wrist["acc_x"], wrist["acc_y"], wrist["acc_z"])
     if len(wrist_acc_mag) != len(wrist["bvp"]):
         wrist_acc_mag = resample(wrist_acc_mag, len(wrist["bvp"]))
 
     # Compute quality metrics for chest ECG
-    ecg_quality = compute_ecg_quality(
-        chest["ecg"], fs_chest, thresholds=None
-    )
+    ecg_quality = compute_ecg_quality(chest["ecg"], fs_chest, thresholds=None)
 
     # Compute quality metrics for wrist BVP
-    ppg_quality = compute_ppg_quality(
-        wrist["bvp"], fs_wrist_bvp, wrist_acc_mag
-    )
+    ppg_quality = compute_ppg_quality(wrist["bvp"], fs_wrist_bvp, wrist_acc_mag)
 
     # Segment by activity labels
     # Labels: 1=baseline, 2=stress, 3=amusement, 4=meditation, 5=recovery, 6=fun, 7=rest
@@ -196,18 +192,15 @@ def process_wesad_subject(
         chest_seg = segment_by_label(chest, chest["labels"], label_val)
         if len(chest_seg["ecg"]) > fs_chest * 10:  # At least 10 seconds
             # Recompute quality for this segment
-            seg_ecg = compute_ecg_quality(
-                chest_seg["ecg"], fs_chest
-            )
-            compute_accel_magnitude(
-                chest_seg["acc_x"], chest_seg["acc_y"], chest_seg["acc_z"]
-            )
+            seg_ecg = compute_ecg_quality(chest_seg["ecg"], fs_chest)
+            compute_accel_magnitude(chest_seg["acc_x"], chest_seg["acc_y"], chest_seg["acc_z"])
             # Resample wrist BVP to segment length if needed
-            wrist_seg = segment_by_label(wrist, resample_labels(chest["labels"], fs_chest, fs_wrist_bvp), label_val)
+            wrist_seg = segment_by_label(
+                wrist, resample_labels(chest["labels"], fs_chest, fs_wrist_bvp), label_val
+            )
             if len(wrist_seg["bvp"]) > fs_wrist_bvp * 10:
                 seg_ppg = compute_ppg_quality(
-                    wrist_seg["bvp"], fs_wrist_bvp,
-                    resample(wrist_acc_mag, len(wrist_seg["bvp"]))
+                    wrist_seg["bvp"], fs_wrist_bvp, resample(wrist_acc_mag, len(wrist_seg["bvp"]))
                 )
                 results["segments"][label_name] = {
                     "duration_s": len(chest_seg["ecg"]) / fs_chest,
@@ -250,6 +243,7 @@ def ingest_wesad(
 
             # Save per-subject results
             import json
+
             with open(output_dir / f"{subject_id}_quality.json", "w") as f:
                 json.dump(result, f, indent=2, default=str)
 

@@ -154,6 +154,7 @@ Every processed dataset outputs **XDF files** with:
 Validate XDF:
 ```python
 from synapse24.utils import validate_xdf
+
 summary = validate_xdf(Path("data/processed/S2_wesad.xdf"))
 ```
 

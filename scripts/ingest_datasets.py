@@ -93,9 +93,7 @@ def mitbih_to_xdf(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="SYNAPSE-24 Phase 0: Public Dataset Ingestion"
-    )
+    parser = argparse.ArgumentParser(description="SYNAPSE-24 Phase 0: Public Dataset Ingestion")
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -151,9 +149,9 @@ def main():
     # Validate all XDF files
     for xdf_file in all_xdf_files:
         from synapse24.utils import validate_xdf
+
         with contextlib.suppress(Exception):
             validate_xdf(xdf_file)
-
 
 
 if __name__ == "__main__":

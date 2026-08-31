@@ -51,7 +51,7 @@ def create_stream_info(
     # Add channel metadata
     chns = info.desc().append_child("channels")
     if channel_names is None:
-        channel_names = [f"CH{i+1}" for i in range(channel_count)]
+        channel_names = [f"CH{i + 1}" for i in range(channel_count)]
     if channel_units is None:
         channel_units = [""] * channel_count
 
@@ -138,7 +138,9 @@ def validate_xdf(file_path: Path) -> dict[str, Any]:
             "source_id": info.get("source_id", [""])[0],
             "n_samples": len(time_series),
             "duration_s": float(time_stamps[-1] - time_stamps[0]) if len(time_stamps) > 1 else 0,
-            "actual_srate": len(time_series) / (time_stamps[-1] - time_stamps[0]) if len(time_stamps) > 1 else 0,
+            "actual_srate": len(time_series) / (time_stamps[-1] - time_stamps[0])
+            if len(time_stamps) > 1
+            else 0,
         }
         summary["streams"].append(stream_summary)
 
