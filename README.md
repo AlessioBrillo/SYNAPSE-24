@@ -223,4 +223,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**SYNAPSE-24** — Maximizing physiological data quality, quantity, and diversity for pattern recognition.
+**SYNAPSE-24** — Maximizing physiological data quality, quantity, and diversity for pattern recognition.#   C I   T r i g g e r  
+ 
