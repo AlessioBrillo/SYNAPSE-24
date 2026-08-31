@@ -52,6 +52,7 @@ dev = [
     "mypy>=1.10.0,<2.0",
     "types-requests>=2.31.0,<3.0",
     "types-pyyaml>=6.0.0,<7.0",
+    "types-tqdm>=4.24.0,<5.0",
     "pre-commit>=3.7.0,<4.0",
 ]
 docs = [
@@ -141,6 +142,8 @@ module = [
 ]
 disallow_untyped_defs = false
 check_untyped_defs = false
+ignore_missing_imports = true
+warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
