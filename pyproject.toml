@@ -136,9 +136,9 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "synapse24.signal_quality.*",
-    "synapse24.utils.*",
-    "synapse24.ingestion.*",
+    "synapse24.signal_quality",
+    "synapse24.utils",
+    "synapse24.ingestion",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = false
