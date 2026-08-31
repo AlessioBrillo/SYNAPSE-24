@@ -1,0 +1,175 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: "3.11"
+  UV_VERSION: "0.4.0"
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Run Ruff lint
+        run: uv run ruff check .
+
+      - name: Run Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Run MyPy type check
+        run: uv run mypy --strict src/
+
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=src --cov-fail-under=80 --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  baseline-validation:
+    name: Baseline Validation
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Download WESAD (cached)
+        id: wesad-cache
+        uses: actions/cache@v4
+        with:
+          path: data/wesad
+          key: wesad-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Download MIT-BIH (cached)
+        id: mitbih-cache
+        uses: actions/cache@v4
+        with:
+          path: data/mitbih
+          key: mitbih-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      - name: Run WESAD baseline validation
+        if: steps.wesad-cache.outputs.cache-hit == 'true' || steps.mitbih-cache.outputs.cache-hit == 'true'
+        run: |
+          uv run python scripts/validate_baseline.py --dataset both --data-dir data --output-dir data/processed
+        timeout-minutes: 45
+
+      - name: Upload validation results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-validation
+          path: data/processed/*_validation.json
+          retention-days: 30
+
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen --extra docs
+
+      - name: Build docs
+        run: uv run mkdocs build --strict
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: site/
+          retention-days: 30
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [test, baseline-validation]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.whl
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories (large files)
+data/wesad/
+data/mitbih/
+data/processed/
+*.xdf
+*.edf
+*.dat
+*.hea
+*.atr
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.env
+.env.local
+
+# Temporary
+tmp/
+temp/
+*.tmp

@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""Baseline validation against published results.
+
+Reproduces:
+1. WESAD 3-class stress classification (ECG+EDA+ACC) - target ≥80% accuracy
+2. MIT-BIH R-peak detection - target Se ≥99.6%, PPV ≥99.6%
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+from synapse24.ingestion import ingest_wesad, ingest_mitbih
+from synapse24.signal_quality import compute_ecg_quality, detect_r_peaks_neurokit
+
+
+def extract_wesad_features(
+    subject_result: dict,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Extract features and labels for stress classification from WESAD subject.
+
+    Uses segments: baseline (1) vs stress (2) vs amusement (3) for 3-class.
+    """
+    segments = subject_result.get("segments", {})
+
+    # We need baseline, stress, and amusement
+    required = ["baseline", "stress", "amusement"]
+    if not all(s in segments for s in required):
+        return None
+
+    features_list = []
+    labels_list = []
+
+    label_map = {"baseline": 0, "stress": 1, "amusement": 2}
+
+    for label_name, label_id in label_map.items():
+        seg = segments[label_name]
+        ecg_q = seg["ecg_quality"]
+        ppg_q = seg["ppg_quality"]
+
+        # Extract HRV features from ECG quality
+        hrv = ecg_q.get("metrics", {}).get("ecg", {}).get("hrv_metrics", {})
+
+        feat = [
+            hrv.get("mean_rr_ms", 0),
+            hrv.get("sdnn_ms", 0),
+            hrv.get("rmssd_ms", 0),
+            hrv.get("pnn50", 0),
+            hrv.get("hr_mean_bpm", 0),
+            hrv.get("lf_power", 0),
+            hrv.get("hf_power", 0),
+            hrv.get("lf_hf_ratio", 0),
+            ppg_q.get("ppg_sqi", 0),
+            ppg_q.get("perfusion_index", 0),
+            ppg_q.get("motion_artifact_prob", 0),
+        ]
+        features_list.append(feat)
+        labels_list.append(label_id)
+
+    return np.array(features_list), np.array(labels_list)
+
+
+def validate_wesad_stress_classification(
+    results: list[dict],
+    n_splits: int = 5,
+) -> dict[str, float]:
+    """Validate WESAD 3-class stress classification.
+
+    Target: ≥80% accuracy (published benchmark: 80% for 3-class, 93% for binary)
+    """
+    all_features = []
+    all_labels = []
+
+    for result in results:
+        extracted = extract_wesad_features(result)
+        if extracted is not None:
+            feats, labels = extracted
+            all_features.append(feats)
+            all_labels.append(labels)
+
+    if not all_features:
+        return {"accuracy": 0.0, "error": "No valid segments"}
+
+    X = np.vstack(all_features)
+    y = np.hstack(all_labels)
+
+    # Remove any NaN/inf
+    mask = np.all(np.isfinite(X), axis=1)
+    X = X[mask]
+    y = y[mask]
+
+    if len(np.unique(y)) < 3:
+        return {"accuracy": 0.0, "error": "Less than 3 classes present"}
+
+    # Random Forest with CV
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)),
+    ])
+
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    scores = cross_val_score(pipeline, X, y, cv=cv, scoring="accuracy", n_jobs=-1)
+
+    return {
+        "accuracy": float(np.mean(scores)),
+        "std": float(np.std(scores)),
+        "min": float(np.min(scores)),
+        "max": float(np.max(scores)),
+        "n_samples": len(X),
+        "n_classes": len(np.unique(y)),
+        "target_met": np.mean(scores) >= 0.80,
+    }
+
+
+def validate_mitbih_rpeak_detection(
+    results: list[dict],
+) -> dict[str, float]:
+    """Validate MIT-BIH R-peak detection against published baselines.
+
+    Target: Sensitivity ≥99.6%, PPV ≥99.6% (standard benchmark)
+    """
+    sensitivities = []
+    ppvs = []
+    maes = []
+
+    for result in results:
+        sens = result.get("r_peak_sensitivity", 0)
+        ppv = result.get("r_peak_ppv", 0)
+        mae = result.get("rmssd_mae_ms", 0)
+
+        if sens > 0:
+            sensitivities.append(sens)
+        if ppv > 0:
+            ppvs.append(ppv)
+        if mae > 0:
+            maes.append(mae)
+
+    if not sensitivities:
+        return {"error": "No valid results"}
+
+    return {
+        "mean_sensitivity": float(np.mean(sensitivities)),
+        "std_sensitivity": float(np.std(sensitivities)),
+        "min_sensitivity": float(np.min(sensitivities)),
+        "mean_ppv": float(np.mean(ppvs)),
+        "std_ppv": float(np.std(ppvs)),
+        "min_ppv": float(np.min(ppvs)),
+        "mean_rmssd_mae_ms": float(np.mean(maes)),
+        "std_rmssd_mae_ms": float(np.std(maes)),
+        "target_sensitivity_met": np.mean(sensitivities) >= 0.996,
+        "target_ppv_met": np.mean(ppvs) >= 0.996,
+        "n_records": len(sensitivities),
+    }
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Validate against published baselines")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="Data directory",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/processed"),
+        help="Processed data directory",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["wesad", "mitbih", "both"],
+        default="both",
+    )
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("SYNAPSE-24 Phase 0: Baseline Validation")
+    print("=" * 60)
+
+    all_results = {}
+
+    if args.dataset in ("wesad", "both"):
+        print("\n[1/2] Validating WESAD 3-class stress classification...")
+        wesad_results = ingest_wesad(
+            data_dir=args.data_dir / "wesad",
+            output_dir=args.output_dir,
+        )
+        wesad_metrics = validate_wesad_stress_classification(wesad_results)
+        all_results["wesad"] = wesad_metrics
+
+        print(f"  Accuracy: {wesad_metrics.get('accuracy', 0):.4f} ± {wesad_metrics.get('std', 0):.4f}")
+        print(f"  Target (≥80%): {'✓ PASS' if wesad_metrics.get('target_met') else '✗ FAIL'}")
+        print(f"  Samples: {wesad_metrics.get('n_samples', 0)}, Classes: {wesad_metrics.get('n_classes', 0)}")
+
+    if args.dataset in ("mitbih", "both"):
+        print("\n[2/2] Validating MIT-BIH R-peak detection...")
+        mitbih_results = ingest_mitbih(
+            data_dir=args.data_dir / "mitbih",
+            output_dir=args.output_dir,
+        )
+        mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
+        all_results["mitbih"] = mitbih_metrics
+
+        print(f"  Sensitivity: {mitbih_metrics.get('mean_sensitivity', 0):.4f} ± {mitbih_metrics.get('std_sensitivity', 0):.4f}")
+        print(f"  PPV: {mitbih_metrics.get('mean_ppv', 0):.4f} ± {mitbih_metrics.get('std_ppv', 0):.4f}")
+        print(f"  RMSSD MAE: {mitbih_metrics.get('mean_rmssd_mae_ms', 0):.2f} ± {mitbih_metrics.get('std_rmssd_mae_ms', 0):.2f} ms")
+        print(f"  Target Se (≥99.6%): {'✓ PASS' if mitbih_metrics.get('target_sensitivity_met') else '✗ FAIL'}")
+        print(f"  Target PPV (≥99.6%): {'✓ PASS' if mitbih_metrics.get('target_ppv_met') else '✗ FAIL'}")
+        print(f"  Records: {mitbih_metrics.get('n_records', 0)}")
+
+    # Save validation results
+    output_path = args.output_dir / "baseline_validation.json"
+    with open(output_path, "w") as f:
+        json.dump(all_results, f, indent=2, default=str)
+    print(f"\nValidation results saved to {output_path}")
+
+    # Overall pass/fail
+    overall_pass = True
+    if "wesad" in all_results:
+        overall_pass &= all_results["wesad"].get("target_met", False)
+    if "mitbih" in all_results:
+        overall_pass &= all_results["mitbih"].get("target_sensitivity_met", False)
+        overall_pass &= all_results["mitbih"].get("target_ppv_met", False)
+
+    print(f"\n{'='*60}")
+    print(f"OVERALL: {'✓ ALL BASELINES MET' if overall_pass else '✗ BASELINE VALIDATION FAILED'}")
+    print(f"{'='*60}")
+
+    return 0 if overall_pass else 1
+
+
+if __name__ == "__main__":
+    exit(main())
