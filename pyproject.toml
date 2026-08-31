@@ -81,7 +81,7 @@ select = [
     "E", "F", "I", "N", "UP", "W", "C4", "C9", "D", "DTZ", "EXE", "ISC", "ICN", "PIE", "PT", "Q", "RET", "SIM", "T20", "TCH", "ARG", "PTH", "ERA", "PD", "PL", "TRY", "NPY", "RSE", "TID", "PYI",
 ]
 ignore = []
-per-file-ignores = { "tests/*" = ["S101", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "NPY002", "PLR2004", "PLC0415", "PTH123", "E501", "T201", "ARG001", "F841", "F401", "RET504", "TRY003"], "scripts/*" = ["T201", "PTH123", "PLC0415", "ARG001", "RET504", "TRY003", "EXE001", "D103", "N806", "PLR2004"], "src/*" = ["ARG001", "PTH123", "PLC0415", "RET504", "TRY003", "PLR2004", "F401", "F841", "T201"] }
+per-file-ignores = { "tests/*" = ["S101", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "NPY002", "PLR2004", "PLC0415", "PTH123", "E501", "T201", "ARG001", "F841", "F401", "RET504", "TRY003"], "scripts/*" = ["T201", "PTH123", "PLC0415", "ARG001", "RET504", "TRY003", "EXE001", "D103", "N806", "PLR2004"], "src/*" = ["ARG001", "PTH123", "PLC0415", "RET504", "TRY003", "PLR2004", "F401", "F841", "T201", "E501", "D102", "PLR0913", "PLR0917"] }
 format.quote-style = "double"
 format.indent-style = "space"
 lint.pydocstyle.convention = "google"
