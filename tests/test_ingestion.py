@@ -138,9 +138,9 @@ class TestXDFUtils:
 
     def test_create_stream_info(self):
         """Test StreamInfo creation."""
-        from synapse24.utils import create_stream_info
+        from synapse24.utils import StreamConfig, create_stream_info
 
-        info = create_stream_info(
+        config = StreamConfig(
             name="TEST_ECG",
             stream_type="ECG",
             channel_count=1,
@@ -148,6 +148,7 @@ class TestXDFUtils:
             channel_names=["ECG"],
             channel_units=["µV"],
         )
+        info = create_stream_info(config)
         assert info.name() == "TEST_ECG"
         assert info.type() == "ECG"
         assert info.channel_count() == 1

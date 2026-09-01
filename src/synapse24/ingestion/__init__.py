@@ -1,5 +1,7 @@
 """Ingestion pipelines for public datasets."""
 
+from synapse24.signal_quality import Tier
+
 from .mitbih import (
     download_mitbih,
     ingest_mitbih,
@@ -26,4 +28,5 @@ __all__ = [
     "load_wesad_subject",
     "process_mitbih_record",
     "process_wesad_subject",
+    "Tier",
 ]

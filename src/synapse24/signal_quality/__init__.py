@@ -1,6 +1,6 @@
 """Signal quality metrics for multimodal biosignals."""
 
-from .base import QualityThresholds, SignalQualityMetrics
+from .base import QualityThresholds, SignalQualityMetrics, Tier, compute_snr
 from .ecg import (
     compute_ecg_quality,
     compute_hrv_metrics,
@@ -26,6 +26,7 @@ __all__ = [
     "compute_hrv_metrics",
     "compute_ppg_quality",
     "compute_ppg_sqi",
+    "compute_snr",
     "detect_r_peaks_neurokit",
     "perfusion_index",
     "ppg_motion_artifact_probability",
@@ -35,4 +36,5 @@ __all__ = [
     "alpha_band_power_ratio",
     "SignalQualityMetrics",
     "QualityThresholds",
+    "Tier",
 ]
