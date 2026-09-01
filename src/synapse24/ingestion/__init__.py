@@ -9,15 +9,19 @@ from .mitbih import (
     process_mitbih_record,
 )
 from .wesad import (
+    compute_accel_magnitude,
     download_wesad,
     extract_chest_signals,
     extract_wrist_signals,
     ingest_wesad,
     load_wesad_subject,
     process_wesad_subject,
+    resample_labels,
+    segment_by_label,
 )
 
 __all__ = [
+    "compute_accel_magnitude",
     "download_mitbih",
     "download_wesad",
     "extract_chest_signals",
@@ -28,5 +32,7 @@ __all__ = [
     "load_wesad_subject",
     "process_mitbih_record",
     "process_wesad_subject",
+    "resample_labels",
+    "segment_by_label",
     "Tier",
 ]

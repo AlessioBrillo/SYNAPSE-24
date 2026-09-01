@@ -11,7 +11,10 @@ import struct
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import IO, TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 import numpy as np
 import pyxdf
@@ -171,11 +174,11 @@ class LSLStreamManager:
                 timestamps: (n_samples,) float64 in LSL clock domain
         """
         # Verify all streams have same number of samples (for synchronous streaming)
-        n_samples = None
+        n_samples: int = 0
         for stream_id, (data, timestamps) in streams_data.items():
             if stream_id not in self._outlets:
                 raise KeyError(f"Stream {stream_id} not registered")
-            if n_samples is None:
+            if n_samples == 0:
                 n_samples = data.shape[0]
             elif data.shape[0] != n_samples:
                 raise ValueError(
@@ -196,17 +199,22 @@ class LSLStreamManager:
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit context manager - outlets auto-cleanup on garbage collection."""
 
 
-def _write_xdf_chunk(f, tag: int, data: bytes) -> None:
+def _write_xdf_chunk(f: IO[bytes], tag: int, data: bytes) -> None:
     """Write a single XDF chunk with header."""
     f.write(struct.pack("<II", tag, len(data)))
     f.write(data)
 
 
-def _write_varlen_int(f, value: int) -> None:
+def _write_varlen_int(f: IO[bytes] | bytearray, value: int) -> None:
     """Write variable-length integer (XDF format) to file or bytearray."""
     if isinstance(f, bytearray):
         while value >= 0x80:
@@ -220,7 +228,7 @@ def _write_varlen_int(f, value: int) -> None:
         f.write(struct.pack("B", value & 0x7F))
 
 
-def _write_string(f, s: str) -> None:
+def _write_string(f: IO[bytes], s: str) -> None:
     """Write UTF-8 string with varlen length prefix."""
     encoded = s.encode("utf-8")
     _write_varlen_int(f, len(encoded))

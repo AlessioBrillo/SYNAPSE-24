@@ -69,7 +69,7 @@ def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"No pickle file in {subject_dir}")
 
     with open(pkl_files[0], "rb") as f:
-        return pickle.load(f, encoding="latin1")
+        return dict(pickle.load(f, encoding="latin1"))
 
 
 def extract_chest_signals(data: dict) -> dict[str, np.ndarray]:
@@ -125,12 +125,12 @@ def resample_labels(labels: np.ndarray, original_rate: int, target_rate: int) ->
     ratio = target_rate / original_rate
     indices = np.arange(0, len(labels) * ratio, ratio).astype(int)
     indices = np.clip(indices, 0, len(labels) - 1)
-    return labels[indices]
+    return np.asarray(labels[indices])
 
 
 def compute_accel_magnitude(acc_x: np.ndarray, acc_y: np.ndarray, acc_z: np.ndarray) -> np.ndarray:
     """Compute 3D accelerometer magnitude."""
-    return np.sqrt(acc_x**2 + acc_y**2 + acc_z**2)
+    return np.asarray(np.sqrt(acc_x**2 + acc_y**2 + acc_z**2))
 
 
 def segment_by_label(

@@ -28,7 +28,7 @@ def perfusion_index(ppg_signal: np.ndarray) -> float:
     if dc == 0:
         return 0.0
 
-    return (ac / dc) * 100
+    return float((ac / dc) * 100)
 
 
 def _bandpass_filter(
@@ -39,7 +39,7 @@ def _bandpass_filter(
     low = lowcut / nyquist
     high = highcut / nyquist
     b, a = butter(order, [low, high], btype="band")
-    return filtfilt(b, a, signal)
+    return np.asarray(filtfilt(b, a, signal))
 
 
 def _compute_spectral_entropy(signal: np.ndarray, fs: int) -> float:
@@ -166,8 +166,8 @@ def compute_ppg_quality(
     ppg_signal: np.ndarray,
     sampling_rate: int,
     accel_magnitude: np.ndarray | None = None,
-    thresholds=None,
-) -> dict:
+    thresholds: object | None = None,
+) -> dict[str, float]:
     """Comprehensive PPG quality assessment.
 
     Args:
