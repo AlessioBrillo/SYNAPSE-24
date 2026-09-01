@@ -1,4 +1,4 @@
-"""MIT-BIH Arrhythmia Database ingestion and validation pipeline."""
+"""MIT-BIH Arrhythmia Database ingestion and validation pipeline with LSL/XDF export."""
 
 from __future__ import annotations
 
@@ -12,10 +12,20 @@ import wfdb
 from tqdm import tqdm
 
 from synapse24.signal_quality import (
+    QualityThresholds,
+    SignalQualityMetrics,
+    Tier,
     compute_ecg_quality,
     detect_r_peaks_neurokit,
     r_peak_detection_quality,
     rmssd_mae,
+)
+from synapse24.utils import (
+    create_marker_stream,
+    create_quality_metadata_stream,
+    create_stream_info,
+    generate_synthetic_timestamps,
+    write_xdf,
 )
 
 MITBIH_RECORDS = [
@@ -124,10 +134,18 @@ def process_mitbih_record(
     record_id: str,
     data_dir: Path,
     output_dir: Path,
+    tier: Tier = Tier.T1,  # MIT-BIH is clinical gold standard → Tier 1 strict
 ) -> dict[str, Any]:
-    """Process a single MIT-BIH record and validate R-peak detection."""
+    """Process a single MIT-BIH record and validate R-peak detection with XDF export.
+
+    MIT-BIH is the clinical gold standard for ECG validation.
+    Tier 1 strict thresholds apply (Se/PPV ≥ 0.996, RMSSD MAE ≤ 5ms).
+    """
     ecg_signal, reference_peaks, metadata = load_mitbih_record(record_id, data_dir)
     fs = metadata["fs"]
+
+    # Tier-aware thresholds (MIT-BIH is research-grade clinical data)
+    thresholds = QualityThresholds.for_tier(tier)
 
     # Detect R-peaks using NeuroKit2
     detected_peaks = detect_r_peaks_neurokit(ecg_signal, fs)
@@ -137,10 +155,67 @@ def process_mitbih_record(
     mae = rmssd_mae(detected_peaks, reference_peaks, fs)
 
     # Full ECG quality assessment
-    ecg_quality = compute_ecg_quality(ecg_signal, fs, reference_peaks=reference_peaks)
+    ecg_quality = compute_ecg_quality(
+        ecg_signal, fs, reference_peaks=reference_peaks, thresholds=thresholds
+    )
 
+    # Build XDF streams
+    streams = []
+
+    # ECG stream
+    ecg_timestamps = generate_synthetic_timestamps(len(ecg_signal), fs)
+    ecg_config = {
+        "name": f"SYNAPSE_ECG_MITBIH_{record_id}",
+        "type": "ECG_T1",
+        "channel_count": 1,
+        "sampling_rate": fs,
+        "channel_names": ["ECG_MLII"],
+        "channel_units": ["µV"],
+        "tier": tier.value,
+        "metadata": {"dataset": "MIT-BIH", "record": record_id, "lead": "MLII"},
+    }
+    streams.append(
+        {
+            "info": create_stream_info(ecg_config),
+            "data": ecg_signal.reshape(-1, 1).astype(np.float32),
+            "timestamps": ecg_timestamps.astype(np.float64),
+        }
+    )
+
+    # Marker stream: reference R-peaks (annotations)
+    ref_peak_times = reference_peaks.astype(np.float64) / fs + ecg_timestamps[0]
+    markers = [(float(t), "R") for t in ref_peak_times]
+    streams.append(create_marker_stream(markers, f"SYNAPSE_Markers_MITBIH_{record_id}"))
+
+    # Quality metadata stream
+    overall_quality = SignalQualityMetrics(
+        r_peak_sensitivity=sensitivity,
+        r_peak_ppv=ppv,
+        rmssd_mae_ms=mae,
+        hrv_metrics=ecg_quality.hrv_metrics,
+        modality="ecg",
+        tier=tier,
+        sampling_rate_hz=fs,
+        duration_s=len(ecg_signal) / fs,
+        thresholds=thresholds,
+    )
+    overall_quality_dict = overall_quality.to_dict()
+    overall_quality_dict["record_id"] = record_id
+    overall_quality_dict["dataset"] = "MIT-BIH"
+    overall_quality_dict["metadata"] = metadata
+
+    streams.append(
+        create_quality_metadata_stream(overall_quality_dict, f"SYNAPSE_Metadata_MITBIH_{record_id}")
+    )
+
+    # Write XDF
+    xdf_path = output_dir / f"{record_id}_mitbih.xdf"
+    write_xdf(xdf_path, streams)
+
+    # Prepare return result (for backward compatibility)
     return {
         "record_id": record_id,
+        "xdf_path": str(xdf_path),
         "metadata": metadata,
         "detected_peaks": len(detected_peaks),
         "reference_peaks": len(reference_peaks),
@@ -148,6 +223,7 @@ def process_mitbih_record(
         "r_peak_ppv": ppv,
         "rmssd_mae_ms": mae,
         "ecg_quality": ecg_quality.to_dict(),
+        "overall_quality": overall_quality_dict,
     }
 
 
@@ -155,16 +231,18 @@ def ingest_mitbih(
     data_dir: Path = Path("data/mitbih"),
     output_dir: Path = Path("data/processed"),
     records: list[str] | None = None,
+    tier: Tier = Tier.T1,
 ) -> list[dict]:
-    """Full MIT-BIH ingestion and validation pipeline.
+    """Full MIT-BIH ingestion and validation pipeline with XDF export.
 
     Args:
         data_dir: Directory for raw MIT-BIH data
         output_dir: Directory for processed outputs
         records: List of record IDs to process (default: all 48 records)
+        tier: Acquisition tier for threshold selection (default: T1 for clinical gold standard)
 
     Returns:
-        List of per-record results
+        List of per-record results with XDF paths and quality metrics
     """
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
@@ -178,15 +256,15 @@ def ingest_mitbih(
     all_results = []
     for record_id in tqdm(records, desc="Processing MIT-BIH records"):
         try:
-            result = process_mitbih_record(record_id, data_dir, output_dir)
+            result = process_mitbih_record(record_id, data_dir, output_dir, tier)
             all_results.append(result)
 
-            # Save per-record results
+            # Save per-record results (backward compatibility)
             with open(output_dir / f"{record_id}_quality.json", "w") as f:
                 json.dump(result, f, indent=2, default=str)
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Failed to process {record_id}: {e}")
 
     # Compute aggregate statistics
     sensitivities = [r["r_peak_sensitivity"] for r in all_results]
@@ -207,6 +285,7 @@ def ingest_mitbih(
             "std_rmssd_mae_ms": float(np.std(maes)),
         },
         "records": [r["record_id"] for r in all_results],
+        "tier": tier.name,
     }
 
     with open(output_dir / "mitbih_summary.json", "w") as f:

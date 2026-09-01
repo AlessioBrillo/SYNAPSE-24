@@ -18,7 +18,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from synapse24.ingestion import ingest_mitbih, ingest_wesad
+from synapse24.ingestion import Tier, ingest_mitbih, ingest_wesad
 
 
 def extract_wesad_features(
@@ -183,14 +183,23 @@ def main():
         choices=["wesad", "mitbih", "both"],
         default="both",
     )
+    parser.add_argument(
+        "--tier",
+        type=int,
+        choices=[0, 1, 2],
+        default=1,
+        help="Acquisition tier (0=continuous, 1=high-density, 2=calibration)",
+    )
     args = parser.parse_args()
 
+    tier = Tier(args.tier)
     all_results = {}
 
     if args.dataset in ("wesad", "both"):
         wesad_results = ingest_wesad(
             data_dir=args.data_dir / "wesad",
             output_dir=args.output_dir,
+            tier=tier,
         )
         wesad_metrics = validate_wesad_stress_classification(wesad_results)
         all_results["wesad"] = wesad_metrics
@@ -199,6 +208,7 @@ def main():
         mitbih_results = ingest_mitbih(
             data_dir=args.data_dir / "mitbih",
             output_dir=args.output_dir,
+            tier=tier,
         )
         mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
         all_results["mitbih"] = mitbih_metrics
