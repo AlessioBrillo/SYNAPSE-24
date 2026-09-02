@@ -342,4 +342,4 @@ def compute_snr(signal: np.ndarray, noise: np.ndarray) -> float:
     noise_power = np.mean(noise**2)
     if noise_power == 0:
         return float("inf")
-    return 10 * np.log10(signal_power / noise_power)
+    return float(10 * np.log10(signal_power / noise_power))

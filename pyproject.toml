@@ -73,6 +73,7 @@ dev-dependencies = [
     "types-requests>=2.31.0,<3.0",
     "types-pyyaml>=6.0.0,<7.0",
     "pre-commit>=3.7.0,<4.0",
+    "types-tqdm>=4.70.0.20260827",
 ]
 
 [tool.ruff]
@@ -109,9 +110,6 @@ exclude = [
     "build",
     "dist",
     "site-packages",
-    "src/synapse24/signal_quality",
-    "src/synapse24/utils",
-    "src/synapse24/ingestion",
 ]
 
 [[tool.mypy.overrides]]
@@ -137,18 +135,6 @@ module = [
 ]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = [
-    "synapse24.signal_quality",
-    "synapse24.utils",
-    "synapse24.ingestion",
-]
-disallow_untyped_defs = false
-check_untyped_defs = false
-ignore_missing_imports = true
-warn_return_any = false
-disable_error_code = ["no-any-return", "no-untyped-def", "import-untyped", "attr-defined"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -168,7 +154,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["tests/*", "scripts/*", "*/__pycache__/*", "src/synapse24/ingestion/*"]
+omit = ["tests/*", "scripts/*", "*/__pycache__/*"]
 branch = true
 concurrency = ["thread", "multiprocessing"]
 

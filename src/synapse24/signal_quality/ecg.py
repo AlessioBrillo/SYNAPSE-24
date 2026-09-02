@@ -19,7 +19,7 @@ def detect_r_peaks_neurokit(ecg_signal: np.ndarray, sampling_rate: int) -> np.nd
         Array of R-peak indices
     """
     _, rpeaks = nk.ecg_peaks(ecg_signal, sampling_rate=sampling_rate)
-    return rpeaks["ECG_R_Peaks"]
+    return np.asarray(rpeaks["ECG_R_Peaks"])
 
 
 def r_peak_detection_quality(

@@ -21,6 +21,7 @@ from synapse24.signal_quality import (
     rmssd_mae,
 )
 from synapse24.utils import (
+    StreamConfig,
     create_marker_stream,
     create_quality_metadata_stream,
     create_stream_info,
@@ -164,16 +165,16 @@ def process_mitbih_record(
 
     # ECG stream
     ecg_timestamps = generate_synthetic_timestamps(len(ecg_signal), fs)
-    ecg_config = {
-        "name": f"SYNAPSE_ECG_MITBIH_{record_id}",
-        "type": "ECG_T1",
-        "channel_count": 1,
-        "sampling_rate": fs,
-        "channel_names": ["ECG_MLII"],
-        "channel_units": ["µV"],
-        "tier": tier.value,
-        "metadata": {"dataset": "MIT-BIH", "record": record_id, "lead": "MLII"},
-    }
+    ecg_config = StreamConfig(
+        name=f"SYNAPSE_ECG_MITBIH_{record_id}",
+        stream_type="ECG_T1",
+        channel_count=1,
+        sampling_rate=fs,
+        channel_names=["ECG_MLII"],
+        channel_units=["µV"],
+        tier=tier.value,
+        metadata={"dataset": "MIT-BIH", "record": record_id, "lead": "MLII"},
+    )
     streams.append(
         {
             "info": create_stream_info(ecg_config),

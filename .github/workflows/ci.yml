@@ -36,7 +36,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Run MyPy type check
-        run: uv run mypy src/
+        run: uv run mypy --package synapse24 --config-file pyproject.toml
 
   test:
     name: Unit & Integration Tests
