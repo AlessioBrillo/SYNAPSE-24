@@ -13,6 +13,14 @@ from .eeg import (
     compute_eeg_quality,
     spectral_flatness,
 )
+from .fnirs import (
+    compute_fnirs_quality,
+    fnirs_cv_dc,
+    fnirs_hrf_snr,
+    fnirs_motion_artifact_correlation,
+    fnirs_short_channel_correlation,
+    fnirs_snr_db,
+)
 from .ppg import (
     compute_ppg_quality,
     compute_ppg_sqi,
@@ -21,19 +29,25 @@ from .ppg import (
 )
 
 __all__ = [
+    "alpha_band_power_ratio",
     "compute_ecg_quality",
     "compute_eeg_quality",
+    "compute_fnirs_quality",
     "compute_hrv_metrics",
     "compute_ppg_quality",
     "compute_ppg_sqi",
     "compute_snr",
     "detect_r_peaks_neurokit",
+    "fnirs_cv_dc",
+    "fnirs_hrf_snr",
+    "fnirs_motion_artifact_correlation",
+    "fnirs_short_channel_correlation",
+    "fnirs_snr_db",
     "perfusion_index",
     "ppg_motion_artifact_probability",
     "r_peak_detection_quality",
     "rmssd_mae",
     "spectral_flatness",
-    "alpha_band_power_ratio",
     "SignalQualityMetrics",
     "QualityThresholds",
     "Tier",

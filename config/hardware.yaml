@@ -1,0 +1,60 @@
+# SYNAPSE-24 Hardware Configuration
+# Load via DeviceRegistry.load_from_yaml()
+
+boards:
+  synthetic:
+    board_id: "SYNTHETIC_BOARD"
+    n_channels: 16
+    sampling_rate: 500
+    signal_types:
+      0: "ecg"
+      1: "ppg"
+      2: "eeg"
+      3: "eeg"
+
+pods:
+  head_001:
+    pod_id: "head_001"
+    name: "SYNAPSE Head Pod v1"
+    board_type: "CERELOG_BOARD"
+    modalities: ["EEG", "fNIRS"]
+    tier: 1
+    channels: 16
+    sampling_rate: 500
+    ble_address: "AA:BB:CC:DD:EE:FF"
+    placement: "frontal_parietal"
+    electrode_type: "dry_gold_pin"
+    is_hub: false
+
+  in_ear_001:
+    pod_id: "in_ear_001"
+    name: "SYNAPSE In-Ear Pod v1"
+    board_type: "CUSTOM_BOARD"
+    modalities: ["EEG_T0"]
+    tier: 0
+    channels: 2
+    sampling_rate: 250
+    ble_address: "11:22:33:44:55:66"
+    placement: "in_ear"
+    electrode_type: "dry_gold_pin"
+    is_hub: false
+
+  forearm_001:
+    pod_id: "forearm_001"
+    name: "SYNAPSE Forearm Hub v1"
+    board_type: "EMOTIBIT_BOARD"
+    modalities: ["PPG", "ECG", "IMU", "Temp"]
+    tier: 0
+    channels:
+      ppg: 3
+      ecg: 1
+      imu: 9
+      temp: 1
+    sampling_rates:
+      ppg: 64
+      ecg: 500
+      imu: 100
+      temp: 1
+    ble_address: "AA:BB:CC:DD:EE:00"
+    placement: "forearm"
+    is_hub: true
