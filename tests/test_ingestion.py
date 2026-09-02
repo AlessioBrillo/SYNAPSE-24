@@ -125,10 +125,10 @@ class TestWESADIngestion:
         assert len(seg2["ecg"]) == 2
         assert np.array_equal(seg2["ecg"], np.array([3.0, 4.0]))
 
-    @patch("synapse24.ingestion.wesad.requests.get")
-    @patch("zipfile.ZipFile")
     @patch("builtins.open", new_callable=mock_open)
-    def test_download_wesad_creates_dir(self, _mock_file, mock_get, mock_zip):
+    @patch("zipfile.ZipFile")
+    @patch("synapse24.ingestion.wesad.requests.get")
+    def test_download_wesad_creates_dir(self, mock_get, mock_zip, _mock_open):  # noqa: PT019
         """Test WESAD download creates directory structure."""
         mock_response = MagicMock()
         mock_response.headers.get.return_value = "1000"
