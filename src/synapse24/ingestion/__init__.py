@@ -17,7 +17,7 @@ from .mitbih import (
 from .sleep_edf import (
     download_sleep_edf,
     ingest_sleep_edf,
-    load_sleep_edf_subject,
+    load_sleep_edf_record,
     process_sleep_edf_subject,
 )
 from .wesad import (
@@ -46,7 +46,7 @@ __all__ = [
     "ingest_wesad",
     "load_deap_subject",
     "load_mitbih_record",
-    "load_sleep_edf_subject",
+    "load_sleep_edf_record",
     "load_wesad_subject",
     "process_deap_subject",
     "process_mitbih_record",

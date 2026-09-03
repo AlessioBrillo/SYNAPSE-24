@@ -220,6 +220,179 @@ class TestMITBIHIngestion:
             assert mock_dl.call_count > 0
 
 
+class TestSleepEDFIngestion:
+    """Tests for Sleep-EDF ingestion."""
+
+    def test_parse_hypnogram_stage(self):
+        """Test hypnogram stage parsing."""
+        from synapse24.ingestion.sleep_edf import _parse_hypnogram_stage
+
+        assert _parse_hypnogram_stage("Sleep stage W") == 0
+        assert _parse_hypnogram_stage("Sleep stage 1") == 1
+        assert _parse_hypnogram_stage("Sleep stage 2") == 2
+        assert _parse_hypnogram_stage("Sleep stage 3") == 3
+        assert _parse_hypnogram_stage("Sleep stage 4") == 4
+        assert _parse_hypnogram_stage("Sleep stage R") == 5
+        assert _parse_hypnogram_stage("Movement time") == 6
+        assert _parse_hypnogram_stage("Unscored") == 9
+
+    def test_stage_map(self):
+        """Test STAGE_MAP consistency."""
+        from synapse24.ingestion.sleep_edf import STAGE_MAP, STAGE_TO_INT
+
+        assert STAGE_MAP[0] == "W"
+        assert STAGE_MAP[1] == "N1"
+        assert STAGE_MAP[2] == "N2"
+        assert STAGE_MAP[3] == "N3"
+        assert STAGE_MAP[5] == "REM"
+        assert STAGE_TO_INT["W"] == 0
+        assert STAGE_TO_INT["REM"] == 5
+
+    def test_extract_epochs(self):
+        """Test epoch extraction aligned with hypnogram."""
+        from synapse24.ingestion.sleep_edf import extract_epochs
+
+        fs = 100
+        epoch_duration = 30.0
+        epoch_samples = int(epoch_duration * fs)
+
+        # Create synthetic EEG: 10 minutes = 600 seconds
+        duration = 600
+        eeg_signal = np.random.randn(duration * fs).astype(np.float32)
+
+        # Create hypnogram: 20 epochs of 30s each
+        hypnogram = np.array([0, 1, 2, 2, 3, 3, 3, 5, 5, 1, 0, 0, 2, 2, 3, 5, 5, 1, 1, 0])
+        hypnogram_times = np.arange(0, duration, epoch_duration)[: len(hypnogram)]
+
+        epochs_by_stage = extract_epochs(eeg_signal, fs, hypnogram, hypnogram_times, epoch_duration)
+
+        # Check all stages have lists
+        for stage in ["W", "N1", "N2", "N3", "REM", "MOVE", "UNK"]:
+            assert stage in epochs_by_stage
+            assert isinstance(epochs_by_stage[stage], list)
+
+        # Check epoch lengths
+        for stage, epochs in epochs_by_stage.items():
+            for epoch in epochs:
+                assert len(epoch) == epoch_samples
+
+    @patch("edfio.read_edf")
+    def test_load_sleep_edf_record(self, mock_read_edf):
+        """Test loading Sleep-EDF record with mocked edfio."""
+        from synapse24.ingestion.sleep_edf import load_sleep_edf_record
+
+        # Mock PSG EDF
+        mock_psg = MagicMock()
+        mock_psg.signals = []
+        # Add EEG channel
+        ch1 = MagicMock()
+        ch1.label = "EEG Fpz-Cz"
+        ch1.sample_rate = 100
+        ch1.samples = np.random.randn(10000).astype(np.float32)
+        ch1.n_samples = 10000
+        mock_psg.signals.append(ch1)
+        # Add EOG channel
+        ch2 = MagicMock()
+        ch2.label = "EOG horizontal"
+        ch2.sample_rate = 100
+        ch2.samples = np.random.randn(10000).astype(np.float32)
+        ch2.n_samples = 10000
+        mock_psg.signals.append(ch2)
+        mock_psg.header.patient = "SC4001"
+        mock_psg.header.recording = "PSG"
+        mock_psg.header.startdate = "01.01.20"
+        mock_psg.header.duration = 100.0
+
+        # Mock Hypnogram EDF
+        mock_hyp = MagicMock()
+        mock_hyp.annotations = []
+        # Add some annotations
+        for i in range(5):
+            ann = MagicMock()
+            ann.onset = i * 30.0
+            ann.duration = 30.0
+            ann.description = f"Sleep stage {i % 5}"
+            mock_hyp.annotations.append(ann)
+
+        mock_read_edf.side_effect = [mock_psg, mock_hyp]
+
+        result = load_sleep_edf_record(Path("SC4001E0-PSG.edf"), Path("SC4001EC-Hypnogram.edf"))
+
+        assert "eeg" in result
+        assert "eog" in result
+        assert "hypnogram" in result
+        assert "hypnogram_times" in result
+        assert "fs_dict" in result
+        assert "EEG FPZ-CZ" in result["eeg"]
+        assert "EOG HORIZONTAL" in result["eog"]
+        assert len(result["hypnogram"]) == 5
+
+    @patch("synapse24.ingestion.sleep_edf.load_sleep_edf_record")
+    @patch("synapse24.ingestion.sleep_edf.download_sleep_edf")
+    @patch("synapse24.ingestion.sleep_edf.write_xdf")
+    @patch("synapse24.ingestion.sleep_edf.create_quality_metadata_stream")
+    @patch("synapse24.ingestion.sleep_edf.create_marker_stream")
+    @patch("synapse24.ingestion.sleep_edf.generate_synthetic_timestamps")
+    @patch("synapse24.ingestion.sleep_edf.Path.exists", return_value=True)
+    def test_process_sleep_edf_subject(
+        self,
+        mock_exists,
+        mock_gen_ts,
+        mock_marker,
+        mock_quality_stream,
+        mock_write_xdf,
+        mock_download,
+        mock_load,
+    ):
+        """Test Sleep-EDF subject processing with mocked dependencies."""
+        from synapse24.ingestion.sleep_edf import process_sleep_edf_subject
+        from synapse24.signal_quality import Tier
+
+        # Setup mocks
+        mock_download.return_value = Path("data/sleep_edf")
+
+        # Create mock data with EEG and hypnogram
+        eeg_signal = np.random.randn(30000).astype(np.float32)  # 300s at 100Hz
+        eog_signal = np.random.randn(30000).astype(np.float32)
+        hypnogram = np.array([0, 1, 2, 2, 3, 3, 5, 5, 1, 0])  # 10 epochs
+        hypnogram_times = np.arange(0, 300, 30.0)[:10]
+
+        mock_load.return_value = {
+            "eeg": {"EEG Fpz-Cz": eeg_signal},
+            "eog": {"EOG horizontal": eog_signal},
+            "emg": {},
+            "other": {},
+            "hypnogram": hypnogram,
+            "hypnogram_times": hypnogram_times,
+            "fs_dict": {"EEG Fpz-Cz": 100, "EOG horizontal": 100},
+            "duration_s": 300.0,
+            "metadata": {"subject_id": "SC4001"},
+        }
+
+        mock_gen_ts.return_value = np.arange(0, 300, 1 / 100)
+        mock_marker.return_value = {
+            "info": MagicMock(),
+            "data": np.array([["Stage_W"]]),
+            "timestamps": np.array([0.0]),
+        }
+        mock_quality_stream.return_value = {
+            "info": MagicMock(),
+            "data": np.array([["{}"]]),
+            "timestamps": np.array([0.0]),
+        }
+
+        with patch("synapse24.ingestion.sleep_edf.Path.mkdir"):
+            result = process_sleep_edf_subject(
+                "SC4001E0-PSG.edf", Path("data/sleep_edf"), Path("data/processed"), Tier.T1
+            )
+
+        assert result["subject_id"] == "SC4001"
+        assert "xdf_path" in result
+        assert "quality" in result
+        assert "overall_quality" in result
+        mock_write_xdf.assert_called_once()
+
+
 class TestProcessFunctions:
     """Tests for process functions with mocked dependencies."""
 

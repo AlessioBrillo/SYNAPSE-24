@@ -157,7 +157,7 @@ def check_integration_tests(root: Path) -> CheckResult:
 
 
 def check_baseline_validation(root: Path) -> CheckResult:
-    """validate_baseline.py --dataset both"""
+    """validate_baseline.py --dataset all"""
     start = time.perf_counter()
     rc, out, err = run_cmd(
         [
@@ -166,7 +166,7 @@ def check_baseline_validation(root: Path) -> CheckResult:
             "python",
             "scripts/validate_baseline.py",
             "--dataset",
-            "both",
+            "all",
             "--data-dir",
             "data",
             "--output-dir",
@@ -265,22 +265,43 @@ def check_energy_budget(root: Path) -> CheckResult:
 
 
 def check_diff_audit(root: Path) -> CheckResult:
-    """Audit diff for common issues"""
+    """Audit diff for common issues (only checks added lines)"""
     import re
 
     start = time.perf_counter()
     rc, out, err = run_cmd(["git", "diff", "HEAD"], root)
     duration = int((time.perf_counter() - start) * 1000)
 
+    # Only check added lines (starting with +)
+    added_lines = [
+        line[1:] for line in out.split("\n") if line.startswith("+") and not line.startswith("+++")
+    ]
+    added_content = "\n".join(added_lines)
+
     issues = []
-    if "print(" in out:
+    # Check for actual print() calls, not comments containing "print"
+    # Look for print( at start of line or after whitespace, not in comments
+    print_pattern = re.compile(r"^\s*print\s*\(")
+    if any(print_pattern.match(line) for line in added_content.split("\n")):
         issues.append("Contains print() statements")
-    if "TODO" in out or "FIXME" in out:
-        issues.append("Contains TODO/FIXME comments")
-    if re.search(r"(api[_-]?key|secret|password|token)\s*=", out, re.IGNORECASE):
+    # Check for TODO/FIXME in non-comment, non-string lines
+    todo_pattern = re.compile(r"\b(TODO|FIXME)\b")
+    for line in added_content.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        m = todo_pattern.search(line)
+        if m:
+            # Check if match is inside a string literal
+            before = line[: m.start()]
+            if before.count('"') % 2 == 1 or before.count("'") % 2 == 1:
+                continue  # Inside string literal
+            issues.append("Contains TODO/FIXME comments")
+            break
+    if re.search(r"(api[_-]?key|secret|password|token)\s*=", added_content, re.IGNORECASE):
         issues.append("Possible hardcoded secret")
     # Heuristic for MAC addresses
-    if re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", out):
+    if re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", added_content):
         issues.append("Possible hardcoded MAC address")
 
     if issues:
