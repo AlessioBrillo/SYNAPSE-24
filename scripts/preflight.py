@@ -68,6 +68,8 @@ def check_typecheck(root: Path) -> CheckResult:
         [
             "uv",
             "run",
+            "python",
+            "-m",
             "mypy",
             "--strict",
             "--disable-error-code=import-untyped",
@@ -106,6 +108,8 @@ def check_unit_tests(root: Path) -> CheckResult:
         [
             "uv",
             "run",
+            "python",
+            "-m",
             "pytest",
             "tests",
             "-x",
@@ -128,7 +132,19 @@ def check_integration_tests(root: Path) -> CheckResult:
     """Pytest integration tests (requires cached datasets)"""
     start = time.perf_counter()
     rc, out, err = run_cmd(
-        ["uv", "run", "pytest", "tests", "-x", "--tb=short", "-q", "-m", "integration"],
+        [
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "pytest",
+            "tests",
+            "-x",
+            "--tb=short",
+            "-q",
+            "-m",
+            "integration",
+        ],
         root,
     )
     duration = int((time.perf_counter() - start) * 1000)
