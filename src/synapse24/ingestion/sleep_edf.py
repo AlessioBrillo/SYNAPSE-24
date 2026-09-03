@@ -286,9 +286,9 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
     fs_dict = {}
 
     for i, ch in enumerate(psg.signals):
-        label = ch.label.upper()  # type: ignore[attr-defined]
-        signal_data = np.array(ch.samples, dtype=np.float32)  # type: ignore[attr-defined]
-        fs = ch.sample_rate  # type: ignore[attr-defined]
+        label = ch.label.upper()
+        signal_data = np.array(ch.samples, dtype=np.float32)
+        fs = ch.sample_rate
         fs_dict[label] = fs
 
         if "EEG" in label or "FPZ" in label or "PZ" in label or "CZ" in label or "OZ" in label:
@@ -307,10 +307,10 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
     for ann in hyp.annotations:
         # Sleep-EDF hypnogram uses 30-second epochs with stage codes
         # Duration is typically 30 seconds per annotation
-        onset = ann.onset  # type: ignore[attr-defined]
-        ann_duration = ann.duration  # type: ignore[attr-defined]
+        onset = ann.onset
+        ann_duration = ann.duration
         duration = ann_duration if ann_duration is not None and ann_duration > 0 else 30.0
-        description = ann.description.strip()  # type: ignore[attr-defined]
+        description = ann.description.strip()
 
         # Parse stage from description (e.g., "Sleep stage W", "Sleep stage 1", etc.)
         stage = _parse_hypnogram_stage(description)
@@ -324,16 +324,16 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
     # Total duration from PSG
     max_duration = 0.0
     for ch in psg.signals:
-        dur = ch.n_samples / ch.sample_rate  # type: ignore[attr-defined]
+        dur = ch.n_samples / ch.sample_rate
         max_duration = max(max_duration, dur)
 
     metadata = {
         "subject_id": psg_path.stem.replace("-PSG", "").replace("E0", "").replace("EC", ""),
         "header": {
-            "patient": psg.header.patient,  # type: ignore[attr-defined]
-            "recording": psg.header.recording,  # type: ignore[attr-defined]
-            "startdate": psg.header.startdate,  # type: ignore[attr-defined]
-            "duration": psg.header.duration,  # type: ignore[attr-defined]
+            "patient": psg.header.patient,
+            "recording": psg.header.recording,
+            "startdate": psg.header.startdate,
+            "duration": psg.header.duration,
         },
     }
 
