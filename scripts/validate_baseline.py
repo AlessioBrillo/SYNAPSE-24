@@ -21,6 +21,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from synapse24.ingestion import Tier, ingest_mitbih, ingest_sleep_edf, ingest_wesad
+from synapse24.signal_quality import validate_sleep_staging_against_gold
+from synapse24.utils import validate_xdf
 
 
 def extract_wesad_features(
@@ -164,70 +166,147 @@ def validate_mitbih_rpeak_detection(
     }
 
 
+def _extract_sleep_edf_data(xdf_path: Path) -> tuple | None:
+    """Extract EEG, EOG, EMG, and hypnogram from Sleep-EDF XDF file."""
+    import pyxdf
+
+    streams, _ = pyxdf.load_xdf(str(xdf_path))
+
+    eeg_signal = None
+    eeg_fs = None
+    gold_hypnogram = None
+    gold_times = None
+    eog_signal = None
+    emg_signal = None
+
+    for stream in streams:
+        info = stream["info"]
+        stream_name = info.get("name", [""])[0]
+        stream_type = info.get("type", [""])[0]
+        time_series = stream["time_series"]
+        time_stamps = stream["time_stamps"]
+
+        if "EEG" in stream_type and "Fpz" in stream_name:
+            eeg_signal = time_series.flatten()
+            eeg_fs = info.get("nominal_srate", [100])[0]
+        elif "EOG" in stream_type:
+            eog_signal = time_series.flatten()
+        elif "EMG" in stream_type:
+            emg_signal = time_series.flatten()
+        elif stream_type == "Markers" and "Hypnogram" in stream_name:
+            markers = time_series.flatten()
+            gold_hypnogram = []
+            gold_times = []
+            for ts, marker in zip(time_stamps, markers):
+                if isinstance(marker, str) and marker.startswith("Stage_"):
+                    stage = marker.replace("Stage_", "")
+                    stage_map = {
+                        "W": 0,
+                        "N1": 1,
+                        "N2": 2,
+                        "N3": 3,
+                        "REM": 4,
+                        "MOVE": 5,
+                        "UNK": 9,
+                    }
+                    gold_hypnogram.append(stage_map.get(stage, 9))
+                    gold_times.append(float(ts))
+            gold_hypnogram = np.array(gold_hypnogram, dtype=np.int64)
+            gold_times = np.array(gold_times, dtype=np.float64)
+
+    if eeg_signal is None or eeg_fs is None or gold_hypnogram is None or gold_times is None:
+        return None
+
+    return eeg_signal, int(eeg_fs), gold_hypnogram, gold_times, eog_signal, emg_signal
+
+
+def _validate_single_sleep_subject(subject_id: str, xdf_path: Path) -> dict | None:
+    """Validate a single Sleep-EDF subject using YASA."""
+    extracted = _extract_sleep_edf_data(xdf_path)
+    if extracted is None:
+        print(f"Warning: Missing EEG or hypnogram data for {subject_id}")
+        return None
+
+    eeg_signal, eeg_fs, gold_hypnogram, gold_times, eog_signal, emg_signal = extracted
+
+    try:
+        validation_result = validate_sleep_staging_against_gold(
+            eeg_signal=eeg_signal,
+            sampling_rate=eeg_fs,
+            gold_hypnogram=gold_hypnogram,
+            gold_times=gold_times,
+            eog_signal=eog_signal,
+            emg_signal=emg_signal,
+        )
+
+        print(
+            f"  {subject_id}: κ={validation_result['kappa']:.3f}, "
+            f"acc={validation_result['accuracy']:.3f}, "
+            f"epochs={validation_result['n_epochs']}, "
+            f"target={'✅' if validation_result['target_met'] else '❌'}"
+        )
+
+        return {
+            "subject_id": subject_id,
+            "kappa": validation_result["kappa"],
+            "accuracy": validation_result["accuracy"],
+            "n_epochs": validation_result["n_epochs"],
+            "target_met": validation_result["target_met"],
+            "per_stage": validation_result.get("per_stage", {}),
+        }
+
+    except Exception as e:
+        print(f"Error validating {subject_id}: {e}")
+        return None
+
+
 def validate_sleep_edf_sleep_staging(
     results: list[dict],
+    data_dir: Path,
 ) -> dict[str, float]:
     """Validate Sleep-EDF sleep staging against gold standard hypnogram.
 
-    Uses YASA for sleep staging and compares against annotated hypnogram.
-    Target: Cohen's κ ≥0.75 (substantial agreement)
+    Loads EEG from XDF files, runs YASA sleep staging, and compares
+    against the gold standard hypnogram from annotations.
+    Target: Cohen's κ ≥0.75 (substantial agreement per Landis & Koch)
     """
-    try:
-        import yasa
-    except ImportError:
-        return {"error": "YASA not installed", "kappa": 0.0, "target_met": False}
-
     all_kappas = []
     all_accuracies = []
+    subject_details = []
 
     for result in results:
-        # Get hypnogram (gold standard) and EEG data
-        hypnogram = result.get("hypnogram", [])
-        if not hypnogram:
+        subject_id = result.get("subject_id", "")
+        xdf_path = result.get("xdf_path", "")
+
+        if not xdf_path or not Path(xdf_path).exists():
             continue
 
-        # Map string stages to integers
-        stage_map = {"W": 0, "N1": 1, "N2": 2, "N3": 3, "REM": 4, "MOVE": 5, "UNK": 9}
-        gold_stages = [stage_map.get(s.replace("Stage_", ""), 9) for s in hypnogram]
+        xdf_summary = validate_xdf(Path(xdf_path))
+        if not xdf_summary["validation"]["all_streams_valid"]:
+            print(f"Warning: XDF validation failed for {xdf_path}: {xdf_summary['validation']}")
+            continue
 
-        # For Sleep-EDF, we need to run YASA on the EEG data
-        # Since we don't have raw EEG in the results (it's in XDF),
-        # we'll use the per-stage quality metrics as a proxy
-        # In a real scenario, we'd load the XDF and run YASA
+        subject_result = _validate_single_sleep_subject(subject_id, Path(xdf_path))
+        if subject_result is None:
+            continue
 
-        # For now, validate that we have the hypnogram distribution
-        hypnogram_dist = result.get("overall_quality", {}).get("hypnogram_distribution", {})
-        if hypnogram_dist:
-            # Compute basic sleep architecture metrics
-            total_epochs = sum(hypnogram_dist.values())
-            if total_epochs > 0:
-                # This is a placeholder - real implementation would run YASA
-                # on the EEG data from XDF and compare epoch-by-epoch
-                pass
-
-        # For this validation, we check that the hypnogram was properly extracted
-        # and has expected sleep stages
-        unique_stages = set(gold_stages)
-        has_sleep_stages = any(s in unique_stages for s in [1, 2, 3, 4])  # N1, N2, N3
-        has_rem = 4 in unique_stages
-        has_wake = 0 in unique_stages
-
-        if has_sleep_stages and has_rem and has_wake:
-            # Valid sleep recording - in real validation, compute kappa here
-            all_kappas.append(0.85)  # Placeholder - typical YASA performance
-            all_accuracies.append(0.82)
+        all_kappas.append(subject_result["kappa"])
+        all_accuracies.append(subject_result["accuracy"])
+        subject_details.append(subject_result)
 
     if not all_kappas:
-        return {"error": "No valid sleep recordings", "kappa": 0.0, "target_met": False}
+        return {"error": "No valid sleep recordings processed", "kappa": 0.0, "target_met": False}
 
     mean_kappa = float(np.mean(all_kappas))
+    std_kappa = float(np.std(all_kappas))
     mean_acc = float(np.mean(all_accuracies))
 
     return {
         "mean_cohen_kappa": mean_kappa,
-        "std_cohen_kappa": float(np.std(all_kappas)),
+        "std_cohen_kappa": std_kappa,
         "mean_accuracy": mean_acc,
         "n_subjects": len(all_kappas),
+        "subject_details": subject_details,
         "target_met": mean_kappa >= 0.75,
     }
 
@@ -289,7 +368,7 @@ def main():
             output_dir=args.output_dir,
             tier=tier,
         )
-        sleep_edf_metrics = validate_sleep_edf_sleep_staging(sleep_edf_results)
+        sleep_edf_metrics = validate_sleep_edf_sleep_staging(sleep_edf_results, args.data_dir)
         all_results["sleep_edf"] = sleep_edf_metrics
 
     # Save validation results

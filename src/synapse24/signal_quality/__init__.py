@@ -11,7 +11,10 @@ from .ecg import (
 from .eeg import (
     alpha_band_power_ratio,
     compute_eeg_quality,
+    compute_yasa_kappa,
+    compute_yasa_sleep_staging,
     spectral_flatness,
+    validate_sleep_staging_against_gold,
 )
 from .fnirs import (
     compute_fnirs_quality,
