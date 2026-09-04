@@ -150,7 +150,11 @@ class ClockDriftEstimator:
     def add_acc_sample(self, pod_id: str, acc_magnitude: float, timestamp: float) -> None:
         """Add ACC sample for cross-correlation drift estimation."""
         if pod_id not in self._acc_buffers:
-            self._acc_buffers[pod_id] = deque(maxlen=int(self.config.acc_corr_window_s * self.config.acc_sampling_rates.get(pod_id, 100)))
+            self._acc_buffers[pod_id] = deque(
+                maxlen=int(
+                    self.config.acc_corr_window_s * self.config.acc_sampling_rates.get(pod_id, 100)
+                )
+            )
             self._acc_timestamps[pod_id] = deque(maxlen=self._acc_buffers[pod_id].maxlen)
 
         self._acc_buffers[pod_id].append(acc_magnitude)
@@ -326,15 +330,21 @@ class MultiPodClockSync:
 
         # Hub ACC buffer for cross-correlation
         self._hub_acc_buffer: deque[float] = deque(maxlen=int(self.config.acc_corr_window_s * 100))
-        self._hub_acc_timestamps: deque[float] = deque(maxlen=int(self.config.acc_corr_window_s * 100))
+        self._hub_acc_timestamps: deque[float] = deque(
+            maxlen=int(self.config.acc_corr_window_s * 100)
+        )
 
     def register_pod(self, pod_id: str, acc_sampling_rate: int = 100) -> None:
         """Register a pod for synchronization."""
         self.config.acc_sampling_rates[pod_id] = acc_sampling_rate
         # Register callback for marker receipt with pod_id bound
-        self.marker_manager.register_callback(pod_id, lambda m, ts: self._on_pod_marker_received(m, ts, pod_id))
+        self.marker_manager.register_callback(
+            pod_id, lambda m, ts: self._on_pod_marker_received(m, ts, pod_id)
+        )
 
-    def _on_pod_marker_received(self, marker: SyncMarker, pod_timestamp: float, pod_id: str) -> None:
+    def _on_pod_marker_received(
+        self, marker: SyncMarker, pod_timestamp: float, pod_id: str
+    ) -> None:
         """Callback when pod receives a sync marker."""
         marker.pod_timestamps[pod_id] = pod_timestamp
 
@@ -366,7 +376,9 @@ class MultiPodClockSync:
             hub_acc = np.array(self._hub_acc_buffer)
             hub_ts = np.array(self._hub_acc_timestamps)
             for pod_id in self.config.acc_sampling_rates:
-                acc_est = self.drift_estimator.estimate_from_acc_correlation(hub_acc, hub_ts, pod_id)
+                acc_est = self.drift_estimator.estimate_from_acc_correlation(
+                    hub_acc, hub_ts, pod_id
+                )
                 if acc_est:
                     if pod_id in estimates:
                         # Combine: use ACC offset (more precise) + marker drift rate

@@ -159,23 +159,31 @@ class SyncMarkerRecorder:
 
     def record_hub_broadcast(self, sequence: int, hub_timestamp: float) -> None:
         """Record hub broadcast timestamp."""
-        self._records.append({
-            "sequence": sequence,
-            "hub_timestamp": hub_timestamp,
-            "pod_timestamp": None,
-            "pod_id": "hub",
-        })
+        self._records.append(
+            {
+                "sequence": sequence,
+                "hub_timestamp": hub_timestamp,
+                "pod_timestamp": None,
+                "pod_id": "hub",
+            }
+        )
 
     def record_pod_receipt(
-        self, sequence: int, pod_id: str, pod_timestamp: float, hub_timestamp_from_marker: float | None = None
+        self,
+        sequence: int,
+        pod_id: str,
+        pod_timestamp: float,
+        hub_timestamp_from_marker: float | None = None,
     ) -> None:
         """Record pod receipt timestamp."""
-        self._records.append({
-            "sequence": sequence,
-            "hub_timestamp": hub_timestamp_from_marker,
-            "pod_timestamp": pod_timestamp,
-            "pod_id": pod_id,
-        })
+        self._records.append(
+            {
+                "sequence": sequence,
+                "hub_timestamp": hub_timestamp_from_marker,
+                "pod_timestamp": pod_timestamp,
+                "pod_id": pod_id,
+            }
+        )
 
     def get_pod_records(self, pod_id: str) -> list[dict[str, Any]]:
         """Get all records for a specific pod."""

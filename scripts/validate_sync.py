@@ -136,11 +136,14 @@ def generate_synthetic_scenario(
             pod_times[pod_id] = (1.0 + drift_rate) * marker_t + offset_s
 
         from synapse24.acquisition.clock_sync import SyncMarker
-        sync.drift_estimator.add_marker(SyncMarker(
-            sequence=i,
-            hub_timestamp=marker_t,
-            pod_timestamps=pod_times,
-        ))
+
+        sync.drift_estimator.add_marker(
+            SyncMarker(
+                sequence=i,
+                hub_timestamp=marker_t,
+                pod_timestamps=pod_times,
+            )
+        )
 
     # Feed ACC data to sync
     # Downsample hub ACC to sync buffer rate (use acc_fs)
@@ -183,8 +186,10 @@ def run_validation(
     # Print estimates
     print("\nDrift Estimates:")
     for pod_id, est in estimates.items():
-        print(f"  {pod_id}: offset={est.offset_ms:.2f}ms, drift={est.drift_rate_ppm:.1f}ppm, "
-              f"conf={est.confidence:.2f}, method={est.method}")
+        print(
+            f"  {pod_id}: offset={est.offset_ms:.2f}ms, drift={est.drift_rate_ppm:.1f}ppm, "
+            f"conf={est.confidence:.2f}, method={est.method}"
+        )
 
     # Test correction on full timestamps
     print("\nTesting timestamp correction...")
@@ -212,12 +217,12 @@ def run_validation(
     # Overall pass/fail
     overall_pass = all(m["p99_offset_ms"] < 1.0 for m in all_metrics.values())
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     if overall_pass:
         print("✅ VALIDATION PASSED: All pods achieve <1ms residual drift (p99)")
     else:
         print("❌ VALIDATION FAILED: Some pods exceed 1ms residual drift (p99)")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     # Prepare results
     results = {

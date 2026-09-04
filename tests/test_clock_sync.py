@@ -192,7 +192,7 @@ class TestClockDriftEstimator:
 
         # Generate correlated ACC signals with known offset
         fs = 100
-        t_hub = np.arange(0, 30, 1/fs)
+        t_hub = np.arange(0, 30, 1 / fs)
         t_pod = t_hub + 0.01  # 10ms offset
 
         hub_acc = np.sin(2 * np.pi * 1.2 * t_hub) + 0.1 * np.random.randn(len(t_hub))
@@ -283,13 +283,15 @@ class TestTimestampCorrector:
     def test_correct_offset_only(self):
         """Test correction with offset only."""
         corrector = TimestampCorrector()
-        corrector.update_correction(DriftEstimate(
-            pod_id="pod1",
-            offset_ms=5.0,  # 5ms ahead
-            drift_rate_ppm=0.0,
-            confidence=1.0,
-            method="marker",
-        ))
+        corrector.update_correction(
+            DriftEstimate(
+                pod_id="pod1",
+                offset_ms=5.0,  # 5ms ahead
+                drift_rate_ppm=0.0,
+                confidence=1.0,
+                method="marker",
+            )
+        )
 
         timestamps = np.array([1000.005, 1000.015, 1000.025])  # 5ms ahead
         corrected = corrector.correct_timestamps("pod1", timestamps)
@@ -302,13 +304,15 @@ class TestTimestampCorrector:
         """Test correction with drift rate only."""
         corrector = TimestampCorrector()
         # 100 ppm fast = 1.0001x
-        corrector.update_correction(DriftEstimate(
-            pod_id="pod1",
-            offset_ms=0.0,
-            drift_rate_ppm=100.0,
-            confidence=1.0,
-            method="marker",
-        ))
+        corrector.update_correction(
+            DriftEstimate(
+                pod_id="pod1",
+                offset_ms=0.0,
+                drift_rate_ppm=100.0,
+                confidence=1.0,
+                method="marker",
+            )
+        )
 
         # After 1000 seconds, pod is 100ms ahead
         timestamps = np.array([1000.0, 2000.0, 3000.0])  # Pod timestamps
@@ -322,13 +326,15 @@ class TestTimestampCorrector:
     def test_correct_combined(self):
         """Test correction with both offset and drift."""
         corrector = TimestampCorrector()
-        corrector.update_correction(DriftEstimate(
-            pod_id="pod1",
-            offset_ms=2.0,
-            drift_rate_ppm=50.0,
-            confidence=1.0,
-            method="marker",
-        ))
+        corrector.update_correction(
+            DriftEstimate(
+                pod_id="pod1",
+                offset_ms=2.0,
+                drift_rate_ppm=50.0,
+                confidence=1.0,
+                method="marker",
+            )
+        )
 
         timestamps = np.array([1000.0, 1001.0])
         corrected = corrector.correct_timestamps("pod1", timestamps)
@@ -372,7 +378,9 @@ class TestMultiPodClockSync:
 
         # Add pod ACC (with 10ms offset)
         for i in range(100):
-            sync.add_pod_acc("pod1", np.sin(2 * np.pi * 1.2 * (i / 100 + 0.01)), 1000.0 + i / 100 + 0.01)
+            sync.add_pod_acc(
+                "pod1", np.sin(2 * np.pi * 1.2 * (i / 100 + 0.01)), 1000.0 + i / 100 + 0.01
+            )
 
         assert len(sync._hub_acc_buffer) == 100
 
@@ -383,11 +391,13 @@ class TestMultiPodClockSync:
 
         # Add markers directly to estimator (bypassing broadcast to avoid callback issues)
         for i in range(5):
-            sync.drift_estimator.add_marker(SyncMarker(
-                sequence=i,
-                hub_timestamp=1000.0 + i * 60.0,
-                pod_timestamps={"pod1": 1000.005 + i * 60.0},
-            ))
+            sync.drift_estimator.add_marker(
+                SyncMarker(
+                    sequence=i,
+                    hub_timestamp=1000.0 + i * 60.0,
+                    pod_timestamps={"pod1": 1000.005 + i * 60.0},
+                )
+            )
 
         estimates = sync.update_drift_estimates()
 
@@ -403,11 +413,13 @@ class TestMultiPodClockSync:
 
         # Add markers directly to estimator (bypassing broadcast to avoid callback issues)
         for i in range(5):
-            sync.drift_estimator.add_marker(SyncMarker(
-                sequence=i,
-                hub_timestamp=1000.0 + i * 60.0,
-                pod_timestamps={"pod1": 1000.005 + i * 60.0},
-            ))
+            sync.drift_estimator.add_marker(
+                SyncMarker(
+                    sequence=i,
+                    hub_timestamp=1000.0 + i * 60.0,
+                    pod_timestamps={"pod1": 1000.005 + i * 60.0},
+                )
+            )
 
         sync.update_drift_estimates()
 
@@ -426,11 +438,13 @@ class TestMultiPodClockSync:
 
         # Add markers directly to estimator
         for i in range(5):
-            sync.drift_estimator.add_marker(SyncMarker(
-                sequence=i,
-                hub_timestamp=1000.0 + i * 60.0,
-                pod_timestamps={"pod1": 1000.005 + i * 60.0},
-            ))
+            sync.drift_estimator.add_marker(
+                SyncMarker(
+                    sequence=i,
+                    hub_timestamp=1000.0 + i * 60.0,
+                    pod_timestamps={"pod1": 1000.005 + i * 60.0},
+                )
+            )
 
         sync.update_drift_estimates()
         status = sync.get_sync_status()
@@ -508,11 +522,13 @@ class TestIntegrationScenarios:
             # Head pod: 100 ppm fast
             head_pod_time = hub_time * 1.0001
             forearm_pod_time = hub_time * 1.00005
-            sync.drift_estimator.add_marker(SyncMarker(
-                sequence=minute,
-                hub_timestamp=hub_time,
-                pod_timestamps={"head_pod": head_pod_time, "forearm_pod": forearm_pod_time},
-            ))
+            sync.drift_estimator.add_marker(
+                SyncMarker(
+                    sequence=minute,
+                    hub_timestamp=hub_time,
+                    pod_timestamps={"head_pod": head_pod_time, "forearm_pod": forearm_pod_time},
+                )
+            )
 
             # Add ACC data (correlated motion)
             for i in range(6000):  # 60s * 100Hz
@@ -545,11 +561,13 @@ class TestIntegrationScenarios:
 
         # Perfect sync markers - add directly to estimator
         for i in range(20):
-            sync.drift_estimator.add_marker(SyncMarker(
-                sequence=i,
-                hub_timestamp=i * 60.0,
-                pod_timestamps={"pod1": i * 60.0},
-            ))
+            sync.drift_estimator.add_marker(
+                SyncMarker(
+                    sequence=i,
+                    hub_timestamp=i * 60.0,
+                    pod_timestamps={"pod1": i * 60.0},
+                )
+            )
 
         sync.update_drift_estimates()
 
@@ -578,11 +596,13 @@ class TestEdgeCases:
     def test_single_marker(self):
         """Test estimator with single marker (insufficient)."""
         estimator = ClockDriftEstimator()
-        estimator.add_marker(SyncMarker(
-            sequence=0,
-            hub_timestamp=1000.0,
-            pod_timestamps={"pod1": 1000.005},
-        ))
+        estimator.add_marker(
+            SyncMarker(
+                sequence=0,
+                hub_timestamp=1000.0,
+                pod_timestamps={"pod1": 1000.005},
+            )
+        )
         estimates = estimator.estimate_from_markers()
         assert estimates == {}
 
@@ -590,11 +610,13 @@ class TestEdgeCases:
         """Test estimator handles missing pod gracefully."""
         estimator = ClockDriftEstimator()
         for i in range(5):
-            estimator.add_marker(SyncMarker(
-                sequence=i,
-                hub_timestamp=1000.0 + i * 60.0,
-                pod_timestamps={"pod1": 1000.005 + i * 60.0},  # pod2 missing
-            ))
+            estimator.add_marker(
+                SyncMarker(
+                    sequence=i,
+                    hub_timestamp=1000.0 + i * 60.0,
+                    pod_timestamps={"pod1": 1000.005 + i * 60.0},  # pod2 missing
+                )
+            )
         estimates = estimator.estimate_from_markers()
         assert "pod1" in estimates
         assert "pod2" not in estimates
@@ -604,13 +626,15 @@ class TestEdgeCases:
         corrector = TimestampCorrector()
         assert corrector.get_correction("pod1") is None
 
-        corrector.update_correction(DriftEstimate(
-            pod_id="pod1",
-            offset_ms=5.0,
-            drift_rate_ppm=100.0,
-            confidence=1.0,
-            method="marker",
-        ))
+        corrector.update_correction(
+            DriftEstimate(
+                pod_id="pod1",
+                offset_ms=5.0,
+                drift_rate_ppm=100.0,
+                confidence=1.0,
+                method="marker",
+            )
+        )
 
         corr = corrector.get_correction("pod1")
         assert corr is not None
