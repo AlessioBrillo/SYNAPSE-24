@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 try:
     import pytz
+
+    pytz_module: Any = pytz
+    PYTZ_AVAILABLE = True
 except ImportError:
-    pytz = None
+    pytz_module = None
+    PYTZ_AVAILABLE = False
 
 
 @dataclass
@@ -39,8 +43,8 @@ class NightWindowScheduler:
 
     def _get_timezone(self, tz_name: str) -> Any:
         """Get timezone object."""
-        if pytz is not None:
-            return pytz.timezone(tz_name)
+        if PYTZ_AVAILABLE and pytz_module is not None:
+            return pytz_module.timezone(tz_name)
         # Fallback: use datetime.timezone with fixed offset (approximate)
         import datetime
 

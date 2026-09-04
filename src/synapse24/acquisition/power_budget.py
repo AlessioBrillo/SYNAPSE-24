@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from synapse24.signal_quality import Tier
 
@@ -152,7 +152,8 @@ class PowerBudgetManager:
 
     def can_afford_tier1(self, duration_h: float) -> bool:
         """Check if we can afford a Tier 1 session of given duration."""
-        if duration_h > self.profiles[Tier.T1].max_duration_h:
+        max_duration = self.profiles[Tier.T1].max_duration_h
+        if max_duration is not None and duration_h > max_duration:
             return False
 
         # Projected consumption
@@ -168,7 +169,8 @@ class PowerBudgetManager:
     def can_afford_tier2(self, duration_min: float) -> bool:
         """Check if we can afford a Tier 2 burst."""
         duration_h = duration_min / 60
-        if duration_h > self.profiles[Tier.T2].max_duration_h:
+        max_duration = self.profiles[Tier.T2].max_duration_h
+        if max_duration is not None and duration_h > max_duration:
             return False
 
         projected_mah = self.get_consumed_mah()
@@ -214,7 +216,7 @@ class PowerBudgetManager:
             power_draw_mw=self.get_current_consumption_mw(),
         )
 
-    def get_tier_status(self, tier: Tier) -> dict:
+    def get_tier_status(self, tier: Tier) -> dict[str, Any]:
         """Get detailed status for a specific tier."""
         profile = self.profiles[tier]
         used_h = {

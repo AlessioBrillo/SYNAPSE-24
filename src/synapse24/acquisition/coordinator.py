@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import time
+import types
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
+
+import numpy as np
+import numpy.typing as npt
 
 from synapse24.acquisition.state_machine import TierTransition, TransitionEvent
 from synapse24.hardware import BoardConfig, BoardManager, DeviceRegistry, SensorPodConfig
@@ -98,7 +102,9 @@ class SensorPodCoordinator:
                 state.manager = None
             state.is_streaming = False
 
-    def get_pod_data(self, pod_id: str, num_samples: int | None = None):
+    def get_pod_data(
+        self, pod_id: str, num_samples: int | None = None
+    ) -> npt.NDArray[np.float64] | None:
         """Get data from a specific pod."""
         state = self._pods.get(pod_id)
         if state and state.manager and state.is_streaming:
@@ -107,7 +113,9 @@ class SensorPodCoordinator:
             return data
         return None
 
-    def get_all_data(self, num_samples: int | None = None) -> dict[str, any]:
+    def get_all_data(
+        self, num_samples: int | None = None
+    ) -> dict[str, npt.NDArray[np.float64] | None]:
         """Get data from all streaming pods."""
         return {
             pod_id: self.get_pod_data(pod_id, num_samples)
@@ -161,7 +169,7 @@ class SensorPodCoordinator:
         # In practice, this would push to an LSL marker stream
         # that all pods and hub subscribe to
 
-    def get_pod_status(self, pod_id: str) -> dict | None:
+    def get_pod_status(self, pod_id: str) -> dict[str, Any] | None:
         """Get status of a specific pod."""
         state = self._pods.get(pod_id)
         if not state:
@@ -179,7 +187,7 @@ class SensorPodCoordinator:
             "last_data_age_s": time.time() - state.last_data_time if state.last_data_time else None,
         }
 
-    def get_all_status(self) -> dict:
+    def get_all_status(self) -> dict[str, Any]:
         """Get status of all pods."""
         return {
             "hub_pod": self._hub_pod_id,
@@ -195,6 +203,11 @@ class SensorPodCoordinator:
         self.start_streaming_all()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         self.stop_streaming_all()
         self.disconnect_all()

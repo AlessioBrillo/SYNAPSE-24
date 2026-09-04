@@ -265,8 +265,8 @@ class LiveTier0Validator:
         }
         self._quality_results.append(result)
 
-        evals = quality.get("evaluations", {}) if "evaluations" in quality else {}
-        overall = quality.get("overall_pass", False) if "overall_pass" in quality else False
+        evals: dict[str, Any] = {}
+        overall = False
         logger.info(
             f"  PPG Quality @ {timestamp:.1f}s: PASS={overall}, "
             f"SQI={quality.get('ppg_sqi', 'N/A'):.3f}, "

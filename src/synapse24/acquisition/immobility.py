@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 import numpy as np
 
@@ -95,7 +96,7 @@ class ImmobilityDetector:
             return 1.0
         return min(self._consecutive_immobile / self._required_windows, 1.0)
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         return {
             "consecutive_immobile_windows": self._consecutive_immobile,
             "required_windows": self._required_windows,
@@ -113,8 +114,20 @@ class AdaptiveImmobilityDetector(ImmobilityDetector):
     Uses baseline noise estimation to adapt to sensor placement differences.
     """
 
-    def __init__(self, *args, adaptation_window_s: float = 300.0, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        accel_sampling_rate: int = 100,
+        window_duration_s: float = 30.0,
+        magnitude_threshold: float = 0.02,
+        min_immobility_min: float = 5.0,
+        adaptation_window_s: float = 300.0,
+    ) -> None:
+        super().__init__(
+            accel_sampling_rate=accel_sampling_rate,
+            window_duration_s=window_duration_s,
+            magnitude_threshold=magnitude_threshold,
+            min_immobility_min=min_immobility_min,
+        )
         self.adaptation_window_s = adaptation_window_s
         self._baseline_buffer: deque[float] = deque(maxlen=int(adaptation_window_s))
         self._adapted_threshold: float | None = None
@@ -124,7 +137,8 @@ class AdaptiveImmobilityDetector(ImmobilityDetector):
         self._baseline_buffer.append(accel_magnitude)
 
         # Periodically adapt threshold
-        if len(self._baseline_buffer) >= self._baseline_buffer.maxlen:
+        maxlen = self._baseline_buffer.maxlen
+        if maxlen is not None and len(self._baseline_buffer) >= maxlen:
             self._adapt_threshold()
 
         return super().update(accel_magnitude, timestamp)
@@ -142,7 +156,7 @@ class AdaptiveImmobilityDetector(ImmobilityDetector):
         self._adapted_threshold = noise_floor + 0.01  # 0.01g margin
         self.magnitude_threshold = max(self._adapted_threshold, 0.015)  # Floor at 0.015g
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         status = super().get_status()
         status["adapted_threshold"] = self._adapted_threshold
         status["baseline_samples"] = len(self._baseline_buffer)
