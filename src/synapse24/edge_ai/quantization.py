@@ -264,7 +264,7 @@ def _extract_calibration_stats(
     output_details: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Extract quantization parameters (scale, zero_point) for int8 models."""
-    stats = {"inputs": [], "outputs": []}
+    stats: dict[str, list[dict[str, Any]]] = {"inputs": [], "outputs": []}
     for d in input_details:
         qp = d.get("quantization_parameters", {})
         stats["inputs"].append(
@@ -291,7 +291,7 @@ def _extract_calibration_stats(
 def _compute_accuracy_drop(
     keras_model: keras.Model,
     tflite_model: bytes,
-    validation_data: tuple[np.ndarray, np.ndarray],
+    validation_data: tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]],
 ) -> float:
     """Compute accuracy drop between FP32 Keras and INT8 TFLite."""
     X_val, y_val = validation_data
@@ -309,7 +309,7 @@ def _compute_accuracy_drop(
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    y_pred_tflite = []
+    y_pred_tflite_list: list[Any] = []
     for i in range(len(X_val)):
         input_data = X_val[i : i + 1].astype(np.float32)
         # Apply input quantization if needed
@@ -320,9 +320,9 @@ def _compute_accuracy_drop(
         interpreter.set_tensor(input_details[0]["index"], input_data)
         interpreter.invoke()
         output = interpreter.get_tensor(output_details[0]["index"])
-        y_pred_tflite.append(output[0])
+        y_pred_tflite_list.append(output[0])
 
-    y_pred_tflite = np.array(y_pred_tflite)
+    y_pred_tflite: npt.NDArray[np.float64] = np.array(y_pred_tflite_list)
     if y_pred_tflite.shape[-1] == 1:
         y_pred_tflite = (y_pred_tflite > 0.5).astype(int).flatten()
     else:

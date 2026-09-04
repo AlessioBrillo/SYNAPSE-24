@@ -19,7 +19,7 @@ class DeploymentConfig:
 
     target_platform: TargetPlatform = TargetPlatform.ESP32_S3
     optimization_level: str = "O2"  # O0, O1, O2, O3, Os
-    include_ops: list[str] = None  # Specific TFLM ops to include
+    include_ops: list[str] | None = None  # Specific TFLM ops to include
     arena_size_kb: int = 0  # 0 = auto-estimate
     enable_cmsis_nn: bool = True
     enable_xnnpack: bool = False
@@ -68,7 +68,7 @@ class DeploymentResult:
     estimated_latency_ms: float
     ops_included: list[str]
     validation_passed: bool = True
-    validation_notes: list[str] = None
+    validation_notes: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.validation_notes is None:
@@ -279,7 +279,7 @@ void setup_{name}() {{
     tflite::InitializeTarget();
 
     // Register ops
-    {_generate_op_registrations(deploy_config.include_ops)}
+    {_generate_op_registrations(deploy_config.include_ops or [])}
 
     // Load model
     model = tflite::GetModel({name}_tflite);
@@ -459,7 +459,7 @@ def _generate_output_copy_code(output_dtype: str, num_classes: int) -> str:
     memcpy(output_probs, output_data, kNumClasses * sizeof(float));"""
 
 
-def _shape_str(shape: list) -> str:
+def _shape_str(shape: list[int]) -> str:
     """Format shape list as string."""
     return ", ".join(str(s) for s in shape)
 
@@ -496,8 +496,9 @@ def _validate_deployment(
 
     # Check for unsupported ops
     unsupported = []
+    include_ops = config.include_ops or []
     for op in result.ops_used:
-        if op not in config.include_ops and "UNKNOWN" not in op:
+        if op not in include_ops and "UNKNOWN" not in op:
             unsupported.append(op)
     if unsupported:
         notes.append(f"Potentially unsupported ops: {unsupported}")

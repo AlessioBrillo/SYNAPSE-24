@@ -228,7 +228,7 @@ class EdgeModel:
         self.tflite_model: bytes | None = None
         self.tflm_model: bytes | None = None
 
-    def predict(self, x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    def predict(self, x: npt.NDArray[np.float64]) -> Any:
         """Run inference."""
         if self.model is None:
             raise ValueError("Model not loaded")
@@ -239,7 +239,7 @@ class EdgeModel:
         if self.model is None:
             raise ValueError("Model not loaded")
         results = self.model.evaluate(x, y, verbose=0, return_dict=True)
-        return results
+        return {k: float(v) for k, v in results.items()}
 
     def save_keras(self, path: Path) -> None:
         """Save Keras model."""
