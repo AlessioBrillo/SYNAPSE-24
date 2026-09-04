@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,8 @@ from synapse24.utils import (
     generate_synthetic_timestamps,
     write_xdf,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -134,8 +137,8 @@ class LiveTier0Validator:
 
         sample_counts = {"ecg": 0, "ppg": 0, "acc": 0}
 
-        print(f"Starting live Tier 0 validation for {max_duration:.0f}s...")
-        print(f"Connected streams: {list(self._inlets.keys())}")
+        logger.info(f"Starting live Tier 0 validation for {max_duration:.0f}s...")
+        logger.info(f"Connected streams: {list(self._inlets.keys())}")
 
         try:
             while self._running and (local_clock() if local_clock else time.time()) < end_time:
@@ -144,11 +147,13 @@ class LiveTier0Validator:
                 # Periodic status
                 elapsed = (local_clock() if local_clock else time.time()) - self._start_time
                 if int(elapsed) % 30 == 0 and elapsed > 0:
-                    print(f"  [{elapsed:.0f}s] ECG: {sample_counts['ecg']} samples, "
-                          f"PPG: {sample_counts['ppg']}, ACC: {sample_counts['acc']}")
+                    logger.info(
+                        f"  [{elapsed:.0f}s] ECG: {sample_counts['ecg']} samples, "
+                        f"PPG: {sample_counts['ppg']}, ACC: {sample_counts['acc']}"
+                    )
 
         except KeyboardInterrupt:
-            print("\nValidation interrupted by user")
+            logger.info("\nValidation interrupted by user")
         finally:
             self._running = False
             for inlet in self._inlets.values():
@@ -228,9 +233,11 @@ class LiveTier0Validator:
         # Log pass/fail
         evals = quality.evaluate()
         overall = quality.overall_pass()
-        print(f"  ECG Quality @ {timestamp:.1f}s: PASS={overall}, "
-              f"Se={evals.get('r_peak_sensitivity', 'N/A')}, "
-              f"PPV={evals.get('r_peak_ppv', 'N/A')}")
+        logger.info(
+            f"  ECG Quality @ {timestamp:.1f}s: PASS={overall}, "
+            f"Se={evals.get('r_peak_sensitivity', 'N/A')}, "
+            f"PPV={evals.get('r_peak_ppv', 'N/A')}"
+        )
 
         # Keep overlap for continuity
         keep_samples = int(fs * 5)  # 5 seconds overlap
@@ -242,7 +249,9 @@ class LiveTier0Validator:
         ppg_arr = np.array(self._ppg_red_buffer, dtype=np.float64)
         fs = self._get_ppg_fs()
 
-        accel_mag = np.array(self._acc_mag_buffer, dtype=np.float64) if self._acc_mag_buffer else None
+        accel_mag = (
+            np.array(self._acc_mag_buffer, dtype=np.float64) if self._acc_mag_buffer else None
+        )
 
         from synapse24.signal_quality import compute_ppg_quality
 
@@ -258,10 +267,12 @@ class LiveTier0Validator:
 
         evals = quality.get("evaluations", {}) if "evaluations" in quality else {}
         overall = quality.get("overall_pass", False) if "overall_pass" in quality else False
-        print(f"  PPG Quality @ {timestamp:.1f}s: PASS={overall}, "
-              f"SQI={quality.get('ppg_sqi', 'N/A'):.3f}, "
-              f"PI={quality.get('perfusion_index', 'N/A'):.3f}, "
-              f"MAP={quality.get('motion_artifact_prob', 'N/A'):.3f}")
+        logger.info(
+            f"  PPG Quality @ {timestamp:.1f}s: PASS={overall}, "
+            f"SQI={quality.get('ppg_sqi', 'N/A'):.3f}, "
+            f"PI={quality.get('perfusion_index', 'N/A'):.3f}, "
+            f"MAP={quality.get('motion_artifact_prob', 'N/A'):.3f}"
+        )
 
         # Keep overlap
         keep_samples = int(fs * 10)
@@ -281,59 +292,73 @@ class LiveTier0Validator:
         if self._ecg_buffer and self.config.save_xdf:
             ecg_data = np.array(self._ecg_buffer, dtype=np.float64).reshape(-1, 1)
             ecg_ts = np.array(self._ecg_timestamps, dtype=np.float64)
-            ecg_info = create_stream_info(StreamConfig(
-                name=self.config.ecg_stream_name,
-                stream_type="ECG_T0",
-                channel_count=1,
-                sampling_rate=self._get_ecg_fs(),
-                channel_names=["ECG"],
-                channel_units=["µV"],
-                tier=self.config.tier.value,
-            ))
-            streams.append({
-                "info": ecg_info,
-                "data": ecg_data,
-                "timestamps": ecg_ts,
-            })
+            ecg_info = create_stream_info(
+                StreamConfig(
+                    name=self.config.ecg_stream_name,
+                    stream_type="ECG_T0",
+                    channel_count=1,
+                    sampling_rate=self._get_ecg_fs(),
+                    channel_names=["ECG"],
+                    channel_units=["µV"],
+                    tier=self.config.tier.value,
+                )
+            )
+            streams.append(
+                {
+                    "info": ecg_info,
+                    "data": ecg_data,
+                    "timestamps": ecg_ts,
+                }
+            )
 
         if self._ppg_red_buffer and self.config.save_xdf:
-            ppg_data = np.column_stack([
-                np.array(self._ppg_red_buffer, dtype=np.float64),
-                np.array(self._ppg_ir_buffer, dtype=np.float64),
-            ])
+            ppg_data = np.column_stack(
+                [
+                    np.array(self._ppg_red_buffer, dtype=np.float64),
+                    np.array(self._ppg_ir_buffer, dtype=np.float64),
+                ]
+            )
             ppg_ts = np.array(self._ppg_timestamps, dtype=np.float64)
-            ppg_info = create_stream_info(StreamConfig(
-                name=self.config.ppg_stream_name,
-                stream_type="PPG_T0",
-                channel_count=2,
-                sampling_rate=self._get_ppg_fs(),
-                channel_names=["PPG_RED", "PPG_IR"],
-                channel_units=["a.u.", "a.u."],
-                tier=self.config.tier.value,
-            ))
-            streams.append({
-                "info": ppg_info,
-                "data": ppg_data,
-                "timestamps": ppg_ts,
-            })
+            ppg_info = create_stream_info(
+                StreamConfig(
+                    name=self.config.ppg_stream_name,
+                    stream_type="PPG_T0",
+                    channel_count=2,
+                    sampling_rate=self._get_ppg_fs(),
+                    channel_names=["PPG_RED", "PPG_IR"],
+                    channel_units=["a.u.", "a.u."],
+                    tier=self.config.tier.value,
+                )
+            )
+            streams.append(
+                {
+                    "info": ppg_info,
+                    "data": ppg_data,
+                    "timestamps": ppg_ts,
+                }
+            )
 
         if self._acc_mag_buffer and self.config.save_xdf:
             acc_data = np.array(self._acc_mag_buffer, dtype=np.float64).reshape(-1, 1)
             acc_ts = np.array(self._acc_timestamps, dtype=np.float64)
-            acc_info = create_stream_info(StreamConfig(
-                name=self.config.acc_stream_name,
-                stream_type="ACC_T0",
-                channel_count=1,
-                sampling_rate=self._get_imu_fs(),
-                channel_names=["ACC_MAG"],
-                channel_units=["g"],
-                tier=self.config.tier.value,
-            ))
-            streams.append({
-                "info": acc_info,
-                "data": acc_data,
-                "timestamps": acc_ts,
-            })
+            acc_info = create_stream_info(
+                StreamConfig(
+                    name=self.config.acc_stream_name,
+                    stream_type="ACC_T0",
+                    channel_count=1,
+                    sampling_rate=self._get_imu_fs(),
+                    channel_names=["ACC_MAG"],
+                    channel_units=["g"],
+                    tier=self.config.tier.value,
+                )
+            )
+            streams.append(
+                {
+                    "info": acc_info,
+                    "data": acc_data,
+                    "timestamps": acc_ts,
+                }
+            )
 
         # Quality metadata stream
         if self._quality_results and self.config.save_xdf:
@@ -357,7 +382,7 @@ class LiveTier0Validator:
         if streams and self.config.save_xdf:
             xdf_path = self.config.output_dir / f"live_tier0_{int(self._start_time)}.xdf"
             write_xdf(xdf_path, streams)
-            print(f"XDF saved to: {xdf_path}")
+            logger.info(f"XDF saved to: {xdf_path}")
 
         # Export JSON summary
         json_path = None
@@ -379,7 +404,7 @@ class LiveTier0Validator:
             }
             with open(json_path, "w") as f:
                 json.dump(summary, f, indent=2, default=str)
-            print(f"JSON summary saved to: {json_path}")
+            logger.info(f"JSON summary saved to: {json_path}")
 
         return {
             "session_duration_s": elapsed,
@@ -417,7 +442,7 @@ def run_live_validation(
     validator = LiveTier0Validator(config)
     connected = validator.connect()
 
-    print(f"Connected streams: {connected}")
+    logger.info(f"Connected streams: {connected}")
     if not any(connected.values()):
         raise RuntimeError("No LSL streams found. Ensure ESP32 is streaming.")
 

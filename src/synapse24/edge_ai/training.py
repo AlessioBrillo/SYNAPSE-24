@@ -173,7 +173,9 @@ class EdgeImpulseTrainer:
 
         return x, y
 
-    def _get_validation_data(self) -> tuple[npt.NDArray[np.float64] | None, npt.NDArray[np.int64] | None]:
+    def _get_validation_data(
+        self,
+    ) -> tuple[npt.NDArray[np.float64] | None, npt.NDArray[np.int64] | None]:
         """Get validation data."""
         if self.config.val_data is not None and self.config.val_labels is not None:
             return self.config.val_data, self.config.val_labels

@@ -232,14 +232,14 @@ class EdgeModel:
         """Run inference."""
         if self.model is None:
             raise ValueError("Model not loaded")
-        return self.model.predict(x, verbose=0)  # type: ignore[no-any-return]
+        return self.model.predict(x, verbose=0)
 
     def evaluate(self, x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> dict[str, float]:
         """Evaluate model."""
         if self.model is None:
             raise ValueError("Model not loaded")
         results = self.model.evaluate(x, y, verbose=0, return_dict=True)
-        return results  # type: ignore[no-any-return]
+        return results
 
     def save_keras(self, path: Path) -> None:
         """Save Keras model."""

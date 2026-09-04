@@ -152,7 +152,10 @@ class LSLStreamManager:
         self._outlets[stream_id].push_sample(sample.astype(np.float32), timestamp)
 
     def push_chunk(
-        self, stream_id: str, data: npt.NDArray[np.float64], timestamps: npt.NDArray[np.float64] | None = None
+        self,
+        stream_id: str,
+        data: npt.NDArray[np.float64],
+        timestamps: npt.NDArray[np.float64] | None = None,
     ) -> None:
         """Push a chunk of samples with timestamps."""
         if stream_id not in self._outlets:
@@ -166,7 +169,9 @@ class LSLStreamManager:
 
         self._outlets[stream_id].push_chunk(data.astype(np.float32), timestamps.astype(np.float64))
 
-    def stream_all(self, streams_data: dict[str, tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]]) -> None:
+    def stream_all(
+        self, streams_data: dict[str, tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]]
+    ) -> None:
         """Stream all registered streams synchronously from pre-loaded data.
 
         Args:

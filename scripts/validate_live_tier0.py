@@ -4,10 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from synapse24.acquisition.live_validator import run_live_validation
 from synapse24.signal_quality import Tier
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -67,15 +75,15 @@ def main() -> None:
             output_dir=args.output_dir,
             tier=Tier(args.tier),
         )
-        print("\n=== VALIDATION COMPLETE ===")
-        print(f"Duration: {result['session_duration_s']:.1f}s")
-        print(f"Quality assessments: {result['quality_assessments']}")
+        logger.info("=== VALIDATION COMPLETE ===")
+        logger.info("Duration: %.1fs", result["session_duration_s"])
+        logger.info("Quality assessments: %d", result["quality_assessments"])
         if result["xdf_path"]:
-            print(f"XDF: {result['xdf_path']}")
+            logger.info("XDF: %s", result["xdf_path"])
         if result["json_path"]:
-            print(f"JSON: {result['json_path']}")
+            logger.info("JSON: %s", result["json_path"])
     except Exception as e:
-        print(f"ERROR: {e}")
+        logger.exception("Validation failed")
         raise
 
 
@@ -83,15 +91,23 @@ def list_lsl_streams() -> None:
     """List all available LSL streams."""
     try:
         from pylsl import resolve_streams
+
         streams = resolve_streams(timeout=5.0)
         if streams:
-            print("Available LSL streams:")
+            logger.info("Available LSL streams:")
             for s in streams:
-                print(f"  {s.name()} ({s.type()}) - {s.channel_count()} ch @ {s.nominal_srate()} Hz, source: {s.source_id()}")
+                logger.info(
+                    "  %s (%s) - %d ch @ %.0f Hz, source: %s",
+                    s.name(),
+                    s.type(),
+                    s.channel_count(),
+                    s.nominal_srate(),
+                    s.source_id(),
+                )
         else:
-            print("No LSL streams found on network.")
+            logger.info("No LSL streams found on network.")
     except Exception as e:
-        print(f"Error resolving streams: {e}")
+        logger.exception("Error resolving streams")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ class ESP32Tier0Config:
     ppg_i2c_addr: int = 0x57
     ppg_sampling_rate: int = 100
     ppg_led_current_red: int = 0x1F  # 6.4 mA
-    ppg_led_current_ir: int = 0x1F   # 6.4 mA
+    ppg_led_current_ir: int = 0x1F  # 6.4 mA
 
     # IMU (ICM-20948)  # noqa: ERA001
     imu_i2c_addr: int = 0x68
@@ -297,7 +297,7 @@ class Tier0LSLValidator:
             from synapse24.signal_quality import compute_ecg_quality
 
             quality = compute_ecg_quality(ecg_arr, self.ecg_fs, thresholds=self.thresholds)
-            self._ecg_buffer = self._ecg_buffer[-self.ecg_fs * 5:]  # Keep 5s overlap
+            self._ecg_buffer = self._ecg_buffer[-self.ecg_fs * 5 :]  # Keep 5s overlap
             return quality.to_dict()
         return None
 
@@ -309,15 +309,17 @@ class Tier0LSLValidator:
         if len(self._ppg_red_buffer) >= self._ppg_samples_needed:
             ppg_arr = np.array(self._ppg_red_buffer, dtype=np.float64)
             # Compute accelerometer magnitude if available
-            accel_mag = np.array(self._acc_mag_buffer, dtype=np.float64) if self._acc_mag_buffer else None
+            accel_mag = (
+                np.array(self._acc_mag_buffer, dtype=np.float64) if self._acc_mag_buffer else None
+            )
 
             from synapse24.signal_quality import compute_ppg_quality
 
             quality = compute_ppg_quality(ppg_arr, self.ppg_fs, accel_mag, self.thresholds)
-            self._ppg_red_buffer = self._ppg_red_buffer[-self.ppg_fs * 10:]
-            self._ppg_ir_buffer = self._ppg_ir_buffer[-self.ppg_fs * 10:]
+            self._ppg_red_buffer = self._ppg_red_buffer[-self.ppg_fs * 10 :]
+            self._ppg_ir_buffer = self._ppg_ir_buffer[-self.ppg_fs * 10 :]
             if self._acc_mag_buffer:
-                self._acc_mag_buffer = self._acc_mag_buffer[-self.imu_fs * 10:]
+                self._acc_mag_buffer = self._acc_mag_buffer[-self.imu_fs * 10 :]
             return quality
         return None
 
@@ -326,7 +328,7 @@ class Tier0LSLValidator:
         mag = np.sqrt(acc_x**2 + acc_y**2 + acc_z**2)
         self._acc_mag_buffer.append(float(mag))
         if len(self._acc_mag_buffer) > self.imu_fs * 60:  # Keep 60s
-            self._acc_mag_buffer = self._acc_mag_buffer[-self.imu_fs * 30:]
+            self._acc_mag_buffer = self._acc_mag_buffer[-self.imu_fs * 30 :]
 
 
 BOARD_ADAPTERS = {

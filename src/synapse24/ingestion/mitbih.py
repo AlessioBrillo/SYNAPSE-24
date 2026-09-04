@@ -100,7 +100,9 @@ def download_mitbih(data_dir: Path) -> Path:
     return data_dir
 
 
-def load_mitbih_record(record_id: str, data_dir: Path) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64], dict[str, Any]]:
+def load_mitbih_record(
+    record_id: str, data_dir: Path
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64], dict[str, Any]]:
     """Load a single MIT-BIH record.
 
     Returns:

@@ -9,7 +9,9 @@ import numpy.typing as npt
 from .base import QualityThresholds, SignalQualityMetrics
 
 
-def detect_r_peaks_neurokit(ecg_signal: npt.NDArray[np.float64], sampling_rate: int) -> npt.NDArray[np.int64]:
+def detect_r_peaks_neurokit(
+    ecg_signal: npt.NDArray[np.float64], sampling_rate: int
+) -> npt.NDArray[np.int64]:
     """Detect R-peaks using NeuroKit2's ECG processing pipeline.
 
     Args:

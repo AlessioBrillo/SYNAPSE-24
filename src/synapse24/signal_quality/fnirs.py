@@ -10,7 +10,9 @@ from scipy.signal import butter, filtfilt, welch
 from scipy.stats import pearsonr
 
 
-def fnirs_cv_dc(long_channel: npt.NDArray[np.float64], short_channel: npt.NDArray[np.float64] | None = None) -> float:
+def fnirs_cv_dc(
+    long_channel: npt.NDArray[np.float64], short_channel: npt.NDArray[np.float64] | None = None
+) -> float:
     """Compute Coefficient of Variation of DC component.
 
     CV = std(DC) / mean(DC) per channel.

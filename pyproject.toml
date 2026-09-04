@@ -121,10 +121,6 @@ exclude = [
 [[tool.mypy.overrides]]
 module = [
     "neurokit2.*",
-    "biosppy.*",
-    "heartpy.*",
-    "pyhrv.*",
-    "yasa.*",
     "brainflow.*",
     "pylsl.*",
     "pyxdf.*",

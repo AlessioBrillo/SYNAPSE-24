@@ -119,7 +119,9 @@ def extract_wrist_signals(data: dict[str, Any]) -> dict[str, npt.NDArray[np.floa
     }
 
 
-def resample_labels(labels: npt.NDArray[np.int64], original_rate: int, target_rate: int) -> npt.NDArray[np.int64]:
+def resample_labels(
+    labels: npt.NDArray[np.int64], original_rate: int, target_rate: int
+) -> npt.NDArray[np.int64]:
     """Resample labels to target rate using nearest neighbor."""
     if original_rate == target_rate:
         return labels
@@ -129,7 +131,9 @@ def resample_labels(labels: npt.NDArray[np.int64], original_rate: int, target_ra
     return np.asarray(labels[indices])
 
 
-def compute_accel_magnitude(acc_x: npt.NDArray[np.float64], acc_y: npt.NDArray[np.float64], acc_z: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def compute_accel_magnitude(
+    acc_x: npt.NDArray[np.float64], acc_y: npt.NDArray[np.float64], acc_z: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
     """Compute 3D accelerometer magnitude."""
     return np.asarray(np.sqrt(acc_x**2 + acc_y**2 + acc_z**2))
 
@@ -329,7 +333,10 @@ def _build_wrist_streams(
 
 
 def _build_marker_stream(
-    chest: dict[str, npt.NDArray[np.float64]], ecg_timestamps: npt.NDArray[np.float64], fs_chest: int, subject_id: str
+    chest: dict[str, npt.NDArray[np.float64]],
+    ecg_timestamps: npt.NDArray[np.float64],
+    fs_chest: int,
+    subject_id: str,
 ) -> dict[str, Any]:
     """Build marker stream from activity labels."""
     label_names = {

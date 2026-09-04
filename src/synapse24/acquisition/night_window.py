@@ -9,7 +9,7 @@ from typing import Any, Optional
 try:
     import pytz
 except ImportError:
-    pytz = None  # type: ignore[assignment]
+    pytz = None
 
 
 @dataclass
