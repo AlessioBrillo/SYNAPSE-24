@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import neurokit2 as nk
 import numpy as np
+import numpy.typing as npt
 
 from .base import QualityThresholds, SignalQualityMetrics
 
 
-def detect_r_peaks_neurokit(ecg_signal: np.ndarray, sampling_rate: int) -> np.ndarray:
+def detect_r_peaks_neurokit(ecg_signal: npt.NDArray[np.float64], sampling_rate: int) -> npt.NDArray[np.int64]:
     """Detect R-peaks using NeuroKit2's ECG processing pipeline.
 
     Args:
@@ -23,8 +24,8 @@ def detect_r_peaks_neurokit(ecg_signal: np.ndarray, sampling_rate: int) -> np.nd
 
 
 def r_peak_detection_quality(
-    detected_peaks: np.ndarray,
-    reference_peaks: np.ndarray,
+    detected_peaks: npt.NDArray[np.int64],
+    reference_peaks: npt.NDArray[np.int64],
     sampling_rate: int,
     tolerance_ms: int = 50,
 ) -> tuple[float, float]:
@@ -60,7 +61,7 @@ def r_peak_detection_quality(
     return sensitivity, ppv
 
 
-def compute_hrv_metrics(r_peaks: np.ndarray, sampling_rate: int) -> dict[str, float]:
+def compute_hrv_metrics(r_peaks: npt.NDArray[np.int64], sampling_rate: int) -> dict[str, float]:
     """Compute time and frequency domain HRV metrics from R-peaks.
 
     Args:
@@ -104,8 +105,8 @@ def compute_hrv_metrics(r_peaks: np.ndarray, sampling_rate: int) -> dict[str, fl
 
 
 def rmssd_mae(
-    detected_peaks: np.ndarray,
-    reference_peaks: np.ndarray,
+    detected_peaks: npt.NDArray[np.int64],
+    reference_peaks: npt.NDArray[np.int64],
     sampling_rate: int,
 ) -> float:
     """Compute MAE of RMSSD between detected and reference R-peaks.
@@ -128,9 +129,9 @@ def rmssd_mae(
 
 
 def compute_ecg_quality(
-    ecg_signal: np.ndarray,
+    ecg_signal: npt.NDArray[np.float64],
     sampling_rate: int,
-    reference_peaks: np.ndarray | None = None,
+    reference_peaks: npt.NDArray[np.int64] | None = None,
     thresholds: QualityThresholds | None = None,
 ) -> SignalQualityMetrics:
     """Comprehensive ECG quality assessment.

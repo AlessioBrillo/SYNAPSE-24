@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 try:
     import pytz
 except ImportError:
-    pytz = None
+    pytz = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -37,7 +37,7 @@ class NightWindowScheduler:
         self.config = config or SleepWindowConfig()
         self._tz = self._get_timezone(self.config.timezone)
 
-    def _get_timezone(self, tz_name: str):
+    def _get_timezone(self, tz_name: str) -> Any:
         """Get timezone object."""
         if pytz is not None:
             return pytz.timezone(tz_name)
@@ -134,7 +134,7 @@ class NightWindowScheduler:
         start_ts = self.next_window_start(timestamp)
         return (start_ts - timestamp) / 3600
 
-    def get_status(self, timestamp: float | None = None) -> dict:
+    def get_status(self, timestamp: float | None = None) -> dict[str, Any]:
         """Get scheduler status."""
         if timestamp is None:
             timestamp = datetime.datetime.now(self._tz).timestamp()

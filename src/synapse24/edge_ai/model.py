@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import numpy.typing as npt
 
 
 class ModelType(Enum):
@@ -227,18 +228,18 @@ class EdgeModel:
         self.tflite_model: bytes | None = None
         self.tflm_model: bytes | None = None
 
-    def predict(self, x: np.ndarray) -> np.ndarray:
+    def predict(self, x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Run inference."""
         if self.model is None:
             raise ValueError("Model not loaded")
-        return self.model.predict(x, verbose=0)
+        return self.model.predict(x, verbose=0)  # type: ignore[no-any-return]
 
-    def evaluate(self, x: np.ndarray, y: np.ndarray) -> dict[str, float]:
+    def evaluate(self, x: npt.NDArray[np.float64], y: npt.NDArray[np.float64]) -> dict[str, float]:
         """Evaluate model."""
         if self.model is None:
             raise ValueError("Model not loaded")
         results = self.model.evaluate(x, y, verbose=0, return_dict=True)
-        return results
+        return results  # type: ignore[no-any-return]
 
     def save_keras(self, path: Path) -> None:
         """Save Keras model."""

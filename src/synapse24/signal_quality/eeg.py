@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 from scipy.signal import welch
 
 
-def spectral_flatness(eeg_signal: np.ndarray, sampling_rate: int) -> float:
+def spectral_flatness(eeg_signal: npt.NDArray[np.float64], sampling_rate: int) -> float:
     """Compute spectral flatness (Wiener entropy) of EEG signal.
 
     Low flatness = tonal/peaked spectrum (good EEG with clear rhythms)
@@ -42,7 +45,7 @@ def spectral_flatness(eeg_signal: np.ndarray, sampling_rate: int) -> float:
     return float(geometric_mean / arithmetic_mean)
 
 
-def alpha_band_power_ratio(eeg_signal: np.ndarray, sampling_rate: int) -> float:
+def alpha_band_power_ratio(eeg_signal: npt.NDArray[np.float64], sampling_rate: int) -> float:
     """Compute alpha band power ratio (alpha / total power).
 
     For eyes-closed resting state, alpha (8-13 Hz) should dominate.
@@ -74,7 +77,7 @@ def alpha_band_power_ratio(eeg_signal: np.ndarray, sampling_rate: int) -> float:
 
 
 def band_power(
-    eeg_signal: np.ndarray,
+    eeg_signal: npt.NDArray[np.float64],
     sampling_rate: int,
     band: tuple[float, float],
 ) -> float:
@@ -94,10 +97,10 @@ def band_power(
 
 
 def compute_eeg_quality(
-    eeg_signal: np.ndarray,
+    eeg_signal: npt.NDArray[np.float64],
     sampling_rate: int,
     state: str = "resting_eyes_closed",
-) -> dict:
+) -> dict[str, Any]:
     """Comprehensive EEG quality assessment.
 
     Args:

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 import numpy as np
+import numpy.typing as npt
 import pyxdf
 from pylsl import StreamInfo, StreamOutlet, local_clock
 
@@ -139,7 +140,7 @@ class LSLStreamManager:
         return outlet
 
     def push_sample(
-        self, stream_id: str, sample: np.ndarray, timestamp: float | None = None
+        self, stream_id: str, sample: npt.NDArray[np.float64], timestamp: float | None = None
     ) -> None:
         """Push a single sample to the outlet with LSL clock timestamp."""
         if stream_id not in self._outlets:
@@ -151,7 +152,7 @@ class LSLStreamManager:
         self._outlets[stream_id].push_sample(sample.astype(np.float32), timestamp)
 
     def push_chunk(
-        self, stream_id: str, data: np.ndarray, timestamps: np.ndarray | None = None
+        self, stream_id: str, data: npt.NDArray[np.float64], timestamps: npt.NDArray[np.float64] | None = None
     ) -> None:
         """Push a chunk of samples with timestamps."""
         if stream_id not in self._outlets:
@@ -165,7 +166,7 @@ class LSLStreamManager:
 
         self._outlets[stream_id].push_chunk(data.astype(np.float32), timestamps.astype(np.float64))
 
-    def stream_all(self, streams_data: dict[str, tuple[np.ndarray, np.ndarray]]) -> None:
+    def stream_all(self, streams_data: dict[str, tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]]) -> None:
         """Stream all registered streams synchronously from pre-loaded data.
 
         Args:
@@ -347,7 +348,7 @@ def generate_synthetic_timestamps(
     n_samples: int,
     sampling_rate: float,
     start_time: float | None = None,
-) -> np.ndarray:
+) -> npt.NDArray[np.float64]:
     """Generate regularly spaced timestamps in LSL clock domain."""
     if start_time is None:
         start_time = local_clock()

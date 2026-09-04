@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import wfdb
 from tqdm import tqdm
 
@@ -99,7 +100,7 @@ def download_mitbih(data_dir: Path) -> Path:
     return data_dir
 
 
-def load_mitbih_record(record_id: str, data_dir: Path) -> tuple[np.ndarray, np.ndarray, dict]:
+def load_mitbih_record(record_id: str, data_dir: Path) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64], dict[str, Any]]:
     """Load a single MIT-BIH record.
 
     Returns:
@@ -233,7 +234,7 @@ def ingest_mitbih(
     output_dir: Path = Path("data/processed"),
     records: list[str] | None = None,
     tier: Tier = Tier.T1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Full MIT-BIH ingestion and validation pipeline with XDF export.
 
     Args:

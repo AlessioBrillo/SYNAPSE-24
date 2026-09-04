@@ -75,6 +75,7 @@ dev-dependencies = [
     "types-pyyaml>=6.0.0,<7.0",
     "pre-commit>=3.7.0,<4.0",
     "types-tqdm>=4.70.0.20260827",
+    "types-pytz>=2026.3.1.20260727",
 ]
 
 [tool.ruff]
@@ -109,15 +110,12 @@ no_implicit_optional = true
 strict_equality = true
 show_error_codes = true
 pretty = true
-namespace_packages = true
-explicit_package_bases = true
 follow_imports = "silent"
 exclude = [
     ".venv",
     "build",
     "dist",
     "site-packages",
-    "src/synapse24/acquisition/state_machine.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -131,6 +129,11 @@ module = [
     "pylsl.*",
     "pyxdf.*",
     "wfdb.*",
+    "scipy.*",
+    "tensorflow.*",
+    "edgeimpulse.*",
+    "sklearn.*",
+    "flatbuffers.*",
 ]
 ignore_missing_imports = true
 

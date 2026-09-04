@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 from scipy.signal import butter, filtfilt, find_peaks, welch
 from scipy.stats import kurtosis
 
 
-def perfusion_index(ppg_signal: np.ndarray) -> float:
+def perfusion_index(ppg_signal: npt.NDArray[np.float64]) -> float:
     """Compute Perfusion Index (PI) = (AC / DC) * 100.
 
     AC = pulsatile component amplitude
@@ -32,8 +33,8 @@ def perfusion_index(ppg_signal: np.ndarray) -> float:
 
 
 def _bandpass_filter(
-    signal: np.ndarray, lowcut: float, highcut: float, fs: int, order: int = 4
-) -> np.ndarray:
+    signal: npt.NDArray[np.float64], lowcut: float, highcut: float, fs: int, order: int = 4
+) -> npt.NDArray[np.float64]:
     """Apply zero-phase bandpass filter."""
     nyquist = 0.5 * fs
     low = lowcut / nyquist
@@ -42,7 +43,7 @@ def _bandpass_filter(
     return np.asarray(filtfilt(b, a, signal))
 
 
-def _compute_spectral_entropy(signal: np.ndarray, fs: int) -> float:
+def _compute_spectral_entropy(signal: npt.NDArray[np.float64], fs: int) -> float:
     """Compute normalized spectral entropy."""
     freqs, psd = welch(signal, fs=fs, nperseg=min(256, len(signal)))
     psd_norm = psd / np.sum(psd)
@@ -53,7 +54,7 @@ def _compute_spectral_entropy(signal: np.ndarray, fs: int) -> float:
     return spec_entropy / max_entropy if max_entropy > 0 else 0
 
 
-def compute_ppg_sqi(ppg_signal: np.ndarray, sampling_rate: int) -> float:
+def compute_ppg_sqi(ppg_signal: npt.NDArray[np.float64], sampling_rate: int) -> float:
     """Compute PPG Signal Quality Index (SQI) using multi-feature approach.
 
     Combines:
@@ -104,8 +105,8 @@ def compute_ppg_sqi(ppg_signal: np.ndarray, sampling_rate: int) -> float:
 
 
 def ppg_motion_artifact_probability(
-    ppg_signal: np.ndarray,
-    accel_magnitude: np.ndarray | None = None,
+    ppg_signal: npt.NDArray[np.float64],
+    accel_magnitude: npt.NDArray[np.float64] | None = None,
     sampling_rate: int = 100,
 ) -> float:
     """Compute Motion Artifact Probability (MAP) for PPG.
@@ -163,9 +164,9 @@ def ppg_motion_artifact_probability(
 
 
 def compute_ppg_quality(
-    ppg_signal: np.ndarray,
+    ppg_signal: npt.NDArray[np.float64],
     sampling_rate: int,
-    accel_magnitude: np.ndarray | None = None,
+    accel_magnitude: npt.NDArray[np.float64] | None = None,
     thresholds: object | None = None,
 ) -> dict[str, float]:
     """Comprehensive PPG quality assessment.

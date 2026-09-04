@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import numpy.typing as npt
 
 try:
     import tensorflow as tf
@@ -29,10 +30,10 @@ class TrainingConfig:
     """Configuration for Edge Impulse / local training."""
 
     # Data
-    train_data: np.ndarray | None = None  # (n_samples, n_timesteps, n_features)
-    train_labels: np.ndarray | None = None
-    val_data: np.ndarray | None = None
-    val_labels: np.ndarray | None = None
+    train_data: npt.NDArray[np.float64] | None = None  # (n_samples, n_timesteps, n_features)
+    train_labels: npt.NDArray[np.int64] | None = None
+    val_data: npt.NDArray[np.float64] | None = None
+    val_labels: npt.NDArray[np.int64] | None = None
 
     # Edge Impulse
     ei_api_key: str = ""
@@ -53,7 +54,7 @@ class TrainingConfig:
     time_warp_sigma: float = 0.2
 
     # Callbacks
-    callbacks: list = field(default_factory=list)
+    callbacks: list[Any] = field(default_factory=list)
 
 
 class EdgeImpulseTrainer:
@@ -143,23 +144,23 @@ class EdgeImpulseTrainer:
         )
 
         # Evaluate
-        metrics = {}
+        eval_metrics: dict[str, float] = {}
         if x_val is not None:
             eval_results = model.evaluate(x_val, y_val, verbose=0, return_dict=True)
-            metrics = eval_results
+            eval_metrics = eval_results
 
         # Create EdgeModel
         edge_model = EdgeModel(
             config=self.model_config,
             model=model,
             history=history.history,
-            metrics=metrics,
+            metrics=eval_metrics,
         )
 
         self._model = edge_model
         return edge_model
 
-    def _prepare_data(self) -> tuple[np.ndarray, np.ndarray]:
+    def _prepare_data(self) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
         """Prepare training data with augmentation."""
         if self.config.train_data is None or self.config.train_labels is None:
             raise ValueError("Training data not provided")
@@ -172,13 +173,13 @@ class EdgeImpulseTrainer:
 
         return x, y
 
-    def _get_validation_data(self) -> tuple[np.ndarray | None, np.ndarray | None]:
+    def _get_validation_data(self) -> tuple[npt.NDArray[np.float64] | None, npt.NDArray[np.int64] | None]:
         """Get validation data."""
         if self.config.val_data is not None and self.config.val_labels is not None:
             return self.config.val_data, self.config.val_labels
         return None, None
 
-    def _augment_data(self, x: np.ndarray) -> np.ndarray:
+    def _augment_data(self, x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Apply data augmentation for time series."""
         augmented = [x]
 
@@ -193,7 +194,7 @@ class EdgeImpulseTrainer:
 
         return np.concatenate(augmented, axis=0)
 
-    def _time_warp(self, x: np.ndarray) -> np.ndarray:
+    def _time_warp(self, x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Simple time warping augmentation."""
         n_samples, n_timesteps, n_features = x.shape
         warped = np.zeros_like(x)
@@ -235,7 +236,7 @@ class EdgeImpulseTrainer:
             return self._build_mlp(input_shape)
         raise ValueError(f"Unknown architecture: {self.model_config.architecture}")
 
-    def _build_lstm(self, input_shape: tuple) -> keras.Model:
+    def _build_lstm(self, input_shape: tuple[int, ...]) -> Any:
         """Build LSTM model."""
         inputs = keras.Input(shape=input_shape)
         x = inputs
@@ -259,7 +260,7 @@ class EdgeImpulseTrainer:
 
         return keras.Model(inputs, outputs, name=self.model_config.name)
 
-    def _build_cnn(self, input_shape: tuple) -> keras.Model:
+    def _build_cnn(self, input_shape: tuple[int, ...]) -> Any:
         """Build 1D CNN model."""
         inputs = keras.Input(shape=input_shape)
         x = inputs
@@ -282,7 +283,7 @@ class EdgeImpulseTrainer:
 
         return keras.Model(inputs, outputs, name=self.model_config.name)
 
-    def _build_cnn_lstm(self, input_shape: tuple) -> keras.Model:
+    def _build_cnn_lstm(self, input_shape: tuple[int, ...]) -> Any:
         """Build CNN-LSTM hybrid model."""
         inputs = keras.Input(shape=input_shape)
         x = inputs
@@ -312,7 +313,7 @@ class EdgeImpulseTrainer:
 
         return keras.Model(inputs, outputs, name=self.model_config.name)
 
-    def _build_tcn(self, input_shape: tuple) -> keras.Model:
+    def _build_tcn(self, input_shape: tuple[int, ...]) -> Any:
         """Build Temporal Convolutional Network (dilated CNN)."""
         inputs = keras.Input(shape=input_shape)
         x = inputs
@@ -349,7 +350,7 @@ class EdgeImpulseTrainer:
 
         return keras.Model(inputs, outputs, name=self.model_config.name)
 
-    def _build_mlp(self, input_shape: tuple) -> keras.Model:
+    def _build_mlp(self, input_shape: tuple[int, ...]) -> Any:
         """Build MLP model (for pre-extracted features)."""
         # Flatten if time series
         if len(input_shape) > 1:
@@ -374,9 +375,9 @@ class EdgeImpulseTrainer:
 
 
 def create_wesad_training_data(
-    wesad_results: list[dict],
+    wesad_results: list[dict[str, Any]],
     config: ModelConfig,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
     """Create training data from WESAD ingestion results.
 
     Extracts features from each segment for stress classification.

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 from scipy.signal import butter, filtfilt, welch
 from scipy.stats import pearsonr
 
 
-def fnirs_cv_dc(long_channel: np.ndarray, short_channel: np.ndarray | None = None) -> float:
+def fnirs_cv_dc(long_channel: npt.NDArray[np.float64], short_channel: npt.NDArray[np.float64] | None = None) -> float:
     """Compute Coefficient of Variation of DC component.
 
     CV = std(DC) / mean(DC) per channel.
@@ -32,7 +35,7 @@ def fnirs_cv_dc(long_channel: np.ndarray, short_channel: np.ndarray | None = Non
     return float(cv)
 
 
-def fnirs_snr_db(long_channel: np.ndarray, sampling_rate: int) -> float:
+def fnirs_snr_db(long_channel: npt.NDArray[np.float64], sampling_rate: int) -> float:
     """Compute SNR in dB for fNIRS AC component.
 
     SNR = 20 * log10(AC_rms / DC_mean)
@@ -74,8 +77,8 @@ def fnirs_snr_db(long_channel: np.ndarray, sampling_rate: int) -> float:
 
 
 def fnirs_motion_artifact_correlation(
-    long_channel: np.ndarray,
-    accel_magnitude: np.ndarray,
+    long_channel: npt.NDArray[np.float64],
+    accel_magnitude: npt.NDArray[np.float64],
     sampling_rate: int,
 ) -> float:
     """Compute correlation between fNIRS and accelerometer (motion artifact indicator).
@@ -121,8 +124,8 @@ def fnirs_motion_artifact_correlation(
 
 
 def fnirs_short_channel_correlation(
-    long_channel: np.ndarray,
-    short_channel: np.ndarray,
+    long_channel: npt.NDArray[np.float64],
+    short_channel: npt.NDArray[np.float64],
 ) -> float:
     """Compute correlation between long and short separation channels.
 
@@ -158,9 +161,9 @@ def fnirs_short_channel_correlation(
 
 
 def compute_fnirs_quality(
-    long_channels: np.ndarray,  # (n_channels, n_samples)
-    short_channels: np.ndarray | None = None,  # (n_short, n_samples)
-    accel_magnitude: np.ndarray | None = None,
+    long_channels: npt.NDArray[np.float64],  # (n_channels, n_samples)
+    short_channels: npt.NDArray[np.float64] | None = None,  # (n_short, n_samples)
+    accel_magnitude: npt.NDArray[np.float64] | None = None,
     sampling_rate: int = 10,
     thresholds: object | None = None,
 ) -> dict[str, Any]:
@@ -224,7 +227,7 @@ def compute_fnirs_quality(
 
 
 def fnirs_hrf_snr(
-    long_channel: np.ndarray,
+    long_channel: npt.NDArray[np.float64],
     sampling_rate: int,
     hrf_band: tuple[float, float] = (0.01, 0.1),
 ) -> float:

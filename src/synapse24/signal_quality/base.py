@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 
 class Tier(Enum):
@@ -292,11 +293,11 @@ class SignalQualityMetrics:
     @classmethod
     def from_modality_metrics(
         cls,
-        ecg: dict | None = None,
-        ppg: dict | None = None,
-        eeg: dict | None = None,
-        fnirs: dict | None = None,
-        eda: dict | None = None,
+        ecg: dict[str, Any] | None = None,
+        ppg: dict[str, Any] | None = None,
+        eeg: dict[str, Any] | None = None,
+        fnirs: dict[str, Any] | None = None,
+        eda: dict[str, Any] | None = None,
         tier: Tier = Tier.T1,
         sampling_rate_hz: float | None = None,
         duration_s: float | None = None,
@@ -336,7 +337,7 @@ class SignalQualityMetrics:
         return metrics
 
 
-def compute_snr(signal: np.ndarray, noise: np.ndarray) -> float:
+def compute_snr(signal: npt.NDArray[np.float64], noise: npt.NDArray[np.float64]) -> float:
     """Compute Signal-to-Noise Ratio in dB."""
     signal_power = np.mean(signal**2)
     noise_power = np.mean(noise**2)

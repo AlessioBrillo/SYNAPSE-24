@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import requests
 from scipy.signal import resample
 from tqdm import tqdm
@@ -75,7 +76,7 @@ def load_deap_subject(subject_dir: Path) -> dict[str, Any]:
         return dict(pickle.load(f, encoding="latin1"))
 
 
-def extract_deap_signals(data: dict) -> dict[str, np.ndarray]:
+def extract_deap_signals(data: dict[str, Any]) -> dict[str, npt.NDArray[np.float64]]:
     """Extract signals from DEAP data.
 
     Returns dict with keys:

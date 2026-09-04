@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import numpy.typing as npt
 
 try:
     import tensorflow as tf
@@ -29,10 +30,10 @@ class QuantizationConfig:
 
     quantization_type: str = "int8"  # int8, int16, float16, float32
     representative_dataset_size: int = 100
-    representative_dataset_fn: Optional[Callable[[], np.ndarray]] = None
+    representative_dataset_fn: Optional[Callable[[], npt.NDArray[np.float64]]] = None
     inference_input_type: str = "int8"  # int8, float32
     inference_output_type: str = "int8"  # int8, float32
-    supported_ops: list[str] = None  # ["TFLITE_BUILTINS_INT8", "SELECT_TF_OPS"]
+    supported_ops: list[str] | None = None  # ["TFLITE_BUILTINS_INT8", "SELECT_TF_OPS"]
     target_platform: TargetPlatform = TargetPlatform.ESP32_S3
 
     def __post_init__(self) -> None:
@@ -53,10 +54,10 @@ class QuantizationResult:
     model_size_kb: float
     estimated_ram_kb: float
     ops_used: list[str]
-    input_details: list[dict]
-    output_details: list[dict]
+    input_details: list[dict[str, Any]]
+    output_details: list[dict[str, Any]]
     accuracy_drop_percent: float = 0.0
-    calibration_stats: dict = None
+    calibration_stats: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,14 +78,14 @@ class RepresentativeDatasetGenerator:
         self,
         model_config: ModelConfig,
         feature_scaler: Any = None,
-        wesad_results: list[dict] | None = None,
+        wesad_results: list[dict[str, Any]] | None = None,
     ) -> None:
         self.model_config = model_config
         self.feature_scaler = feature_scaler
         self.wesad_results = wesad_results
-        self._cached_data: np.ndarray | None = None
+        self._cached_data: npt.NDArray[np.float64] | None = None
 
-    def generate(self, num_samples: int = 100) -> np.ndarray:
+    def generate(self, num_samples: int = 100) -> npt.NDArray[np.float64]:
         """Generate representative dataset for calibration."""
         if self._cached_data is not None and len(self._cached_data) >= num_samples:
             return self._cached_data[:num_samples]
@@ -97,9 +98,12 @@ class RepresentativeDatasetGenerator:
         self._cached_data = data
         return data
 
-    def _from_wesad_results(self, num_samples: int) -> np.ndarray:
+    def _from_wesad_results(self, num_samples: int) -> npt.NDArray[np.float64]:
         """Extract real features from WESAD ingestion results."""
         from synapse24.edge_ai.training import create_wesad_training_data
+
+        if self.wesad_results is None:
+            return self._synthetic(num_samples)
 
         X, _ = create_wesad_training_data(self.wesad_results, self.model_config)
         if self.feature_scaler:
@@ -116,13 +120,13 @@ class RepresentativeDatasetGenerator:
             noise = np.random.normal(0, 0.01, X.shape).astype(np.float32)
             X = X + noise
 
-        return X[:num_samples].astype(np.float32)
+        return X[:num_samples].astype(np.float64)
 
-    def _synthetic(self, num_samples: int) -> np.ndarray:
+    def _synthetic(self, num_samples: int) -> npt.NDArray[np.float64]:
         """Generate synthetic representative data matching input shape."""
         input_shape = self.model_config.input_shape
         if len(input_shape) == 2 or len(input_shape) == 1:
-            data = np.random.randn(num_samples, *input_shape).astype(np.float32)
+            data = np.random.randn(num_samples, *input_shape).astype(np.float64)
         else:
             raise ValueError(f"Unsupported input shape: {input_shape}")
         return data
@@ -131,8 +135,8 @@ class RepresentativeDatasetGenerator:
 def quantize_model(
     edge_model: EdgeModel,
     quant_config: QuantizationConfig,
-    representative_data: np.ndarray | None = None,
-    validation_data: tuple[np.ndarray, np.ndarray] | None = None,
+    representative_data: npt.NDArray[np.float64] | None = None,
+    validation_data: tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]] | None = None,
 ) -> QuantizationResult:
     """Quantize a trained Keras model to TFLite with optional int8 quantization.
 
@@ -241,7 +245,7 @@ def _get_ops_used(tflite_model: bytes) -> list[str]:
         return ["unknown"]
 
 
-def _detail_to_dict(detail: dict) -> dict:
+def _detail_to_dict(detail: dict[str, Any]) -> dict[str, Any]:
     """Convert TFLite tensor detail to serializable dict."""
     return {
         "name": detail["name"],
@@ -255,10 +259,10 @@ def _detail_to_dict(detail: dict) -> dict:
 
 
 def _extract_calibration_stats(
-    interpreter: tf.lite.Interpreter,
-    input_details: list[dict],
-    output_details: list[dict],
-) -> dict:
+    interpreter: Any,
+    input_details: list[dict[str, Any]],
+    output_details: list[dict[str, Any]],
+) -> dict[str, Any]:
     """Extract quantization parameters (scale, zero_point) for int8 models."""
     stats = {"inputs": [], "outputs": []}
     for d in input_details:

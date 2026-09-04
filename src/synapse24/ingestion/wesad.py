@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import requests
 from scipy.signal import resample
 from tqdm import tqdm
@@ -72,7 +73,7 @@ def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
         return dict(pickle.load(f, encoding="latin1"))
 
 
-def extract_chest_signals(data: dict) -> dict[str, np.ndarray]:
+def extract_chest_signals(data: dict[str, Any]) -> dict[str, npt.NDArray[np.float64]]:
     """Extract chest-worn signals (RespiBAN) from WESAD data.
 
     Returns dict with keys:
@@ -94,11 +95,11 @@ def extract_chest_signals(data: dict) -> dict[str, np.ndarray]:
         "acc_x": chest["ACC"][:, 0],
         "acc_y": chest["ACC"][:, 1],
         "acc_z": chest["ACC"][:, 2],
-        "labels": data["label"].flatten(),
+        "labels": data["label"].flatten().astype(np.int64),
     }
 
 
-def extract_wrist_signals(data: dict) -> dict[str, np.ndarray]:
+def extract_wrist_signals(data: dict[str, Any]) -> dict[str, npt.NDArray[np.float64]]:
     """Extract wrist-worn signals (Empatica E4) from WESAD data.
 
     Returns dict with keys:
@@ -118,7 +119,7 @@ def extract_wrist_signals(data: dict) -> dict[str, np.ndarray]:
     }
 
 
-def resample_labels(labels: np.ndarray, original_rate: int, target_rate: int) -> np.ndarray:
+def resample_labels(labels: npt.NDArray[np.int64], original_rate: int, target_rate: int) -> npt.NDArray[np.int64]:
     """Resample labels to target rate using nearest neighbor."""
     if original_rate == target_rate:
         return labels
@@ -128,16 +129,16 @@ def resample_labels(labels: np.ndarray, original_rate: int, target_rate: int) ->
     return np.asarray(labels[indices])
 
 
-def compute_accel_magnitude(acc_x: np.ndarray, acc_y: np.ndarray, acc_z: np.ndarray) -> np.ndarray:
+def compute_accel_magnitude(acc_x: npt.NDArray[np.float64], acc_y: npt.NDArray[np.float64], acc_z: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Compute 3D accelerometer magnitude."""
     return np.asarray(np.sqrt(acc_x**2 + acc_y**2 + acc_z**2))
 
 
 def segment_by_label(
-    signals: dict[str, np.ndarray],
-    labels: np.ndarray,
+    signals: dict[str, npt.NDArray[np.float64]],
+    labels: npt.NDArray[np.int64],
     label_value: int,
-) -> dict[str, np.ndarray]:
+) -> dict[str, npt.NDArray[np.float64]]:
     """Extract signal segments for a specific label."""
     mask = labels == label_value
     return {k: v[mask] for k, v in signals.items()}
@@ -146,7 +147,7 @@ def segment_by_label(
 def _create_stream(
     name: str,
     stream_type: str,
-    data: np.ndarray,
+    data: npt.NDArray[np.float64],
     sampling_rate: float,
     channel_names: list[str],
     channel_units: list[str],
@@ -175,7 +176,7 @@ def _create_stream(
 
 
 def _build_chest_streams(
-    chest: dict[str, np.ndarray],
+    chest: dict[str, npt.NDArray[np.float64]],
     subject_id: str,
     tier: Tier,
     fs_chest: int,
@@ -258,7 +259,7 @@ def _build_chest_streams(
 
 
 def _build_wrist_streams(
-    wrist: dict[str, np.ndarray],
+    wrist: dict[str, npt.NDArray[np.float64]],
     subject_id: str,
     fs_wrist_bvp: int,
     fs_wrist_acc: int,
@@ -328,7 +329,7 @@ def _build_wrist_streams(
 
 
 def _build_marker_stream(
-    chest: dict[str, np.ndarray], ecg_timestamps: np.ndarray, fs_chest: int, subject_id: str
+    chest: dict[str, npt.NDArray[np.float64]], ecg_timestamps: npt.NDArray[np.float64], fs_chest: int, subject_id: str
 ) -> dict[str, Any]:
     """Build marker stream from activity labels."""
     label_names = {
@@ -355,13 +356,13 @@ def _build_marker_stream(
 
 
 def _compute_segment_qualities(
-    chest: dict[str, np.ndarray],
-    wrist: dict[str, np.ndarray],
-    wrist_acc_mag: np.ndarray,
+    chest: dict[str, npt.NDArray[np.float64]],
+    wrist: dict[str, npt.NDArray[np.float64]],
+    wrist_acc_mag: npt.NDArray[np.float64],
     fs_chest: int,
     fs_wrist_bvp: int,
     thresholds: QualityThresholds,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     """Compute quality metrics for each labeled segment."""
     label_names = {
         1: "baseline",
@@ -497,7 +498,7 @@ def ingest_wesad(
     output_dir: Path = Path("data/processed"),
     subjects: list[str] | None = None,
     tier: Tier = Tier.T1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Full WESAD ingestion pipeline with XDF export.
 
     Args:
