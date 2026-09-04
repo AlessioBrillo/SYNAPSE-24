@@ -24,6 +24,9 @@ except ImportError:  # pragma: no cover - brainflow not available in all envs
 
 from synapse24.signal_quality import Tier
 
+# Base board adapters registry (empty, populated by adapter modules)
+BOARD_ADAPTERS: dict[str, type] = {}
+
 
 class BoardState(Enum):
     """Board connection state."""
