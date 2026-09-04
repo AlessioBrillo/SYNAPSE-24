@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .base import BoardAdapter, BoardConfig
 
 
@@ -28,7 +30,7 @@ class EmotiBitAdapter(BoardAdapter):
             "mag": [11, 12, 13],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             mac_address=overrides.get("mac_address", ""),
@@ -39,7 +41,7 @@ class EmotiBitAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for EmotiBit."""
         return {
             "PPG_GREEN": {"channels": [0], "type": "PPG_T0", "unit": "a.u."},

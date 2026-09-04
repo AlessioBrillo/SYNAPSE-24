@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import numpy.typing as npt
 
 try:
     import brainflow
@@ -118,7 +120,8 @@ class BoardManager:
             raise RuntimeError("brainflow not installed")
         if not hasattr(BoardIds, self.config.board_id):
             raise ValueError(f"Unknown board ID: {self.config.board_id}")
-        return getattr(BoardIds, self.config.board_id)
+        board_id_attr: int = getattr(BoardIds, self.config.board_id)
+        return board_id_attr
 
     def prepare(self) -> None:
         """Prepare the board session (connect, configure)."""
@@ -182,24 +185,24 @@ class BoardManager:
             self._board.stop_stream()
             self._state = BoardState.CONNECTED
 
-    def get_board_data(self, num_samples: int | None = None) -> np.ndarray:
+    def get_board_data(self, num_samples: int | None = None) -> npt.NDArray[np.float64]:
         """Get board data as (n_channels, n_samples) array."""
         if self._board is None:
             raise RuntimeError("Board not initialized")
 
         if num_samples is None:
-            return self._board.get_board_data()
-        return self._board.get_current_board_data(num_samples)
+            return np.asarray(self._board.get_board_data(), dtype=np.float64)
+        return np.asarray(self._board.get_current_board_data(num_samples), dtype=np.float64)
 
-    def get_board_timestamp(self) -> np.ndarray:
+    def get_board_timestamp(self) -> npt.NDArray[np.float64]:
         """Get timestamps for the last data chunk."""
         if self._board is None:
             raise RuntimeError("Board not initialized")
         data = self._board.get_board_data()
         if data.size == 0:
-            return np.array([])
+            return np.array([], dtype=np.float64)
         # Last row is timestamp
-        return data[-1, :] if data.shape[0] > self._n_channels else np.array([])
+        return data[-1, :] if data.shape[0] > self._n_channels else np.array([], dtype=np.float64)
 
     def release(self) -> None:
         """Release the board session."""
@@ -215,7 +218,12 @@ class BoardManager:
         self.prepare()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         self.release()
 
     def session(self) -> BoardSession:
@@ -234,7 +242,12 @@ class BoardSession:
         self.manager.start_stream()
         return self.manager
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         self.manager.stop_stream()
         self.manager.release()
 
@@ -258,11 +271,11 @@ class BoardAdapter(ABC):
         """Default channel mapping by modality."""
 
     @abstractmethod
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         """Create board configuration with overrides."""
 
     @abstractmethod
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for this board."""
 
 
@@ -284,8 +297,10 @@ class SensorPodConfig:
     is_hub: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_board_config(self, **overrides) -> BoardConfig:
+    def to_board_config(self, **overrides: Any) -> BoardConfig:
         """Convert to BoardConfig for acquisition."""
+        from dataclasses import replace
+
         from .registry import BOARD_ADAPTERS
 
         adapter_class = BOARD_ADAPTERS.get(self.board_type)
@@ -293,20 +308,17 @@ class SensorPodConfig:
             raise ValueError(f"Unknown board type: {self.board_type}")
 
         adapter = adapter_class()
-        config = adapter.create_config()
+        config: BoardConfig = adapter.create_config()
 
-        # Override with pod-specific settings
+        # Prepare overrides dict
+        config_overrides = dict(overrides)
         if self.serial_port:
-            config.serial_port = self.serial_port
+            config_overrides["serial_port"] = self.serial_port
         if self.ble_address:
-            config.mac_address = self.ble_address
+            config_overrides["mac_address"] = self.ble_address
 
-        # Apply overrides
-        for key, value in overrides.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-
-        return config
+        # Apply overrides using dataclasses.replace (since BoardConfig is frozen)
+        return replace(config, **config_overrides)
 
 
 class DeviceRegistry:
@@ -372,7 +384,7 @@ class DeviceRegistry:
         """Save pod configurations to YAML file."""
         import yaml
 
-        data = {"pods": []}
+        data: dict[str, list[dict[str, Any]]] = {"pods": []}
         for pod in self._pods.values():
             data["pods"].append(
                 {

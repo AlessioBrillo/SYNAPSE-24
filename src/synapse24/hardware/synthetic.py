@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 
 from .base import BoardAdapter, BoardConfig
 
@@ -61,7 +64,7 @@ class SyntheticBoardAdapter(BoardAdapter):
             "acc": list(range(10, 13)),
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         """Create board configuration."""
         config = BoardConfig(board_id=self.board_id, sampling_rate=self.default_sampling_rate)
         for key, value in overrides.items():
@@ -69,7 +72,7 @@ class SyntheticBoardAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for synthetic board."""
         return {
             "ECG": {"channels": [0], "type": "ECG_T0", "unit": "µV"},
@@ -83,7 +86,7 @@ class SyntheticBoardAdapter(BoardAdapter):
         n_samples: int,
         sampling_rate: int | None = None,
         signal_types: dict[int, str] | None = None,
-    ) -> np.ndarray:
+    ) -> npt.NDArray[np.float64]:
         """Generate synthetic multimodal data."""
         fs = sampling_rate or self.default_sampling_rate
         n_ch = 16
@@ -110,7 +113,7 @@ class SyntheticBoardAdapter(BoardAdapter):
     def default_signal_types(self) -> dict[int, str]:
         return {0: "ecg", 1: "ppg", 2: "eeg", 3: "eeg"}
 
-    def _generate_ecg(self, t: np.ndarray, fs: int) -> np.ndarray:
+    def _generate_ecg(self, t: npt.NDArray[np.float64], fs: int) -> npt.NDArray[np.float64]:
         """Generate synthetic ECG with R-peaks."""
         hr = 72  # bpm
         rr_interval = 60.0 / hr
@@ -136,7 +139,7 @@ class SyntheticBoardAdapter(BoardAdapter):
 
         return ecg * 1000  # µV
 
-    def _generate_ppg(self, t: np.ndarray, fs: int) -> np.ndarray:
+    def _generate_ppg(self, t: npt.NDArray[np.float64], fs: int) -> npt.NDArray[np.float64]:
         """Generate synthetic PPG."""
         hr = 72
         ppg = 100 + 10 * np.sin(2 * np.pi * hr / 60 * t)
@@ -144,9 +147,11 @@ class SyntheticBoardAdapter(BoardAdapter):
         ppg += 2 * np.sin(2 * np.pi * 2 * hr / 60 * t)
         # Add noise
         ppg += np.random.randn(len(t)) * 0.5
-        return ppg
+        return np.asarray(ppg, dtype=np.float64)
 
-    def _generate_eeg(self, t: np.ndarray, fs: int, ch_idx: int) -> np.ndarray:
+    def _generate_eeg(
+        self, t: npt.NDArray[np.float64], fs: int, ch_idx: int
+    ) -> npt.NDArray[np.float64]:
         """Generate synthetic EEG with alpha rhythm."""
         # Alpha rhythm (10 Hz) dominant
         eeg = 20 * np.sin(2 * np.pi * 10 * t)
@@ -154,13 +159,15 @@ class SyntheticBoardAdapter(BoardAdapter):
         eeg += 5 * np.sin(2 * np.pi * 20 * t)
         # Add noise
         eeg += np.random.randn(len(t)) * 3
-        return eeg
+        return np.asarray(eeg, dtype=np.float64)
 
-    def _generate_accel(self, t: np.ndarray, fs: int, axis_idx: int) -> np.ndarray:
+    def _generate_accel(
+        self, t: npt.NDArray[np.float64], fs: int, axis_idx: int
+    ) -> npt.NDArray[np.float64]:
         """Generate synthetic accelerometer data."""
         # Low-frequency movement + noise
         accel = 0.5 * np.sin(2 * np.pi * 0.1 * t) + np.random.randn(len(t)) * 0.1
-        return accel
+        return np.asarray(accel, dtype=np.float64)
 
 
 class SyntheticPlaybackAdapter(BoardAdapter):
@@ -178,14 +185,14 @@ class SyntheticPlaybackAdapter(BoardAdapter):
     def default_channels(self) -> dict[str, list[int]]:
         return {}
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(board_id=self.board_id)
         for key, value in overrides.items():
             if hasattr(config, key):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {}
 
 

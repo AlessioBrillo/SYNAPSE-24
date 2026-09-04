@@ -73,7 +73,9 @@ def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
         return dict(pickle.load(f, encoding="latin1"))
 
 
-def extract_chest_signals(data: dict[str, Any]) -> dict[str, npt.NDArray[np.float64]]:
+def extract_chest_signals(
+    data: dict[str, Any],
+) -> dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]]:
     """Extract chest-worn signals (RespiBAN) from WESAD data.
 
     Returns dict with keys:
@@ -139,7 +141,7 @@ def compute_accel_magnitude(
 
 
 def segment_by_label(
-    signals: dict[str, npt.NDArray[np.float64]],
+    signals: dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]],
     labels: npt.NDArray[np.int64],
     label_value: int,
 ) -> dict[str, npt.NDArray[np.float64]]:
@@ -180,7 +182,7 @@ def _create_stream(
 
 
 def _build_chest_streams(
-    chest: dict[str, npt.NDArray[np.float64]],
+    chest: dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]],
     subject_id: str,
     tier: Tier,
     fs_chest: int,
@@ -194,7 +196,7 @@ def _build_chest_streams(
         _create_stream(
             f"SYNAPSE_ECG_CHEST_{subject_id}",
             "ECG_T1",
-            chest["ecg"],
+            chest["ecg"].astype(np.float64),
             fs_chest,
             ["ECG"],
             ["µV"],
@@ -208,7 +210,7 @@ def _build_chest_streams(
         _create_stream(
             f"SYNAPSE_EDA_CHEST_{subject_id}",
             "EDA_T1",
-            chest["eda"],
+            chest["eda"].astype(np.float64),
             fs_chest,
             ["EDA"],
             ["µS"],
@@ -217,7 +219,13 @@ def _build_chest_streams(
         )
     )
 
-    acc_data = np.column_stack([chest["acc_x"], chest["acc_y"], chest["acc_z"]])
+    acc_data = np.column_stack(
+        [
+            chest["acc_x"].astype(np.float64),
+            chest["acc_y"].astype(np.float64),
+            chest["acc_z"].astype(np.float64),
+        ]
+    )
     streams.append(
         _create_stream(
             f"SYNAPSE_ACC_CHEST_{subject_id}",
@@ -236,7 +244,7 @@ def _build_chest_streams(
         _create_stream(
             f"SYNAPSE_RESP_CHEST_{subject_id}",
             "Resp_T1",
-            chest["resp"],
+            chest["resp"].astype(np.float64),
             fs_chest,
             ["RESP"],
             ["a.u."],
@@ -250,7 +258,7 @@ def _build_chest_streams(
         _create_stream(
             f"SYNAPSE_TEMP_CHEST_{subject_id}",
             "Temp_T1",
-            chest["temp"],
+            chest["temp"].astype(np.float64),
             fs_chest,
             ["TEMP"],
             ["°C"],
@@ -333,7 +341,7 @@ def _build_wrist_streams(
 
 
 def _build_marker_stream(
-    chest: dict[str, npt.NDArray[np.float64]],
+    chest: dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]],
     ecg_timestamps: npt.NDArray[np.float64],
     fs_chest: int,
     subject_id: str,
@@ -363,7 +371,7 @@ def _build_marker_stream(
 
 
 def _compute_segment_qualities(
-    chest: dict[str, npt.NDArray[np.float64]],
+    chest: dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]],
     wrist: dict[str, npt.NDArray[np.float64]],
     wrist_acc_mag: npt.NDArray[np.float64],
     fs_chest: int,
@@ -382,15 +390,21 @@ def _compute_segment_qualities(
     }
 
     segment_qualities = {}
+    # Labels are int64, but mypy sees union type - cast explicitly
+    chest_labels: npt.NDArray[np.int64] = chest["labels"]  # type: ignore[assignment]
     for label_val, label_name in label_names.items():
-        chest_seg = segment_by_label(chest, chest["labels"], label_val)
+        chest_seg = segment_by_label(chest, chest_labels, label_val)
         if len(chest_seg["ecg"]) > fs_chest * 10:
-            seg_ecg = compute_ecg_quality(chest_seg["ecg"], fs_chest, thresholds=thresholds)
+            seg_ecg = compute_ecg_quality(
+                chest_seg["ecg"].astype(np.float64), fs_chest, thresholds=thresholds
+            )
             chest_acc_mag = compute_accel_magnitude(
                 chest_seg["acc_x"], chest_seg["acc_y"], chest_seg["acc_z"]
             )
             wrist_seg = segment_by_label(
-                wrist, resample_labels(chest["labels"], fs_chest, fs_wrist_bvp), label_val
+                wrist,  # type: ignore[arg-type]
+                resample_labels(chest_labels, fs_chest, fs_wrist_bvp),
+                label_val,
             )
             if len(wrist_seg["bvp"]) > fs_wrist_bvp * 10:
                 wrist_acc_seg = resample(wrist_acc_mag, len(wrist_seg["bvp"]))
@@ -438,7 +452,9 @@ def process_wesad_subject(
     thresholds = QualityThresholds.for_tier(tier)
 
     # Compute quality metrics
-    ecg_quality = compute_ecg_quality(chest["ecg"], fs_chest, thresholds=thresholds)
+    ecg_quality = compute_ecg_quality(
+        chest["ecg"].astype(np.float64), fs_chest, thresholds=thresholds
+    )
     ppg_quality = compute_ppg_quality(
         wrist["bvp"], fs_wrist_bvp, wrist_acc_mag, thresholds=thresholds
     )

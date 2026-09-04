@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .base import BoardAdapter, BoardConfig
 
 
@@ -26,7 +28,7 @@ class CerelogAdapter(BoardAdapter):
             "mag": [14, 15, 16],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             mac_address=overrides.get("mac_address", ""),
@@ -38,7 +40,7 @@ class CerelogAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for Cerelog ESP-EEG."""
         return {
             "EEG": {"channels": list(range(8)), "type": "EEG_T1", "unit": "µV"},
@@ -68,7 +70,7 @@ class PiEEGAdapter(BoardAdapter):
             "mag": [22, 23, 24],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             serial_port=overrides.get("serial_port", ""),
@@ -79,7 +81,7 @@ class PiEEGAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
             "EEG": {"channels": list(range(16)), "type": "EEG_T1", "unit": "µV"},
             "ACC": {"channels": [16, 17, 18], "type": "ACC_T1", "unit": "g"},
@@ -108,7 +110,7 @@ class OpenBCIGanglionAdapter(BoardAdapter):
             "mag": [10, 11, 12],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             mac_address=overrides.get("mac_address", ""),
@@ -119,7 +121,7 @@ class OpenBCIGanglionAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
             "EEG": {"channels": list(range(4)), "type": "EEG_T1", "unit": "µV"},
             "ACC": {"channels": [4, 5, 6], "type": "ACC_T1", "unit": "g"},
@@ -148,7 +150,7 @@ class OpenBCICytonAdapter(BoardAdapter):
             "mag": [22, 23, 24],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             serial_port=overrides.get("serial_port", ""),
@@ -159,7 +161,7 @@ class OpenBCICytonAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
             "EEG": {"channels": list(range(16)), "type": "EEG_T1", "unit": "µV"},
             "ACC": {"channels": [16, 17, 18], "type": "ACC_T1", "unit": "g"},
@@ -188,7 +190,7 @@ class MuseSAdapter(BoardAdapter):
             "gyro": [8, 9, 10],
         }
 
-    def create_config(self, **overrides) -> BoardConfig:
+    def create_config(self, **overrides: Any) -> BoardConfig:
         config = BoardConfig(
             board_id=self.board_id,
             mac_address=overrides.get("mac_address", ""),
@@ -199,7 +201,7 @@ class MuseSAdapter(BoardAdapter):
                 setattr(config, key, value)
         return config
 
-    def get_stream_mapping(self) -> dict[str, dict]:
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
             "EEG": {"channels": list(range(4)), "type": "EEG_T0", "unit": "µV"},
             "PPG": {"channels": [4], "type": "PPG_T0", "unit": "a.u."},

@@ -191,13 +191,13 @@ def process_deap_subject(
     streams.append(create_marker_stream(trial_markers, f"SYNAPSE_Trials_{subject_id}"))
 
     # Compute quality metrics per trial
-    trial_qualities = []
+    trial_qualities: list[dict[str, Any]] = []
     for trial_idx in range(signals["n_trials"]):
         start = trial_idx * signals["trial_samples"]
         end = start + signals["trial_samples"]
 
         trial_eeg = eeg_data[:, start:end]
-        trial_qual = {}
+        trial_qual: dict[str, dict[str, float]] = {}
 
         for ch in range(32):
             q = compute_eeg_quality(trial_eeg[ch], fs, state="task")
@@ -275,7 +275,7 @@ def ingest_deap(
     output_dir: Path = Path("data/processed"),
     subjects: list[str] | None = None,
     tier: Tier = Tier.T1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Full DEAP ingestion pipeline with XDF export."""
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)

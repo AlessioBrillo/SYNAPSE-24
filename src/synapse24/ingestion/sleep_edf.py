@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import requests
 from tqdm import tqdm
 
@@ -287,8 +288,9 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
 
     for i, ch in enumerate(psg.signals):
         label = ch.label.upper()
-        signal_data = np.array(ch.samples, dtype=np.float32)
-        fs = ch.sample_rate
+        # edfio API: use ch.samples or ch.data depending on version
+        signal_data = np.array(getattr(ch, "samples", getattr(ch, "data", [])), dtype=np.float32)
+        fs = getattr(ch, "sample_rate", getattr(ch, "sample_frequency", 100))
         fs_dict[label] = fs
 
         if "EEG" in label or "FPZ" in label or "PZ" in label or "CZ" in label or "OZ" in label:
@@ -307,10 +309,10 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
     for ann in hyp.annotations:
         # Sleep-EDF hypnogram uses 30-second epochs with stage codes
         # Duration is typically 30 seconds per annotation
-        onset = ann.onset
-        ann_duration = ann.duration
+        onset = getattr(ann, "onset", 0.0)
+        ann_duration = getattr(ann, "duration", None)
         duration = ann_duration if ann_duration is not None and ann_duration > 0 else 30.0
-        description = ann.description.strip()
+        description = getattr(ann, "description", "").strip()
 
         # Parse stage from description (e.g., "Sleep stage W", "Sleep stage 1", etc.)
         stage = _parse_hypnogram_stage(description)
@@ -318,22 +320,25 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
             hypnogram.append(stage)
             hypnogram_times.append(onset)
 
-    hypnogram_arr: np.ndarray = np.array(hypnogram, dtype=int)
-    hypnogram_times_arr: np.ndarray = np.array(hypnogram_times, dtype=np.float64)
+    hypnogram_arr: npt.NDArray[np.int64] = np.array(hypnogram, dtype=int)
+    hypnogram_times_arr: npt.NDArray[np.float64] = np.array(hypnogram_times, dtype=np.float64)
 
     # Total duration from PSG
     max_duration = 0.0
     for ch in psg.signals:
-        dur = ch.n_samples / ch.sample_rate
-        max_duration = max(max_duration, dur)
+        n_samples = getattr(ch, "n_samples", getattr(ch, "samples", None))
+        sample_rate = getattr(ch, "sample_rate", getattr(ch, "sample_frequency", 100))
+        if n_samples is not None and sample_rate:
+            dur = n_samples / sample_rate
+            max_duration = max(max_duration, dur)
 
     metadata = {
         "subject_id": psg_path.stem.replace("-PSG", "").replace("E0", "").replace("EC", ""),
         "header": {
-            "patient": psg.header.patient,
-            "recording": psg.header.recording,
-            "startdate": psg.header.startdate,
-            "duration": psg.header.duration,
+            "patient": getattr(psg, "header", getattr(psg, "patient", None)),
+            "recording": getattr(psg, "header", getattr(psg, "recording", None)),
+            "startdate": getattr(psg, "header", getattr(psg, "startdate", None)),
+            "duration": getattr(psg, "header", getattr(psg, "duration", max_duration)),
         },
     }
 
@@ -382,12 +387,12 @@ def _parse_hypnogram_stage(description: str) -> int | None:
 
 
 def extract_epochs(
-    eeg_signal: np.ndarray,
+    eeg_signal: npt.NDArray[np.float64],
     fs: int,
-    hypnogram: np.ndarray,
-    hypnogram_times: np.ndarray,
+    hypnogram: npt.NDArray[np.int64],
+    hypnogram_times: npt.NDArray[np.float64],
     epoch_duration: float = 30.0,
-) -> dict[str, list[np.ndarray]]:
+) -> dict[str, list[npt.NDArray[np.float64]]]:
     """Extract EEG epochs aligned with hypnogram stages.
 
     Args:
@@ -400,7 +405,9 @@ def extract_epochs(
     Returns:
         Dict mapping stage name -> list of EEG epochs (each epoch is n_samples array)
     """
-    epochs_by_stage: dict[str, list[np.ndarray]] = {stage: [] for stage in STAGE_MAP.values()}
+    epochs_by_stage: dict[str, list[npt.NDArray[np.float64]]] = {
+        stage: [] for stage in STAGE_MAP.values()
+    }
     epoch_samples = int(epoch_duration * fs)
 
     for i, (stage_code, epoch_start) in enumerate(zip(hypnogram, hypnogram_times)):
@@ -418,10 +425,10 @@ def extract_epochs(
 
 
 def compute_sleep_edf_quality(
-    eeg_channels: dict[str, np.ndarray],
+    eeg_channels: dict[str, npt.NDArray[np.float64]],
     fs_dict: dict[str, int],
-    hypnogram: np.ndarray,
-    hypnogram_times: np.ndarray,
+    hypnogram: npt.NDArray[np.int64],
+    hypnogram_times: npt.NDArray[np.float64],
     thresholds: QualityThresholds,
 ) -> dict[str, Any]:
     """Compute EEG quality metrics per channel and per sleep stage."""
@@ -504,7 +511,7 @@ def compute_sleep_edf_quality(
 
 
 def _build_signal_streams(
-    channels: dict[str, np.ndarray],
+    channels: dict[str, npt.NDArray[np.float64]],
     fs_dict: dict[str, int],
     subject_id: str,
     stream_type: str,
@@ -668,7 +675,7 @@ def ingest_sleep_edf(
     output_dir: Path = Path("data/processed"),
     records: list[str] | None = None,
     tier: Tier = Tier.T1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Full Sleep-EDF Expanded ingestion pipeline with XDF export.
 
     Args:
