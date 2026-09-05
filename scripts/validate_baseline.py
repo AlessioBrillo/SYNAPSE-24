@@ -339,35 +339,49 @@ def main():
         default=1,
         help="Acquisition tier (0=continuous, 1=high-density, 2=calibration)",
     )
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Read validation data from cached XDF/JSON files instead of re-ingesting",
+    )
     args = parser.parse_args()
 
     tier = Tier(args.tier)
     all_results = {}
 
     if args.dataset in ("wesad", "all"):
-        wesad_results = ingest_wesad(
-            data_dir=args.data_dir / "wesad",
-            output_dir=args.output_dir,
-            tier=tier,
-        )
+        if args.use_cache:
+            wesad_results = load_cached_results(args.output_dir, "wesad")
+        else:
+            wesad_results = ingest_wesad(
+                data_dir=args.data_dir / "wesad",
+                output_dir=args.output_dir,
+                tier=tier,
+            )
         wesad_metrics = validate_wesad_stress_classification(wesad_results)
         all_results["wesad"] = wesad_metrics
 
     if args.dataset in ("mitbih", "all"):
-        mitbih_results = ingest_mitbih(
-            data_dir=args.data_dir / "mitbih",
-            output_dir=args.output_dir,
-            tier=tier,
-        )
+        if args.use_cache:
+            mitbih_results = load_cached_results(args.output_dir, "mitbih")
+        else:
+            mitbih_results = ingest_mitbih(
+                data_dir=args.data_dir / "mitbih",
+                output_dir=args.output_dir,
+                tier=tier,
+            )
         mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
         all_results["mitbih"] = mitbih_metrics
 
     if args.dataset in ("sleep_edf", "all"):
-        sleep_edf_results = ingest_sleep_edf(
-            data_dir=args.data_dir / "sleep_edf",
-            output_dir=args.output_dir,
-            tier=tier,
-        )
+        if args.use_cache:
+            sleep_edf_results = load_cached_results(args.output_dir, "sleep_edf")
+        else:
+            sleep_edf_results = ingest_sleep_edf(
+                data_dir=args.data_dir / "sleep_edf",
+                output_dir=args.output_dir,
+                tier=tier,
+            )
         sleep_edf_metrics = validate_sleep_edf_sleep_staging(sleep_edf_results, args.data_dir)
         all_results["sleep_edf"] = sleep_edf_metrics
 
@@ -387,6 +401,50 @@ def main():
         overall_pass &= all_results["sleep_edf"].get("target_met", False)
 
     return 0 if overall_pass else 1
+
+
+def load_cached_results(output_dir: Path, dataset: str) -> list[dict]:
+    """Load validation results from cached JSON files."""
+    results = []
+
+    if dataset == "mitbih":
+        # MIT-BIH files are named like 100_quality.json
+        pattern = "*_quality.json"
+        for json_file in output_dir.glob(pattern):
+            # Skip non-MITBIH files (WESAD uses S2, S3, etc. and Sleep-EDF uses different naming)
+            name = json_file.stem.replace("_quality", "")
+            if name.isdigit() or name.startswith("2"):  # MIT-BIH records are 100-234
+                try:
+                    with open(json_file) as f:
+                        data = json.load(f)
+                        result = {
+                            "r_peak_sensitivity": data.get("r_peak_sensitivity", 0),
+                            "r_peak_ppv": data.get("r_peak_ppv", 0),
+                            "rmssd_mae_ms": data.get("rmssd_mae_ms", 0),
+                        }
+                        results.append(result)
+                except Exception as e:
+                    print(f"Warning: Failed to load {json_file}: {e}")
+    elif dataset == "wesad":
+        # WESAD files are named like S2_quality.json, S3_quality.json
+        for json_file in output_dir.glob("S*_quality.json"):
+            try:
+                with open(json_file) as f:
+                    data = json.load(f)
+                    results.append(data)
+            except Exception as e:
+                print(f"Warning: Failed to load {json_file}: {e}")
+    elif dataset == "sleep_edf":
+        # Sleep-EDF files would have subject IDs
+        for json_file in output_dir.glob("*sleep*quality.json"):
+            try:
+                with open(json_file) as f:
+                    data = json.load(f)
+                    results.append(data)
+            except Exception as e:
+                print(f"Warning: Failed to load {json_file}: {e}")
+
+    return results
 
 
 if __name__ == "__main__":

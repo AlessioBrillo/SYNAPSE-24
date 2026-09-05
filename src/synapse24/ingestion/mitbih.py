@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from synapse24.utils import (
     generate_synthetic_timestamps,
     write_xdf,
 )
+
+logger = logging.getLogger(__name__)
 
 MITBIH_RECORDS = [
     "100",
@@ -93,9 +96,17 @@ def download_mitbih(data_dir: Path) -> Path:
     if any(data_dir.glob("*.dat")):
         return data_dir
 
-    for record in tqdm(MITBIH_RECORDS, desc="Records"):
-        with contextlib.suppress(Exception):
-            wfdb.dl_database("mitdb", str(data_dir), records=[record])
+    # Use wfdb's download function which handles all records
+    try:
+        wfdb.dl_database("mitdb", str(data_dir))
+    except Exception as e:
+        logger.warning("wfdb download failed: %s", e)
+        # Fallback: try downloading individual records
+        for record in tqdm(MITBIH_RECORDS, desc="Records"):
+            try:
+                wfdb.dl_database("mitdb", str(data_dir), records=[record])
+            except Exception:
+                pass
 
     return data_dir
 
@@ -118,8 +129,10 @@ def load_mitbih_record(
 
     # Reference R-peaks (normal beats only for clean evaluation)
     # Normal beat annotations: 'N', 'L', 'R', 'e', 'j'
-    normal_beats = ["N", "L", "R", "e", "j"]
-    reference_peaks = annotation.sample[np.isin(annotation.symbol, normal_beats)]
+    normal_beats = np.array(["N", "L", "R", "e", "j"])
+    # Ensure annotation.symbol is string array for comparison
+    symbols = np.array([str(s) for s in annotation.symbol])
+    reference_peaks = annotation.sample[np.isin(symbols, normal_beats)]
 
     metadata = {
         "record_id": record_id,
@@ -271,26 +284,36 @@ def ingest_mitbih(
             print(f"Failed to process {record_id}: {e}")
 
     # Compute aggregate statistics
-    sensitivities = [r["r_peak_sensitivity"] for r in all_results]
-    ppvs = [r["r_peak_ppv"] for r in all_results]
-    maes = [r["rmssd_mae_ms"] for r in all_results]
+    if all_results:
+        sensitivities = [r["r_peak_sensitivity"] for r in all_results]
+        ppvs = [r["r_peak_ppv"] for r in all_results]
+        maes = [r["rmssd_mae_ms"] for r in all_results]
 
-    summary = {
-        "dataset": "MIT-BIH Arrhythmia",
-        "records_processed": len(all_results),
-        "aggregate_metrics": {
-            "mean_sensitivity": float(np.mean(sensitivities)),
-            "std_sensitivity": float(np.std(sensitivities)),
-            "min_sensitivity": float(np.min(sensitivities)),
-            "mean_ppv": float(np.mean(ppvs)),
-            "std_ppv": float(np.std(ppvs)),
-            "min_ppv": float(np.min(ppvs)),
-            "mean_rmssd_mae_ms": float(np.mean(maes)),
-            "std_rmssd_mae_ms": float(np.std(maes)),
-        },
-        "records": [r["record_id"] for r in all_results],
-        "tier": tier.name,
-    }
+        summary = {
+            "dataset": "MIT-BIH Arrhythmia",
+            "records_processed": len(all_results),
+            "aggregate_metrics": {
+                "mean_sensitivity": float(np.mean(sensitivities)),
+                "std_sensitivity": float(np.std(sensitivities)),
+                "min_sensitivity": float(np.min(sensitivities)),
+                "mean_ppv": float(np.mean(ppvs)),
+                "std_ppv": float(np.std(ppvs)),
+                "min_ppv": float(np.min(ppvs)),
+                "mean_rmssd_mae_ms": float(np.mean(maes)),
+                "std_rmssd_mae_ms": float(np.std(maes)),
+            },
+            "records": [r["record_id"] for r in all_results],
+            "tier": tier.name,
+        }
+    else:
+        summary = {
+            "dataset": "MIT-BIH Arrhythmia",
+            "records_processed": 0,
+            "aggregate_metrics": {},
+            "records": [],
+            "tier": tier.name,
+            "error": "No records successfully processed",
+        }
 
     with open(output_dir / "mitbih_summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=str)

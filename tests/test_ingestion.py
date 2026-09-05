@@ -134,6 +134,11 @@ class TestWESADIngestion:
         mock_response.headers.get.return_value = "1000"
         mock_response.iter_content.return_value = [b"chunk1", b"chunk2"]
         mock_response.raise_for_status.return_value = None
+        mock_response.status_code = 200
+        mock_response.headers.get.side_effect = lambda k, d=None: {
+            "content-length": "1000",
+            "content-type": "application/zip",
+        }.get(k, d)
         mock_get.return_value = mock_response
 
         mock_zip_instance = MagicMock()

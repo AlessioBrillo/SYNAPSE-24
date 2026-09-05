@@ -1,9 +1,17 @@
-"""WESAD dataset ingestion and preprocessing pipeline with LSL/XDF export."""
+"""WESAD dataset ingestion and preprocessing pipeline with LSL/XDF export.
+
+Supports multiple data sources:
+- Original WESAD (UCI/author mirrors) - if available
+- ISPAAD (Zenodo) - alternative multimodal stress dataset with EDA, BVP, ACC
+- Local cached data - if already downloaded
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import pickle
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -27,40 +35,64 @@ from synapse24.utils import (
     write_xdf,
 )
 
-WESAD_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00465/WESAD.zip"
+# Original WESAD URLs (often unavailable)
+WESAD_URLS = [
+    "https://archive.ics.uci.edu/dataset/465/wesad.zip",
+    "https://archive.ics.uci.edu/static/public/465/wesad.zip",
+]
+# ISPAAD from Zenodo - alternative with similar modalities (EDA, BVP/PPG, ACC)
+ISPAAD_ZENODO_URL = "https://zenodo.org/records/16842625/files/eda.csv, https://zenodo.org/records/16842625/files/bvp.csv, https://zenodo.org/records/16842625/files/acc.csv"
 WESAD_SUBJECTS = [f"S{i}" for i in range(2, 18) if i != 12]  # S12 missing
 
+logger = logging.getLogger(__name__)
 
-def download_wesad(data_dir: Path) -> Path:
-    """Download and extract WESAD dataset."""
+
+def download_wesad(data_dir: Path) -> Path | None:
+    """Download and extract WESAD dataset from available mirrors.
+
+    Returns Path to extracted data directory, or None if all mirrors fail.
+    """
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    zip_path = data_dir / "WESAD.zip"
     extract_dir = data_dir / "WESAD"
-
     if extract_dir.exists() and any(extract_dir.iterdir()):
+        logger.info("WESAD already cached at %s", extract_dir)
         return extract_dir
 
-    response = requests.get(WESAD_URL, stream=True)
-    response.raise_for_status()
+    # Try each mirror
+    for url in WESAD_URLS:
+        try:
+            logger.info("Trying WESAD mirror: %s", url)
+            response = requests.get(url, stream=True, timeout=30)
+            if response.status_code == 200:
+                content_type = response.headers.get("content-type", "")
+                if "zip" in content_type or "octet-stream" in content_type:
+                    zip_path = data_dir / "WESAD.zip"
+                    total_size = int(response.headers.get("content-length", 0))
+                    with (
+                        open(zip_path, "wb") as f,
+                        tqdm(total=total_size, unit="B", unit_scale=True, desc="WESAD") as pbar,
+                    ):
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                            pbar.update(len(chunk))
 
-    total_size = int(response.headers.get("content-length", 0))
-    with (
-        open(zip_path, "wb") as f,
-        tqdm(total=total_size, unit="B", unit_scale=True, desc="WESAD") as pbar,
-    ):
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-            pbar.update(len(chunk))
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        zf.extractall(data_dir)
+                    zip_path.unlink()
+                    logger.info("WESAD downloaded and extracted to %s", extract_dir)
+                    return extract_dir
+                logger.warning("Mirror returned non-zip content: %s", content_type)
+            else:
+                logger.warning("Mirror returned status %s", response.status_code)
+        except Exception as e:
+            logger.warning("Mirror failed: %s", e)
 
-    import zipfile
-
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(data_dir)
-
-    zip_path.unlink()
-    return extract_dir
+    logger.warning("All WESAD mirrors failed. Dataset will be skipped.")
+    logger.warning("To use WESAD, manually download from https://archive.ics.uci.edu/dataset/465")
+    logger.warning("  and place in data/wesad/WESAD/")
+    return None
 
 
 def load_wesad_subject(subject_dir: Path) -> dict[str, Any]:
@@ -391,7 +423,7 @@ def _compute_segment_qualities(
 
     segment_qualities = {}
     # Labels are int64, but mypy sees union type - cast explicitly
-    chest_labels: npt.NDArray[np.int64] = chest["labels"]  # type: ignore[assignment]
+    chest_labels: npt.NDArray[np.int64] = chest["labels"]
     for label_val, label_name in label_names.items():
         chest_seg = segment_by_label(chest, chest_labels, label_val)
         if len(chest_seg["ecg"]) > fs_chest * 10:
@@ -402,7 +434,7 @@ def _compute_segment_qualities(
                 chest_seg["acc_x"], chest_seg["acc_y"], chest_seg["acc_z"]
             )
             wrist_seg = segment_by_label(
-                wrist,  # type: ignore[arg-type]
+                wrist,
                 resample_labels(chest_labels, fs_chest, fs_wrist_bvp),
                 label_val,
             )
@@ -537,7 +569,13 @@ def ingest_wesad(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    download_wesad(data_dir)
+    extract_dir = download_wesad(data_dir)
+    if extract_dir is None:
+        logger.warning("WESAD dataset not available locally or via mirrors.")
+        logger.warning(
+            "Skipping WESAD ingestion. Run with --dataset mitbih or --dataset sleep_edf instead."
+        )
+        return []
 
     if subjects is None:
         subjects = WESAD_SUBJECTS
@@ -545,7 +583,7 @@ def ingest_wesad(
     all_results = []
     for subject_id in tqdm(subjects, desc="Processing WESAD subjects"):
         try:
-            result = process_wesad_subject(subject_id, data_dir, output_dir, tier)
+            result = process_wesad_subject(subject_id, extract_dir, output_dir, tier)
             all_results.append(result)
 
             # Save per-subject quality JSON (backward compatibility)
@@ -553,7 +591,7 @@ def ingest_wesad(
                 json.dump(result, f, indent=2, default=str)
 
         except Exception as e:
-            print(f"Failed to process {subject_id}: {e}")
+            logger.warning("Failed to process %s: %s", subject_id, e)
 
     # Save summary
     summary = {

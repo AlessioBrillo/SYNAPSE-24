@@ -196,12 +196,19 @@ def run_validation(
     all_metrics = {}
 
     for pod_id, pod_ts in pod_timestamps.items():
-        # Resample hub timestamps to match pod timestamps for comparison
-        # Use interpolation
-        hub_ts_interp = np.interp(pod_ts, hub_timestamps, hub_timestamps)
-
-        # Correct pod timestamps
+        # The hub timestamps are at acc_fs (100Hz), pod timestamps are at pod rate
+        # We need to compare at the same time points
+        # Use the original hub timestamps that correspond to the pod timestamps
+        # Since we know the true drift, we can use the pod timestamps directly
+        # But the corrector corrects pod timestamps to hub clock domain
         corrected_ts = sync.correct_pod_timestamps(pod_id, pod_ts)
+
+        # The "ground truth" hub timestamps for these pod timestamps:
+        # pod_ts = (1 + drift) * hub_ts + offset -> hub_ts = (pod_ts - offset) / (1 + drift)
+        cfg = pods[pod_id]  # type: ignore[attr-defined]
+        drift_rate = cfg["drift_ppm"] / 1_000_000.0
+        offset_s = cfg["offset_ms"] / 1000.0
+        hub_ts_interp = (pod_ts - offset_s) / (1.0 + drift_rate)
 
         # Quantify residual drift
         metrics = quantify_residual_drift(corrected_ts, hub_ts_interp)
@@ -219,9 +226,9 @@ def run_validation(
 
     print(f"\n{'=' * 50}")
     if overall_pass:
-        print("✅ VALIDATION PASSED: All pods achieve <1ms residual drift (p99)")
+        print("VALIDATION PASSED: All pods achieve <1ms residual drift (p99)")
     else:
-        print("❌ VALIDATION FAILED: Some pods exceed 1ms residual drift (p99)")
+        print("VALIDATION FAILED: Some pods exceed 1ms residual drift (p99)")
     print(f"{'=' * 50}")
 
     # Prepare results
