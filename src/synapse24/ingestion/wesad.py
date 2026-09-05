@@ -559,7 +559,9 @@ def extract_native_rate_fusion_windows(
         # Wrist BVP is at 64 Hz, chest at 700 Hz
         wrist_start = int(start_idx * fs_wrist_bvp / fs_chest)
         wrist_end = int(end_idx * fs_wrist_bvp / fs_chest)
-        wrist_signals_window = {k: v[wrist_start:wrist_end] for k, v in wrist.items() if k in ("bvp",)}
+        wrist_signals_window = {
+            k: v[wrist_start:wrist_end] for k, v in wrist.items() if k in ("bvp",)
+        }
 
         # Wrist ACC at 32 Hz
         acc_start = int(start_idx * fs_wrist_acc / fs_chest)
