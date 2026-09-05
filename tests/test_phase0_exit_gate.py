@@ -452,6 +452,49 @@ class TestBaselineReportSchemaValidator:
         with pytest.raises(ValueError, match="per_fold_scores"):
             module.validate_baseline_report_schema(report)
 
+    def test_sleep_edf_valid_block_passes(self):
+        """Sleep-EDF block (Fpz-Cz YASA vs PSG) passes when kappa gate present."""
+        module = self._load_script()
+        report = self._valid_report()
+        report["datasets"]["sleep_edf"] = {
+            "mean_cohen_kappa": 0.78,
+            "mean_accuracy": 0.82,
+            "n_subjects": 4,
+            "target_met": True,
+        }
+        assert module.validate_baseline_report_schema(report) is True
+
+    def test_sleep_edf_without_kappa_fails(self):
+        """Sleep-EDF block without mean_cohen_kappa hides the exit gate — reject."""
+        module = self._load_script()
+        report = self._valid_report()
+        report["datasets"]["sleep_edf"] = {
+            "mean_accuracy": 0.82,
+            "n_subjects": 4,
+            "target_met": True,
+        }
+        with pytest.raises(ValueError, match="mean_cohen_kappa"):
+            module.validate_baseline_report_schema(report)
+
+    def test_sleep_edf_without_n_subjects_fails(self):
+        """Sleep-EDF block without n_subjects hides sample size — reject."""
+        module = self._load_script()
+        report = self._valid_report()
+        report["datasets"]["sleep_edf"] = {
+            "mean_cohen_kappa": 0.78,
+            "mean_accuracy": 0.82,
+            "target_met": True,
+        }
+        with pytest.raises(ValueError, match="n_subjects"):
+            module.validate_baseline_report_schema(report)
+
+    def test_sleep_edf_error_block_passes(self):
+        """Explicit sleep_edf failure blocks stay schema-valid (failure visible)."""
+        module = self._load_script()
+        report = self._valid_report()
+        report["datasets"]["sleep_edf"] = {"error": "No valid sleep recordings processed"}
+        assert module.validate_baseline_report_schema(report) is True
+
 
 class TestXdfZeroDropRoundtrip:
     """XDF write -> pyxdf read must recover every sample (zero-drop gate)."""
