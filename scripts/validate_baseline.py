@@ -143,7 +143,7 @@ def validate_wesad_stress_classification(
         "n_subjects": n_subjects,
         "n_classes": len(np.unique(y)),
         "n_splits": effective_splits,
-        "target_met": np.mean(scores) >= 0.80,
+        "target_met": bool(np.mean(scores) >= 0.80),
         "per_fold_scores": [float(s) for s in scores],
     }
 
@@ -191,10 +191,10 @@ def validate_mitbih_rpeak_detection(
         "mean_rmssd_mae_clean_ms": float(np.mean(clean_maes))
         if clean_maes
         else float(np.mean(maes)),
-        "target_sensitivity_met": np.mean(sensitivities) >= 0.996,
-        "target_ppv_met": np.mean(ppvs) >= 0.996,
-        "target_rmssd_mae_met": np.mean(maes) < 5.0,
-        "target_rmssd_mae_clean_met": np.mean(clean_maes) < 2.0 if clean_maes else False,
+        "target_sensitivity_met": bool(np.mean(sensitivities) >= 0.996),
+        "target_ppv_met": bool(np.mean(ppvs) >= 0.996),
+        "target_rmssd_mae_met": bool(np.mean(maes) < 5.0),
+        "target_rmssd_mae_clean_met": bool(np.mean(clean_maes) < 2.0) if clean_maes else False,
         "n_records": len(sensitivities),
         "n_clean_records": len(clean_maes),
     }
@@ -273,11 +273,12 @@ def _validate_single_sleep_subject(subject_id: str, xdf_path: Path) -> dict | No
             emg_signal=emg_signal,
         )
 
+        target_ok = bool(validation_result["target_met"])
         print(
-            f"  {subject_id}: κ={validation_result['kappa']:.3f}, "
+            f"  {subject_id}: kappa={validation_result['kappa']:.3f}, "
             f"acc={validation_result['accuracy']:.3f}, "
             f"epochs={validation_result['n_epochs']}, "
-            f"target={'✅' if validation_result['target_met'] else '❌'}"
+            f"target={'PASS' if target_ok else 'FAIL'}"
         )
 
         return {
@@ -285,7 +286,7 @@ def _validate_single_sleep_subject(subject_id: str, xdf_path: Path) -> dict | No
             "kappa": validation_result["kappa"],
             "accuracy": validation_result["accuracy"],
             "n_epochs": validation_result["n_epochs"],
-            "target_met": validation_result["target_met"],
+            "target_met": target_ok,
             "per_stage": validation_result.get("per_stage", {}),
         }
 
@@ -341,7 +342,7 @@ def validate_sleep_edf_sleep_staging(
         "mean_accuracy": mean_acc,
         "n_subjects": len(all_kappas),
         "subject_details": subject_details,
-        "target_met": mean_kappa >= 0.75,
+        "target_met": bool(mean_kappa >= 0.75),
     }
 
 
@@ -454,7 +455,9 @@ def _run_dataset_validation(
                 output_dir=args.output_dir,
                 tier=tier,
             )
-        all_results["sleep_edf"] = validate_sleep_edf_sleep_staging(sleep_edf_results, args.data_dir)
+        all_results["sleep_edf"] = validate_sleep_edf_sleep_staging(
+            sleep_edf_results, args.data_dir
+        )
 
     return all_results
 
@@ -502,40 +505,53 @@ def _print_report(
         f"XDF files validated: {xdf_summary['files_validated']}, failed: {xdf_summary['files_failed']}"
     )
 
+    # NOTE: ASCII-only output — Windows consoles (cp1252) cannot encode
+    # unicode symbols (>=, kappa, emoji). Keep prints cp1252-safe.
+    def _mark(ok: object) -> str:
+        return "PASS" if ok else "FAIL"
+
     overall_pass = True
     if "wesad" in all_results:
         w = all_results["wesad"]
         print(
-            f"WESAD 3-class: {w.get('accuracy', 0):.3f} (target ≥0.80) {'✅' if w.get('target_met') else '❌'}"
+            f"WESAD 3-class: {w.get('accuracy', 0):.3f} (target >=0.80) [{_mark(w.get('target_met'))}]"
         )
-        overall_pass &= w.get("target_met", False)
+        overall_pass = overall_pass and bool(w.get("target_met", False))
 
     if "mitbih" in all_results:
         m = all_results["mitbih"]
         print(
-            f"MIT-BIH Se: {m.get('mean_sensitivity', 0):.4f} (target ≥0.996) {'✅' if m.get('target_sensitivity_met') else '❌'}"
+            f"MIT-BIH Se: {m.get('mean_sensitivity', 0):.4f} "
+            f"(target >=0.996) [{_mark(m.get('target_sensitivity_met'))}]"
         )
         print(
-            f"MIT-BIH PPV: {m.get('mean_ppv', 0):.4f} (target ≥0.996) {'✅' if m.get('target_ppv_met') else '❌'}"
+            f"MIT-BIH PPV: {m.get('mean_ppv', 0):.4f} "
+            f"(target >=0.996) [{_mark(m.get('target_ppv_met'))}]"
         )
         print(
-            f"MIT-BIH RMSSD MAE: {m.get('mean_rmssd_mae_ms', 0):.2f}ms (target <5ms) {'✅' if m.get('target_rmssd_mae_met') else '❌'}"
+            f"MIT-BIH RMSSD MAE: {m.get('mean_rmssd_mae_ms', 0):.2f}ms "
+            f"(target <5ms) [{_mark(m.get('target_rmssd_mae_met'))}]"
         )
         print(
-            f"MIT-BIH RMSSD MAE (clean): {m.get('mean_rmssd_mae_clean_ms', 0):.2f}ms (target <2ms) {'✅' if m.get('target_rmssd_mae_clean_met') else '❌'}"
+            f"MIT-BIH RMSSD MAE (clean): {m.get('mean_rmssd_mae_clean_ms', 0):.2f}ms "
+            f"(target <2ms) [{_mark(m.get('target_rmssd_mae_clean_met'))}]"
         )
-        overall_pass &= m.get("target_sensitivity_met", False)
-        overall_pass &= m.get("target_ppv_met", False)
-        overall_pass &= m.get("target_rmssd_mae_met", False)
+        overall_pass = (
+            overall_pass
+            and bool(m.get("target_sensitivity_met", False))
+            and bool(m.get("target_ppv_met", False))
+            and bool(m.get("target_rmssd_mae_met", False))
+        )
 
     if "sleep_edf" in all_results:
         s = all_results["sleep_edf"]
         print(
-            f"Sleep-EDF κ: {s.get('mean_cohen_kappa', 0):.3f} (target ≥0.75) {'✅' if s.get('target_met') else '❌'}"
+            f"Sleep-EDF kappa: {s.get('mean_cohen_kappa', 0):.3f} "
+            f"(target >=0.75) [{_mark(s.get('target_met'))}]"
         )
-        overall_pass &= s.get("target_met", False)
+        overall_pass = overall_pass and bool(s.get("target_met", False))
 
-    print(f"\nOverall: {'PASS ✅' if overall_pass else 'FAIL ❌'}")
+    print(f"\nOverall: {'PASS' if overall_pass else 'FAIL'}")
     return overall_pass
 
 
