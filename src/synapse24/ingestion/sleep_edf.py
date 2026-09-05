@@ -554,6 +554,8 @@ def process_sleep_edf_subject(
     tier: Tier = Tier.T1,
 ) -> dict[str, Any]:
     """Process a single Sleep-EDF subject (PSG + Hypnogram pair)."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     psg_path = data_dir / psg_file
     hypnogram_file = psg_file.replace("PSG", "Hypnogram")
     hypnogram_path = data_dir / hypnogram_file
