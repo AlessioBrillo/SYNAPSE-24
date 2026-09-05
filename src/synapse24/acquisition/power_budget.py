@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Final, Optional
 
 from synapse24.signal_quality import Tier
+
+
+def _default_clock() -> float:
+    """LSL clock domain (Guardian Principle 3), wall-time fallback for CI."""
+    try:
+        from pylsl import local_clock
+
+        return float(local_clock())
+    except Exception:
+        return float(time.time())
+
 
 NOMINAL_VOLTAGE_V: Final[float] = 3.7
 """Nominal LiPo cell voltage for mWh <-> mAh conversion (Architecture.md §55-62)."""
@@ -73,11 +85,13 @@ class PowerBudgetManager:
         tier2_avg_mw: float = 100.0,
         tier2_max_burst_min: float = 30.0,
         reserve_mah: float = 300,  # 10% reserve
+        clock_fn: Callable[[], float] | None = None,
     ) -> None:
         self.hub_battery_mah = hub_battery_mah
         self.target_lifetime_h = target_lifetime_h
         self.reserve_mah = reserve_mah
         self.usable_mah = hub_battery_mah - reserve_mah
+        self._clock: Callable[[], float] = clock_fn or _default_clock
 
         # Power profiles
         self.profiles = {
@@ -100,11 +114,11 @@ class PowerBudgetManager:
         self._current_tier = Tier.T0
 
         # Start Tier 0 timer
-        self._tier0_start = time.time()
+        self._tier0_start = self._clock()
 
     def on_tier_change(self, from_tier: Tier, to_tier: Tier) -> None:
         """Call when tier changes to update timers."""
-        now = time.time()
+        now = self._clock()
 
         # Stop previous tier timer
         if self._current_tier == Tier.T0 and self._tier0_start:
@@ -133,7 +147,7 @@ class PowerBudgetManager:
 
     def get_consumed_mah(self) -> float:
         """Get total consumed mAh so far (mAh = mW*h / 3.7V)."""
-        now = time.time()
+        now = self._clock()
         consumed = 0.0
 
         # Completed sessions
@@ -199,7 +213,7 @@ class PowerBudgetManager:
 
     def _get_total_elapsed_h(self) -> float:
         """Get total elapsed hours since start."""
-        now = time.time()
+        now = self._clock()
         elapsed = self._tier0_total_h + self._tier1_total_h + self._tier2_total_h
         if self._current_tier == Tier.T0 and self._tier0_start:
             elapsed += (now - self._tier0_start) / 3600

@@ -23,17 +23,22 @@ except ImportError:  # pragma: no cover
 
 @dataclass(frozen=True)
 class ESP32Tier0Config:
-    """Configuration for ESP32 Tier 0 sensor suite."""
+    """Configuration for ESP32 Tier 0 sensor suite.
+
+    Normative rates align to config/hardware.yaml forearm hub
+    (ECG 500Hz / PPG 64Hz / IMU 100Hz) — single source of truth
+    per Architecture.md tiered acquisition. No silent resampling.
+    """
 
     # ECG (AD8232)  # noqa: ERA001
     ecg_adc_pin: int = 36
-    ecg_sampling_rate: int = 250
+    ecg_sampling_rate: int = 500
     ecg_lead_off_plus: int = 39
     ecg_lead_off_minus: int = 34
 
     # PPG (MAX30102)  # noqa: ERA001
     ppg_i2c_addr: int = 0x57
-    ppg_sampling_rate: int = 100
+    ppg_sampling_rate: int = 64
     ppg_led_current_red: int = 0x1F  # 6.4 mA
     ppg_led_current_ir: int = 0x1F  # 6.4 mA
 
@@ -197,17 +202,24 @@ def create_synthetic_tier0_data(
     ppg_hr: float = 72.0,
     motion_level: float = 0.0,
     seed: int = 42,
+    ecg_fs: int = 500,
+    ppg_fs: int = 64,
+    imu_fs: int = 100,
 ) -> dict[str, npt.NDArray[np.float64]]:
     """Generate synthetic Tier 0 data for testing.
+
+    Normative defaults match config/hardware.yaml forearm hub
+    (ECG 500Hz / PPG 64Hz / IMU 100Hz). Pass explicit fs_* only to
+    emulate a non-normative breakout; production path stays normative.
 
     Returns dict with keys: ecg, ppg_red, ppg_ir, acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z
     All timestamps aligned to common timebase.
     """
     rng = np.random.default_rng(seed)
 
-    fs_ecg = 250
-    fs_ppg = 100
-    fs_imu = 100
+    fs_ecg = ecg_fs
+    fs_ppg = ppg_fs
+    fs_imu = imu_fs
 
     n_ecg = int(duration_s * fs_ecg)
     n_ppg = int(duration_s * fs_ppg)
@@ -268,8 +280,8 @@ class Tier0LSLValidator:
 
     def __init__(
         self,
-        ecg_fs: int = 250,
-        ppg_fs: int = 100,
+        ecg_fs: int = 500,
+        ppg_fs: int = 64,
         imu_fs: int = 100,
         tier: int = 0,
     ) -> None:

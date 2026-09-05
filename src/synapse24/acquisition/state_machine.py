@@ -12,6 +12,16 @@ from typing import Optional
 from synapse24.signal_quality import Tier
 
 
+def _default_clock() -> float:
+    """LSL clock domain (Guardian Principle 3), wall-time fallback for CI."""
+    try:
+        from pylsl import local_clock
+
+        return float(local_clock())
+    except Exception:
+        return float(time.time())
+
+
 class TierTransition(Enum):
     """Possible tier transitions."""
 
@@ -50,10 +60,12 @@ class TierStateMachine:
         self,
         initial_tier: Tier = Tier.T0,
         on_transition: Callable[[TransitionEvent], None] | None = None,
+        clock_fn: Callable[[], float] | None = None,
     ) -> None:
         self._current_tier = initial_tier
         self._previous_tier: Tier | None = None
         self._on_transition = on_transition
+        self._clock: Callable[[], float] = clock_fn or _default_clock
         self._transition_history: list[TransitionEvent] = []
         self._t1_start_time: float | None = None
         self._t2_start_time: float | None = None
@@ -90,11 +102,12 @@ class TierStateMachine:
         if self._current_tier == new_tier:
             return False
 
+        now = self._clock()
         event = TransitionEvent(
             from_tier=self._current_tier,
             to_tier=new_tier,
             transition=transition,
-            timestamp=time.time(),
+            timestamp=now,
             reason=reason,
             metadata=metadata or {},
         )
@@ -105,12 +118,12 @@ class TierStateMachine:
 
         # Track Tier 1/2 start times for power budget
         if new_tier == Tier.T1:
-            self._t1_start_time = time.time()
+            self._t1_start_time = now
         elif self._current_tier == Tier.T1 and new_tier != Tier.T1:
             self._t1_start_time = None
 
         if new_tier == Tier.T2:
-            self._t2_start_time = time.time()
+            self._t2_start_time = now
         elif self._current_tier == Tier.T2 and new_tier != Tier.T2:
             self._t2_start_time = None
 
@@ -173,13 +186,13 @@ class TierStateMachine:
         """Get current Tier 1 session duration in seconds."""
         if self._t1_start_time is None:
             return None
-        return time.time() - self._t1_start_time
+        return self._clock() - self._t1_start_time
 
     def get_tier2_duration(self) -> float | None:
         """Get current Tier 2 session duration in seconds."""
         if self._t2_start_time is None:
             return None
-        return time.time() - self._t2_start_time
+        return self._clock() - self._t2_start_time
 
     def reset(self) -> None:
         """Reset state machine to Tier 0."""
@@ -207,8 +220,12 @@ class AcquisitionController:
         night_scheduler: NightWindowScheduler | None = None,
         power_budget: PowerBudgetManager | None = None,
         pod_coordinator: SensorPodCoordinator | None = None,
+        clock_fn: Callable[[], float] | None = None,
     ) -> None:
-        self.state_machine = TierStateMachine(on_transition=self._on_transition)
+        self._clock: Callable[[], float] = clock_fn or _default_clock
+        self.state_machine = TierStateMachine(
+            on_transition=self._on_transition, clock_fn=self._clock
+        )
         self.immobility_detector = immobility_detector
         self.night_scheduler = night_scheduler
         self.power_budget = power_budget
@@ -229,7 +246,7 @@ class AcquisitionController:
             return
 
         if timestamp is None:
-            timestamp = time.time()
+            timestamp = self._clock()
 
         self._last_imu_update = timestamp
 
@@ -247,7 +264,7 @@ class AcquisitionController:
             return
 
         if timestamp is None:
-            timestamp = time.time()
+            timestamp = self._clock()
 
         # Throttle checks
         if timestamp - self._last_night_check < self._night_check_interval:

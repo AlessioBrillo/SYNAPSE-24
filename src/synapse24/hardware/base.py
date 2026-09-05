@@ -356,13 +356,37 @@ class DeviceRegistry:
         return list(self._pods.values())
 
     def load_from_yaml(self, path: Path) -> None:
-        """Load pod configurations from YAML file."""
+        """Load pod configurations from YAML file.
+
+        Guardian security checklist: BLE MACs / serials never hardcoded.
+        ``ble_address`` / ``serial_port`` support ``${ENV_VAR}`` expansion
+        (e.g. ``${SYNAPSE_HEAD_BLE}``); unset vars resolve to empty string
+        and the pod must be provisioned at deploy time, not in git.
+        """
+        import os
+        import re
+
         import yaml
+
+        def _expand_env(value: str) -> str:
+            """Expand $VAR / ${VAR}; unset vars become empty (never a fake MAC)."""
+            expanded = os.path.expandvars(value)
+            return re.sub(
+                r"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*",
+                "",
+                expanded,
+            )
 
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        for pod_data in data.get("pods", []):
+        pods = data.get("pods", [])
+        if isinstance(pods, dict):
+            pod_items = pods.values()
+        else:
+            pod_items = pods
+        for pod_data in pod_items:
+            sampling_rate = pod_data.get("sampling_rate", pod_data.get("sampling_rates", 0))
             pod = SensorPodConfig(
                 pod_id=pod_data["pod_id"],
                 name=pod_data["name"],
@@ -370,9 +394,9 @@ class DeviceRegistry:
                 modalities=pod_data["modalities"],
                 tier=Tier(pod_data["tier"]),
                 channels=pod_data["channels"],
-                sampling_rate=pod_data["sampling_rate"],
-                ble_address=pod_data.get("ble_address", ""),
-                serial_port=pod_data.get("serial_port", ""),
+                sampling_rate=sampling_rate,
+                ble_address=_expand_env(str(pod_data.get("ble_address", ""))),
+                serial_port=_expand_env(str(pod_data.get("serial_port", ""))),
                 placement=pod_data.get("placement", ""),
                 electrode_type=pod_data.get("electrode_type", ""),
                 is_hub=pod_data.get("is_hub", False),
