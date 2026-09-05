@@ -112,19 +112,23 @@ class TierStateMachine:
             metadata=metadata or {},
         )
 
-        self._previous_tier = self._current_tier
+        old_tier = self._current_tier
+        self._previous_tier = old_tier
         self._current_tier = new_tier
         self._transition_history.append(event)
 
-        # Track Tier 1/2 start times for power budget
+        # Track Tier 1/2 start times for power budget (Architecture.md §55-62).
+        # Durations are per continuous segment: leaving a tier clears its
+        # timer, entering (re)arms it. Check old_tier (not _current_tier,
+        # which already equals new_tier here).
         if new_tier == Tier.T1:
             self._t1_start_time = now
-        elif self._current_tier == Tier.T1 and new_tier != Tier.T1:
+        elif old_tier == Tier.T1:
             self._t1_start_time = None
 
         if new_tier == Tier.T2:
             self._t2_start_time = now
-        elif self._current_tier == Tier.T2 and new_tier != Tier.T2:
+        elif old_tier == Tier.T2:
             self._t2_start_time = None
 
         if self._on_transition:
