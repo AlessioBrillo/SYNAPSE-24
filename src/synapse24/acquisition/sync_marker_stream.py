@@ -122,10 +122,24 @@ class SyncMarkerStream:
         return markers
 
     def should_broadcast(self) -> bool:
-        """Check if hub should broadcast a sync marker."""
+        """Check if hub should broadcast a sync marker (legacy global interval)."""
         if not self._is_hub:
             return False
         return bool(local_clock() - self._last_marker_time >= self.config.sync_interval_s)
+
+    def should_broadcast_for_interval(
+        self, elapsed_s: float, interval_s: float | None = None
+    ) -> bool:
+        """Tier-aware broadcast check without wall-clock side effects.
+
+        Args:
+            elapsed_s: Seconds since last broadcast.
+            interval_s: Required interval (caller passes
+                SyncConfig.get_budget_for_tier(tier)[1]: T0=60s, T1=10s
+                per Architecture.md §92). Defaults to configured global.
+        """
+        interval = interval_s if interval_s is not None else self.config.sync_interval_s
+        return bool(elapsed_s >= interval)
 
     def close(self) -> None:
         """Clean up resources."""

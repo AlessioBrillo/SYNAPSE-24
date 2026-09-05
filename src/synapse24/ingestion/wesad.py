@@ -458,6 +458,74 @@ def _compute_segment_qualities(
     return segment_qualities
 
 
+FUSION_WINDOW_CONFIG: dict[str, float] = {
+    "window_s": 60.0,
+    "overlap_s": 0.0,
+    "min_label_purity": 0.9,
+}
+"""Canonical fusion window config (Architecture.md §51-53, Roadmap.md §4).
+
+Single source of truth: 60s native-rate windows, no resampling, purity>=0.9,
+overlap_s=0 for validation (no label leakage across folds).
+"""
+
+FUSION_WINDOW_FEATURE_NAMES: list[str] = [
+    "mean_rr_ms",
+    "sdnn_ms",
+    "rmssd_ms",
+    "pnn50",
+    "hr_mean_bpm",
+    "lf_power",
+    "hf_power",
+    "lf_hf_ratio",
+    "ppg_sqi",
+    "perfusion_index",
+    "motion_artifact_prob",
+]
+
+FUSION_WINDOW_LABEL_TO_ID: dict[str, int] = {
+    "baseline": 0,
+    "stress": 1,
+    "amusement": 2,
+}
+
+
+def fusion_window_quality_to_features(
+    window_meta: dict[str, Any],
+) -> tuple[list[float], int] | None:
+    """Map a 60s fusion-window quality_metadata dict to (features, label_id).
+
+    Consumes the exact dict produced by process_wesad_subject():
+    window.quality_metadata with ecg_quality (SignalQualityMetrics.to_dict())
+    and ppg_quality (compute_ppg_quality dict). Returns None for labels
+    outside the 3-class benchmark (e.g. meditation) so validation and
+    training share one canonical mapping.
+    """
+    label_name = window_meta.get("label_name", "")
+    if label_name not in FUSION_WINDOW_LABEL_TO_ID:
+        return None
+    label_id = FUSION_WINDOW_LABEL_TO_ID[label_name]
+
+    ecg_q = window_meta.get("ecg_quality", {}) or {}
+    ppg_q = window_meta.get("ppg_quality", {}) or {}
+    hrv = ecg_q.get("metrics", {}).get("ecg", {}).get("hrv_metrics", {})
+
+    features = [
+        float(hrv.get("mean_rr_ms", 0)),
+        float(hrv.get("sdnn_ms", 0)),
+        float(hrv.get("rmssd_ms", 0)),
+        float(hrv.get("pnn50", 0)),
+        float(hrv.get("hr_mean_bpm", 0)),
+        float(hrv.get("lf_power", 0)),
+        float(hrv.get("hf_power", 0)),
+        float(hrv.get("lf_hf_ratio", 0)),
+        float(ppg_q.get("ppg_sqi", 0)),
+        float(ppg_q.get("perfusion_index", 0)),
+        float(ppg_q.get("motion_artifact_prob", 0)),
+    ]
+    return features, label_id
+
+
 @dataclass
 class FusionWindow:
     """A 60-second native-rate fusion window with per-modality quality metrics.

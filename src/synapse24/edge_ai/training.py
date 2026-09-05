@@ -382,41 +382,59 @@ def create_wesad_training_data(
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]]:
     """Create training data from WESAD ingestion results.
 
-    Extracts features from each segment for stress classification.
+    Canonical path: 60s fusion windows (one sample per window) via
+    fusion_window_quality_to_features(). Falls back to legacy per-segment
+    features only when no fusion_windows are present.
     """
     from sklearn.preprocessing import StandardScaler
+
+    from synapse24.ingestion.wesad import fusion_window_quality_to_features
 
     all_features = []
     all_labels = []
 
-    label_map = {"baseline": 0, "stress": 1, "amusement": 2}
+    use_windows = any(bool(r.get("fusion_windows")) for r in wesad_results)
+    if use_windows:
+        for result in wesad_results:
+            for window_meta in result.get("fusion_windows", []):
+                if not isinstance(window_meta, dict):
+                    continue
+                parsed = fusion_window_quality_to_features(window_meta)
+                if parsed is None:
+                    continue
+                features, label_id = parsed
+                all_features.append(features)
+                all_labels.append(label_id)
+    else:
+        label_map = {"baseline": 0, "stress": 1, "amusement": 2}
 
-    for result in wesad_results:
-        segments = result.get("segments", {})
-        for seg_name, seg_data in segments.items():
-            if seg_name not in label_map:
-                continue
+        for result in wesad_results:
+            segments = result.get("segments", {})
+            for seg_name, seg_data in segments.items():
+                if seg_name not in label_map:
+                    continue
 
-            ecg_q = seg_data.get("ecg_quality", {})
-            ppg_q = seg_data.get("ppg_quality", {})
+                ecg_q = seg_data.get("ecg_quality", {})
+                ppg_q = seg_data.get("ppg_quality", {})
 
-            hrv = ecg_q.get("metrics", {}).get("ecg", {}).get("hrv_metrics", {})
+                hrv = ecg_q.get("metrics", {}).get("ecg", {}).get("hrv_metrics", {})
 
-            features = [
-                hrv.get("mean_rr_ms", 0),
-                hrv.get("sdnn_ms", 0),
-                hrv.get("rmssd_ms", 0),
-                hrv.get("pnn50", 0),
-                hrv.get("lf_power", 0),
-                hrv.get("hf_power", 0),
-                hrv.get("lf_hf_ratio", 0),
-                ppg_q.get("ppg_sqi", 0),
-                ppg_q.get("perfusion_index", 0),
-                ppg_q.get("motion_artifact_prob", 0),
-            ]
+                features = [
+                    hrv.get("mean_rr_ms", 0),
+                    hrv.get("sdnn_ms", 0),
+                    hrv.get("rmssd_ms", 0),
+                    hrv.get("pnn50", 0),
+                    hrv.get("hr_mean_bpm", 0),
+                    hrv.get("lf_power", 0),
+                    hrv.get("hf_power", 0),
+                    hrv.get("lf_hf_ratio", 0),
+                    ppg_q.get("ppg_sqi", 0),
+                    ppg_q.get("perfusion_index", 0),
+                    ppg_q.get("motion_artifact_prob", 0),
+                ]
 
-            all_features.append(features)
-            all_labels.append(label_map[seg_name])
+                all_features.append(features)
+                all_labels.append(label_map[seg_name])
 
     X = np.array(all_features)
     y = np.array(all_labels)
