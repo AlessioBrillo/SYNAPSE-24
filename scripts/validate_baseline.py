@@ -68,7 +68,9 @@ def validate_baseline_report_schema(report: dict[str, Any]) -> bool:
 
     Required top-level keys: seed, timestamp, datasets, xdf_validation,
     schema_version == "1.0". The WESAD block must carry per_fold_scores
-    (fold variance must never be averaged away silently).
+    (fold variance must never be averaged away silently). The Sleep-EDF
+    block, when present (--dataset all), must carry mean_cohen_kappa,
+    mean_accuracy, n_subjects and target_met (Fpz-Cz YASA vs PSG gate).
 
     Raises:
         ValueError: On any schema violation.
@@ -102,6 +104,16 @@ def validate_baseline_report_schema(report: dict[str, Any]) -> bool:
             raise ValueError("WESAD 'per_fold_scores' must be a non-empty list")
         if int(wesad["n_splits"]) != len(scores):
             raise ValueError("WESAD 'n_splits' must match len('per_fold_scores')")
+
+    if "sleep_edf" in datasets:
+        sleep_edf = datasets["sleep_edf"]
+        if "error" in sleep_edf:
+            # Explicit failure blocks are schema-valid (failure stays visible,
+            # exit code is driven by target_met flags, not by a crash here).
+            return True
+        for key in ("mean_cohen_kappa", "mean_accuracy", "n_subjects", "target_met"):
+            if key not in sleep_edf:
+                raise ValueError(f"Sleep-EDF block missing required key: '{key}'")
 
     xdf = report["xdf_validation"]
     for key in ("files_validated", "files_failed"):

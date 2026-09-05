@@ -348,13 +348,6 @@ def check_diff_audit(root: Path) -> CheckResult:
     if issues:
         return CheckResult("Diff Audit", CheckStatus.FAIL, "; ".join(issues), duration)
     return CheckResult("Diff Audit", CheckStatus.PASS, "No issues in source code diff", duration)
-    # Heuristic for MAC addresses
-    if re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", added_content):
-        issues.append("Possible hardcoded MAC address")
-
-    if issues:
-        return CheckResult("Diff Audit", CheckStatus.FAIL, "; ".join(issues), duration)
-    return CheckResult("Diff Audit", CheckStatus.PASS, "No issues in diff", duration)
 
 
 def main():
