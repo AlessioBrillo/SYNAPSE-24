@@ -21,9 +21,12 @@ from .sleep_edf import (
     process_sleep_edf_subject,
 )
 from .wesad import (
+    FusionWindow,
     compute_accel_magnitude,
     download_wesad,
     extract_chest_signals,
+    extract_native_rate_fusion_windows,
+    extract_native_rate_fusion_windows_for_subject,
     extract_wrist_signals,
     ingest_wesad,
     load_wesad_subject,
@@ -39,6 +42,8 @@ __all__ = [
     "download_sleep_edf",
     "download_wesad",
     "extract_chest_signals",
+    "extract_native_rate_fusion_windows",
+    "extract_native_rate_fusion_windows_for_subject",
     "extract_wrist_signals",
     "ingest_deap",
     "ingest_mitbih",
@@ -54,5 +59,6 @@ __all__ = [
     "process_wesad_subject",
     "resample_labels",
     "segment_by_label",
+    "FusionWindow",
     "Tier",
 ]
