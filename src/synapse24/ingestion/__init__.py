@@ -21,6 +21,9 @@ from .sleep_edf import (
     process_sleep_edf_subject,
 )
 from .wesad import (
+    FUSION_WINDOW_CONFIG,
+    FUSION_WINDOW_FEATURE_NAMES,
+    FUSION_WINDOW_LABEL_TO_ID,
     FusionWindow,
     compute_accel_magnitude,
     download_wesad,
@@ -28,6 +31,7 @@ from .wesad import (
     extract_native_rate_fusion_windows,
     extract_native_rate_fusion_windows_for_subject,
     extract_wrist_signals,
+    fusion_window_quality_to_features,
     ingest_wesad,
     load_wesad_subject,
     process_wesad_subject,
@@ -36,6 +40,9 @@ from .wesad import (
 )
 
 __all__ = [
+    "FUSION_WINDOW_CONFIG",
+    "FUSION_WINDOW_FEATURE_NAMES",
+    "FUSION_WINDOW_LABEL_TO_ID",
     "compute_accel_magnitude",
     "download_deap",
     "download_mitbih",
@@ -45,6 +52,7 @@ __all__ = [
     "extract_native_rate_fusion_windows",
     "extract_native_rate_fusion_windows_for_subject",
     "extract_wrist_signals",
+    "fusion_window_quality_to_features",
     "ingest_deap",
     "ingest_mitbih",
     "ingest_sleep_edf",

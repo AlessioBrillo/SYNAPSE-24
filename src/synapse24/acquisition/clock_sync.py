@@ -172,11 +172,22 @@ class SyncMarkerManager:
         self._last_broadcast = hub_timestamp
         return marker
 
-    def should_broadcast(self, current_time: float | None = None) -> bool:
-        """Check if it's time to broadcast a sync marker."""
+    def should_broadcast(self, current_time: float | None = None, tier: Tier | None = None) -> bool:
+        """Check if it's time to broadcast a sync marker.
+
+        Args:
+            current_time: Hub clock time (defaults to wall time).
+            tier: If provided, use per-tier interval from TierSyncBudget
+                (T0=60s, T1/T2=10s per Architecture.md §92). If None,
+                fall back to legacy global sync_interval_s.
+        """
         if current_time is None:
             current_time = time.time()
-        return current_time - self._last_broadcast >= self.config.sync_interval_s
+        if tier is not None:
+            _, interval_s = self.config.get_budget_for_tier(tier)
+        else:
+            interval_s = self.config.sync_interval_s
+        return current_time - self._last_broadcast >= interval_s
 
 
 class ClockDriftEstimator:

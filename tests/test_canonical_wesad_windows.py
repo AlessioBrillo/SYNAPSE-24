@@ -12,12 +12,26 @@ one vector per affect segment instead of one per 60s window.
 
 from __future__ import annotations
 
-import numpy as np
+import importlib.util
+from pathlib import Path
+
+import pytest
 
 from synapse24.ingestion.wesad import (
     FUSION_WINDOW_CONFIG,
     fusion_window_quality_to_features,
 )
+
+
+def _load_validator():
+    """Load scripts/validate_baseline.py without requiring a package."""
+    script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
+    spec = importlib.util.spec_from_file_location("validate_baseline", script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _window_meta(label_name: str, mean_rr: float) -> dict:
@@ -62,7 +76,7 @@ class TestFusionWindowFeatures:
         feats, label = fusion_window_quality_to_features(_window_meta("baseline", 800.0))
         assert label == 0
         assert len(feats) == 11
-        assert feats[0] == np.approx(800.0)
+        assert feats[0] == pytest.approx(800.0)
 
     def test_stress_window_label(self):
         _, label = fusion_window_quality_to_features(_window_meta("stress", 600.0))
@@ -79,7 +93,8 @@ class TestFusionWindowFeatures:
 
     def test_validator_prefers_windows_over_segments(self):
         """Validator must score per-window samples, not per-segment."""
-        from scripts.validate_baseline import validate_wesad_stress_classification
+        validator = _load_validator()
+        validate_wesad_stress_classification = validator.validate_wesad_stress_classification
 
         results = []
         for sid in ["S2", "S3", "S4", "S5", "S6", "S7"]:

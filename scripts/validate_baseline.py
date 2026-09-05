@@ -27,6 +27,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from synapse24.ingestion import Tier, ingest_mitbih, ingest_sleep_edf, ingest_wesad
+from synapse24.ingestion.wesad import FUSION_WINDOW_CONFIG, fusion_window_quality_to_features
 from synapse24.signal_quality import validate_sleep_staging_against_gold
 from synapse24.utils import validate_xdf
 
@@ -38,9 +39,11 @@ np.random.seed(SEED)
 def extract_wesad_features(
     subject_result: dict,
 ) -> tuple[np.ndarray, np.ndarray, str] | None:
-    """Extract features and labels for stress classification from WESAD subject.
+    """Legacy segment-level feature extraction (deprecated fallback).
 
-    Uses segments: baseline (1) vs stress (2) vs amusement (3) for 3-class.
+    Prefer canonical 60s fusion windows via extract_wesad_window_features().
+    Kept only for cached JSON without fusion_windows. Uses segments:
+    baseline vs stress vs amusement for 3-class.
     Returns (features, labels, subject_id) for subject-grouped CV.
     """
     segments = subject_result.get("segments", {})
@@ -83,11 +86,44 @@ def extract_wesad_features(
     return np.array(features_list), np.array(labels_list), subject_id
 
 
+def extract_wesad_window_features(
+    subject_result: dict,
+) -> tuple[np.ndarray, np.ndarray, str] | None:
+    """Canonical 60s fusion-window feature extraction (single source of truth).
+
+    Consumes result["fusion_windows"] (quality_metadata per 60s window,
+    overlap_s=0, purity>=0.9 per FUSION_WINDOW_CONFIG). One sample per window.
+    Returns (features, labels, subject_id) or None if no 3-class windows.
+    """
+    windows = subject_result.get("fusion_windows", [])
+    if not windows:
+        return None
+    subject_id = subject_result.get("subject_id", "unknown")
+    features_list: list[list[float]] = []
+    labels_list: list[int] = []
+    for window_meta in windows:
+        if not isinstance(window_meta, dict):
+            continue
+        parsed = fusion_window_quality_to_features(window_meta)
+        if parsed is None:
+            continue
+        feats, label_id = parsed
+        features_list.append(feats)
+        labels_list.append(label_id)
+    if not features_list:
+        return None
+    return np.array(features_list), np.array(labels_list), subject_id
+
+
 def validate_wesad_stress_classification(
     results: list[dict],
     n_splits: int = 5,
 ) -> dict[str, float]:
     """Validate WESAD 3-class stress classification.
+
+    Canonical path (Architecture.md §51-53, Roadmap.md §4): 60s native-rate
+    fusion windows (FUSION_WINDOW_CONFIG), GroupKFold by subject, overlap_s=0.
+    Falls back to legacy segment scoring only when no fusion_windows present.
 
     Target: ≥80% accuracy (published benchmark: 80% for 3-class, 93% for binary)
     Uses subject-grouped GroupKFold to prevent data leakage.
@@ -96,8 +132,12 @@ def validate_wesad_stress_classification(
     all_labels = []
     all_groups = []
 
+    use_windows = any(bool(r.get("fusion_windows")) for r in results)
+    feature_source = "fusion_windows_60s" if use_windows else "segments_legacy"
+    extractor = extract_wesad_window_features if use_windows else extract_wesad_features
+
     for result in results:
-        extracted = extract_wesad_features(result)
+        extracted = extractor(result)
         if extracted is not None:
             feats, labels, subject_id = extracted
             all_features.append(feats)
@@ -105,7 +145,12 @@ def validate_wesad_stress_classification(
             all_groups.extend([subject_id] * len(labels))
 
     if not all_features:
-        return {"accuracy": 0.0, "error": "No valid segments", "per_fold_scores": []}
+        return {
+            "accuracy": 0.0,
+            "error": "No valid segments",
+            "per_fold_scores": [],
+            "feature_source": feature_source,
+        }
 
     X = np.vstack(all_features)
     y = np.hstack(all_labels)
@@ -118,7 +163,12 @@ def validate_wesad_stress_classification(
     groups = groups[mask]
 
     if len(np.unique(y)) < 3:
-        return {"accuracy": 0.0, "error": "Less than 3 classes present", "per_fold_scores": []}
+        return {
+            "accuracy": 0.0,
+            "error": "Less than 3 classes present",
+            "per_fold_scores": [],
+            "feature_source": feature_source,
+        }
 
     # Random Forest with subject-grouped CV (GroupKFold - no subject leakage)
     pipeline = Pipeline(
@@ -145,6 +195,8 @@ def validate_wesad_stress_classification(
         "n_splits": effective_splits,
         "target_met": bool(np.mean(scores) >= 0.80),
         "per_fold_scores": [float(s) for s in scores],
+        "feature_source": feature_source,
+        "window_config": dict(FUSION_WINDOW_CONFIG) if use_windows else {},
     }
 
 
