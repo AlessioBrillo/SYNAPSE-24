@@ -2,11 +2,19 @@
 
 Implements hardware sync markers + ACC cross-correlation drift correction
 per Architecture.md §92 clock drift risk mitigation.
+
+Architecture Decision (Principal Architect):
+- Tier 0 (PPG/IMU/Temp): 10 ms tolerance, 60s sync interval
+- Tier 1 (EEG/fNIRS/ECG): 1.0 ms tolerance, 10s sync interval
+- Rationale: Tier 0's fastest signal (PPG 64Hz = 15.6ms period, IMU 100Hz = 10ms)
+  does not benefit from sub-ms precision; Tier 1's ECG 700Hz (1.43ms) + EEG 500Hz (2ms)
+  for cardio-neuro coherence genuinely requires ~1ms.
 """
 
 from __future__ import annotations
 
 import time
+import warnings
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,13 +28,33 @@ from synapse24.signal_quality import Tier
 
 
 @dataclass(frozen=True)
+class TierSyncBudget:
+    """Per-tier synchronization budget.
+
+    Architecture.md §55-62, §92: Radio re-sync is dominant hidden cost.
+    Tier 0 tolerates 10ms (PPG 64Hz period = 15.6ms, IMU 100Hz = 10ms).
+    Tier 1 requires 1ms (ECG 700Hz = 1.43ms, EEG 500Hz = 2ms).
+    """
+
+    tier0_max_residual_drift_ms: float = 10.0
+    tier1_max_residual_drift_ms: float = 1.0
+    tier0_sync_interval_s: float = 60.0
+    tier1_sync_interval_s: float = 10.0
+
+
+@dataclass(frozen=True)
 class SyncConfig:
-    """Configuration for clock synchronization."""
+    """Configuration for clock synchronization.
 
-    # Sync marker interval (seconds)
+    DEPRECATED (kept for backward compat): single global max_residual_drift_ms + sync_interval_s.
+    Use TierSyncBudget instead. A deprecation warning is emitted if legacy fields are used.
+    """
+
+    # Per-tier sync budget (preferred)
+    tier_budget: TierSyncBudget = field(default_factory=TierSyncBudget)
+
+    # Legacy fields (DEPRECATED - use tier_budget instead)
     sync_interval_s: float = 60.0
-
-    # Maximum acceptable residual drift after correction (ms)
     max_residual_drift_ms: float = 1.0
 
     # ACC cross-correlation window (seconds)
@@ -40,6 +68,29 @@ class SyncConfig:
 
     # Sampling rates for ACC streams (Hz) per pod
     acc_sampling_rates: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Emit deprecation warning if legacy fields are explicitly set
+        if self.sync_interval_s != 60.0 or self.max_residual_drift_ms != 1.0:
+            warnings.warn(
+                "SyncConfig.sync_interval_s and max_residual_drift_ms are deprecated. "
+                "Use SyncConfig.tier_budget (TierSyncBudget) for per-tier sync configuration.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+    def get_budget_for_tier(self, tier: Tier) -> tuple[float, float]:
+        """Return (max_residual_drift_ms, sync_interval_s) for given tier."""
+        if tier == Tier.T0:
+            return (
+                self.tier_budget.tier0_max_residual_drift_ms,
+                self.tier_budget.tier0_sync_interval_s,
+            )
+        # T1, T2
+        return (
+            self.tier_budget.tier1_max_residual_drift_ms,
+            self.tier_budget.tier1_sync_interval_s,
+        )
 
 
 @dataclass
@@ -403,43 +454,84 @@ class MultiPodClockSync:
         """Correct pod timestamps to hub clock domain."""
         return self.corrector.correct_timestamps(pod_id, raw_timestamps)
 
-    def get_sync_status(self) -> dict[str, Any]:
-        """Get synchronization status for all pods."""
+    def get_sync_status(self, tier: Tier | None = None) -> dict[str, Any]:
+        """Get synchronization status for all pods.
+
+        Args:
+            tier: If provided, checks tolerance against tier-specific budget.
+                  If None, uses legacy global config (deprecated).
+        """
         estimates = self.drift_estimator.get_all_estimates()
-        return {
-            "pods": {
-                pod_id: {
-                    "offset_ms": est.offset_ms,
-                    "drift_rate_ppm": est.drift_rate_ppm,
-                    "confidence": est.confidence,
-                    "method": est.method,
-                    "within_tolerance": abs(est.offset_ms) <= self.config.max_residual_drift_ms,
-                }
-                for pod_id, est in estimates.items()
-            },
+        result: dict[str, Any] = {
+            "pods": {},
             "marker_history_len": len(self.drift_estimator._marker_history),
             "hub_acc_buffer_len": len(self._hub_acc_buffer),
         }
+
+        for pod_id, est in estimates.items():
+            if tier is not None:
+                max_drift_ms, _ = self.config.get_budget_for_tier(tier)
+                within = abs(est.offset_ms) <= max_drift_ms
+                tier_name = tier.name
+            else:
+                within = abs(est.offset_ms) <= self.config.max_residual_drift_ms
+                tier_name = "legacy_global"
+
+            result["pods"][pod_id] = {
+                "offset_ms": est.offset_ms,
+                "drift_rate_ppm": est.drift_rate_ppm,
+                "confidence": est.confidence,
+                "method": est.method,
+                "within_tolerance": within,
+                "tier_evaluated": tier_name,
+                "tolerance_ms": max_drift_ms
+                if tier is not None
+                else self.config.max_residual_drift_ms,
+            }
+
+        return result
 
 
 def quantify_residual_drift(
     corrected_pod_timestamps: npt.NDArray[np.float64],
     hub_timestamps: npt.NDArray[np.float64],
-) -> dict[str, float]:
+    tier: Tier | None = None,
+    config: SyncConfig | None = None,
+) -> dict[str, float | str]:
     """Quantify residual drift after correction.
 
     Computes statistics of timestamp differences between corrected pod
     timestamps and corresponding hub timestamps (assuming same sample count).
+
+    Args:
+        corrected_pod_timestamps: Pod timestamps after drift correction
+        hub_timestamps: Corresponding hub timestamps
+        tier: If provided with config, checks against tier-specific budget
+        config: SyncConfig instance (required if tier is provided)
     """
     if len(corrected_pod_timestamps) != len(hub_timestamps):
         raise ValueError("Timestamp arrays must have same length")
 
     diffs_ms = (corrected_pod_timestamps - hub_timestamps) * 1000
 
-    return {
+    result: dict[str, float | str] = {
         "mean_offset_ms": float(np.mean(diffs_ms)),
         "std_offset_ms": float(np.std(diffs_ms)),
         "max_abs_offset_ms": float(np.max(np.abs(diffs_ms))),
         "p99_offset_ms": float(np.percentile(np.abs(diffs_ms), 99)),
         "within_1ms_pct": float(np.mean(np.abs(diffs_ms) <= 1.0) * 100),
     }
+
+    # Add tier-specific tolerance check
+    if tier is not None and config is not None:
+        max_drift_ms, _ = config.get_budget_for_tier(tier)
+        result[f"within_{int(max_drift_ms)}ms_pct"] = float(
+            np.mean(np.abs(diffs_ms) <= max_drift_ms) * 100
+        )
+        result["tier_evaluated"] = tier.name
+        result["tolerance_ms"] = max_drift_ms
+    else:
+        # Legacy
+        result["within_1ms_pct"] = float(np.mean(np.abs(diffs_ms) <= 1.0) * 100)
+
+    return result

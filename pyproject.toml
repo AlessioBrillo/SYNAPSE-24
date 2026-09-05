@@ -130,6 +130,8 @@ module = [
     "edgeimpulse.*",
     "sklearn.*",
     "flatbuffers.*",
+    "mne.*",
+    "yasa.*",
 ]
 ignore_missing_imports = true
 
