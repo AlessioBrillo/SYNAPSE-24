@@ -241,7 +241,7 @@ def _write_string(f: IO[bytes], s: str) -> None:
     f.write(encoded)
 
 
-def write_xdf(
+def write_xdf(  # noqa: PLR0915
     output_path: Path,
     streams: list[dict[str, Any]],
     file_metadata: dict[str, Any] | None = None,
@@ -332,16 +332,32 @@ def write_xdf(
                 block_samples = data[block_start:block_end]
                 block_timestamps = timestamps[block_start:block_end]
 
-                # Flatten samples in column-major order (XDF format)
-                flat_samples = block_samples.T.ravel().astype(np.float32)
+                # Check if data is string/object type (for markers, metadata)
+                is_string_data = block_samples.dtype.kind in ("U", "S", "O")
 
-                samples_data = bytearray()
-                # Sample count
-                _write_varlen_int(samples_data, block_samples.shape[0])
-                # Timestamps (double precision)
-                samples_data.extend(block_timestamps.astype(np.float64).tobytes())
-                # Sample values (float32)
-                samples_data.extend(flat_samples.tobytes())
+                if is_string_data:
+                    # For string data (markers, metadata), write each sample as varlen string
+                    samples_data = bytearray()
+                    _write_varlen_int(samples_data, block_samples.shape[0])
+                    samples_data.extend(block_timestamps.astype(np.float64).tobytes())
+                    # Write string samples
+                    for i in range(block_samples.shape[0]):
+                        for j in range(block_samples.shape[1]):
+                            s = str(block_samples[i, j])
+                            encoded = s.encode("utf-8")
+                            _write_varlen_int(samples_data, len(encoded))
+                            samples_data.extend(encoded)
+                else:
+                    # Flatten samples in column-major order (XDF format) for numeric data
+                    flat_samples = block_samples.T.ravel().astype(np.float32)
+
+                    samples_data = bytearray()
+                    # Sample count
+                    _write_varlen_int(samples_data, block_samples.shape[0])
+                    # Timestamps (double precision)
+                    samples_data.extend(block_timestamps.astype(np.float64).tobytes())
+                    # Sample values (float32)
+                    samples_data.extend(flat_samples.tobytes())
 
                 _write_xdf_chunk(f, XDF_CHUNK_TAGS["SAMPLES"], bytes(samples_data))
 

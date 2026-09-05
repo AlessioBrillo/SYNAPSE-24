@@ -192,14 +192,11 @@ class ClockDriftEstimator:
             a, b = np.linalg.lstsq(A, pod_times, rcond=None)[0]
 
             drift_rate_ppm = (a - 1.0) * 1_000_000
-            offset_ms = b * 1000
-
-            # Current offset
-            current_offset_ms = (pod_times[-1] - hub_times[-1]) * 1000
+            offset_ms = b * 1000  # Use intercept as the clock offset at hub_time=0
 
             estimates[pod_id] = DriftEstimate(
                 pod_id=pod_id,
-                offset_ms=current_offset_ms,
+                offset_ms=offset_ms,
                 drift_rate_ppm=drift_rate_ppm,
                 confidence=min(len(hub_times) / 10.0, 1.0),
                 method="marker",

@@ -173,8 +173,8 @@ def compute_yasa_sleep_staging(
         - 'sampling_rate': Hypnogram sampling rate (1/30 Hz = 30s epochs)
     """
     try:
-        import mne  # type: ignore[import-untyped]
-        import yasa  # type: ignore[import-untyped]
+        import mne
+        import yasa
     except ImportError as e:
         raise RuntimeError(
             f"Required package not installed: {e}. Install with: pip install mne yasa"
