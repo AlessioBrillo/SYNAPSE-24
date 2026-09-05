@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -386,10 +387,16 @@ class TestSleepEDFIngestion:
             "timestamps": np.array([0.0]),
         }
 
-        with patch("synapse24.ingestion.sleep_edf.Path.mkdir"):
-            result = process_sleep_edf_subject(
-                "SC4001E0-PSG.edf", Path("data/sleep_edf"), Path("data/processed"), Tier.T1
-            )
+        # Hermetic output dir under a fresh temp dir. Only the leaf is new,
+        # so the test is independent of repo state (regression test for the
+        # CI failure where data/processed/ is absent on a fresh runner).
+        # NOTE: Path.exists is decorator-mocked in this test, so no
+        # existence asserts here — the proof is that the unmocked open()
+        # inside process_sleep_edf_subject no longer raises FileNotFoundError.
+        fresh_output_dir = Path(tempfile.mkdtemp(prefix="synapse_sleep_edf_")) / "fresh_output"
+        result = process_sleep_edf_subject(
+            "SC4001E0-PSG.edf", Path("data/sleep_edf"), fresh_output_dir, Tier.T1
+        )
 
         assert result["subject_id"] == "SC4001"
         assert "xdf_path" in result
