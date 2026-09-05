@@ -86,6 +86,39 @@ MITBIH_RECORDS = [
 
 MITBIH_URL = "https://physionet.org/files/mitdb/1.0.0/"
 
+# Signals with less than this peak-to-peak amplitude are flatline
+# acquisition corruption (e.g. zero-filled .dat), never physiology.
+MITBIH_FLATLINE_PTP_MV = 0.05
+
+# Every MIT-BIH annotation symbol that marks a QRS complex (PhysioNet
+# atr manual). Detection metrics (Se/PPV) and RMSSD must be scored against
+# ALL beats: restricting the reference to normal beats punishes detection
+# of real premature ventricular complexes and inflates RMSSD MAE by orders
+# of magnitude via artificial RR gaps (verified: record 119, 444 V beats,
+# PPV 0.78 -> 1.00, MAE 95 ms -> 2.9 ms after this fix).
+MITBIH_BEAT_SYMBOLS = frozenset(
+    [
+        "N",  # Normal beat
+        "L",  # Left bundle branch block beat
+        "R",  # Right bundle branch block beat
+        "B",  # Bundle branch block beat (unspecified)
+        "A",  # Atrial premature beat
+        "a",  # Aberrated atrial premature beat
+        "J",  # Nodal (junctional) premature beat
+        "S",  # Supraventricular premature beat
+        "V",  # Premature ventricular contraction
+        "r",  # R-on-T premature ventricular contraction
+        "F",  # Fusion of ventricular and normal beat
+        "e",  # Atrial escape beat
+        "j",  # Nodal (junctional) escape beat
+        "n",  # Supraventricular escape beat
+        "E",  # Ventricular escape beat
+        "/",  # Paced beat
+        "f",  # Fusion of paced and normal beat
+        "Q",  # Unclassifiable beat
+    ]
+)
+
 
 def download_mitbih(data_dir: Path) -> Path:
     """Download MIT-BIH Arrhythmia Database using wfdb."""
@@ -111,6 +144,34 @@ def download_mitbih(data_dir: Path) -> Path:
     return data_dir
 
 
+def _reject_corrupt_record(
+    record_id: str,
+    ecg_signal: npt.NDArray[np.float64],
+    reference_peaks: npt.NDArray[np.int64],
+) -> None:
+    """Quarantine guard against silent acquisition/download corruption.
+
+    wfdb parses zero-filled files without error (flatline signal, empty
+    annotation set). Scoring such records would drag aggregate gates with
+    Se=0/PPV=0 while looking like detector failure. Fail loudly instead.
+
+    Raises:
+        ValueError: On flatline signal or empty reference beat set.
+    """
+    signal = np.asarray(ecg_signal, dtype=np.float64)
+    if signal.size == 0 or not np.all(np.isfinite(signal)):
+        raise ValueError(f"MIT-BIH record {record_id}: non-finite or empty signal")
+    if float(np.ptp(signal)) < MITBIH_FLATLINE_PTP_MV:
+        raise ValueError(
+            f"MIT-BIH record {record_id}: flatline signal "
+            f"(ptp={float(np.ptp(signal)):.4f} mV) — corrupt .dat, re-download"
+        )
+    if len(reference_peaks) == 0:
+        raise ValueError(
+            f"MIT-BIH record {record_id}: no reference beats — corrupt .atr, re-download"
+        )
+
+
 def load_mitbih_record(
     record_id: str, data_dir: Path
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int64], dict[str, Any]]:
@@ -118,6 +179,9 @@ def load_mitbih_record(
 
     Returns:
         Tuple of (ecg_signal, reference_peaks, metadata)
+
+    Raises:
+        ValueError: If the record fails the corruption quarantine guard.
     """
     record_path = data_dir / record_id
     record = wfdb.rdrecord(str(record_path))
@@ -127,12 +191,14 @@ def load_mitbih_record(
     ecg_signal = record.p_signal[:, 0] if record.p_signal.ndim > 1 else record.p_signal.flatten()
     fs = record.fs
 
-    # Reference R-peaks (normal beats only for clean evaluation)
-    # Normal beat annotations: 'N', 'L', 'R', 'e', 'j'
-    normal_beats = np.array(["N", "L", "R", "e", "j"])
+    # Reference R-peaks: ALL QRS complexes (MITBIH_BEAT_SYMBOLS).
+    # Non-beat markers ('+', '~', '"', '|', 's', 'T', '*', 'D', '=', 'p',
+    # '[', ']', '!') are rhythm/signal annotations, not heartbeats.
     # Ensure annotation.symbol is string array for comparison
     symbols = np.array([str(s) for s in annotation.symbol])
-    reference_peaks = annotation.sample[np.isin(symbols, normal_beats)]
+    reference_peaks = annotation.sample[np.isin(symbols, list(MITBIH_BEAT_SYMBOLS))]
+
+    _reject_corrupt_record(record_id, np.asarray(ecg_signal, dtype=np.float64), reference_peaks)
 
     metadata = {
         "record_id": record_id,
@@ -271,6 +337,7 @@ def ingest_mitbih(
         records = MITBIH_RECORDS
 
     all_results = []
+    quarantined: list[dict[str, str]] = []
     for record_id in tqdm(records, desc="Processing MIT-BIH records"):
         try:
             result = process_mitbih_record(record_id, data_dir, output_dir, tier)
@@ -281,7 +348,8 @@ def ingest_mitbih(
                 json.dump(result, f, indent=2, default=str)
 
         except Exception as e:
-            print(f"Failed to process {record_id}: {e}")
+            logger.warning("Failed to process %s: %s", record_id, e)
+            quarantined.append({"record_id": record_id, "reason": str(e)})
 
     # Compute aggregate statistics
     if all_results:
@@ -303,6 +371,7 @@ def ingest_mitbih(
                 "std_rmssd_mae_ms": float(np.std(maes)),
             },
             "records": [r["record_id"] for r in all_results],
+            "quarantined": quarantined,
             "tier": tier.name,
         }
     else:
@@ -311,6 +380,7 @@ def ingest_mitbih(
             "records_processed": 0,
             "aggregate_metrics": {},
             "records": [],
+            "quarantined": quarantined,
             "tier": tier.name,
             "error": "No records successfully processed",
         }

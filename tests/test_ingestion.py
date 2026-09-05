@@ -126,32 +126,31 @@ class TestWESADIngestion:
         assert len(seg2["ecg"]) == 2
         assert np.array_equal(seg2["ecg"], np.array([3.0, 4.0]))
 
-    @patch("builtins.open", new_callable=mock_open)
-    @patch("zipfile.ZipFile")
     @patch("synapse24.ingestion.wesad.requests.get")
-    def test_download_wesad_creates_dir(self, mock_get, mock_zip, _mock_open):  # noqa: PT019
-        """Test WESAD download creates directory structure."""
+    def test_download_wesad_creates_dir(self, mock_get, tmp_path):  # noqa: PT019
+        """Test WESAD download creates directory structure (real zip on tmp FS)."""
+        import io
+        import zipfile as std_zipfile
+
+        buf = io.BytesIO()
+        with std_zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("WESAD/S2/S2.pkl", b"fake-pickle")
+        payload = buf.getvalue()
+
         mock_response = MagicMock()
-        mock_response.headers.get.return_value = "1000"
-        mock_response.iter_content.return_value = [b"chunk1", b"chunk2"]
-        mock_response.raise_for_status.return_value = None
         mock_response.status_code = 200
         mock_response.headers.get.side_effect = lambda k, d=None: {
-            "content-length": "1000",
+            "content-length": str(len(payload)),
             "content-type": "application/zip",
         }.get(k, d)
+        mock_response.iter_content.return_value = [payload]
+        mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
 
-        mock_zip_instance = MagicMock()
-        mock_zip.return_value.__enter__.return_value = mock_zip_instance
-
-        with (
-            patch("synapse24.ingestion.wesad.Path.exists", return_value=False),
-            patch("synapse24.ingestion.wesad.Path.mkdir"),
-            patch("synapse24.ingestion.wesad.Path.unlink"),
-        ):
-            result = download_wesad(Path("data"))
-            assert result == Path("data") / "WESAD"
+        result = download_wesad(tmp_path)
+        assert result == tmp_path / "WESAD"
+        assert (tmp_path / "WESAD" / "S2" / "S2.pkl").exists()
+        assert not (tmp_path / "WESAD.zip").exists()
 
     def test_load_wesad_subject(self):
         """Test loading WESAD subject pickle - skipped due to complex patching."""

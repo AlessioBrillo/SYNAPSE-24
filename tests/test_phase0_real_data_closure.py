@@ -106,6 +106,36 @@ class TestMitbihXdfValidity:
         assert summary["n_streams"] == 3
 
 
+class TestMitbihCorruptionQuarantine:
+    """Zero-filled/corrupt records (local 201 case) must fail loudly."""
+
+    def test_flatline_signal_rejected(self) -> None:
+        """A constant-valued signal is acquisition corruption, not bradycardia."""
+        from synapse24.ingestion import mitbih as mitbih_mod
+
+        flat = np.full(3600, -5.12)
+        with pytest.raises(ValueError, match="flatline"):
+            mitbih_mod._reject_corrupt_record("999", flat, np.array([100, 200, 300]))
+
+    def test_empty_annotation_set_rejected(self) -> None:
+        """Zero reference beats means a corrupt .atr, never a clean record."""
+        from synapse24.ingestion import mitbih as mitbih_mod
+
+        rng = np.random.default_rng(42)
+        with pytest.raises(ValueError, match="no reference beats"):
+            mitbih_mod._reject_corrupt_record(
+                "999", rng.standard_normal(3600), np.array([], dtype=np.int64)
+            )
+
+    def test_healthy_record_passes_guard(self) -> None:
+        """A physiological signal with beats must not trip the guard."""
+        from synapse24.ingestion import mitbih as mitbih_mod
+
+        rng = np.random.default_rng(42)
+        sig = rng.standard_normal(3600)
+        mitbih_mod._reject_corrupt_record("999", sig, np.array([100, 200, 300]))
+
+
 class TestXdfWriterFormat:
     """Regression guard for the stale-format root cause (magic must lead)."""
 
@@ -121,7 +151,9 @@ class TestXdfWriterFormat:
                     "data": np.zeros((64, 1)),
                     "timestamps": np.arange(64, dtype=np.float64) / 64.0,
                     "info": StreamConfig(
-                        name="SYNAPSE_TEST", stream_type="ECG", channel_count=1,
+                        name="SYNAPSE_TEST",
+                        stream_type="ECG",
+                        channel_count=1,
                         sampling_rate=64.0,
                     ),
                 }
@@ -133,7 +165,9 @@ class TestXdfWriterFormat:
 class TestWesadPoisonGuard:
     """The downloader must never leave an HTML error page behind as .zip."""
 
-    def test_html_body_rejected_and_cleaned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_html_body_rejected_and_cleaned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """HTTP 200 + zip content-type + HTML body -> None, no poison file."""
         import synapse24.ingestion.wesad as wesad_mod
 
@@ -146,9 +180,10 @@ class TestWesadPoisonGuard:
             def iter_content(self, chunk_size: int = 8192):
                 yield poison
 
-        monkeypatch.setattr(
-            wesad_mod.requests, "get", lambda *a, **k: _FakeResponse()
-        )
+        def _fake_get(*args: object, **kwargs: object) -> _FakeResponse:
+            return _FakeResponse()
+
+        monkeypatch.setattr(wesad_mod.requests, "get", _fake_get)
         result = wesad_mod.download_wesad(tmp_path)
         assert result is None
         assert not (tmp_path / "WESAD.zip").exists()

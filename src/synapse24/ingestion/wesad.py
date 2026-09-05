@@ -8,6 +8,7 @@ Supports multiple data sources:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import pickle
@@ -64,13 +65,13 @@ def download_wesad(data_dir: Path) -> Path | None:
 
     # Try each mirror
     for url in WESAD_URLS:
+        zip_path = data_dir / "WESAD.zip"
         try:
             logger.info("Trying WESAD mirror: %s", url)
             response = requests.get(url, stream=True, timeout=30)
             if response.status_code == 200:
                 content_type = response.headers.get("content-type", "")
                 if "zip" in content_type or "octet-stream" in content_type:
-                    zip_path = data_dir / "WESAD.zip"
                     total_size = int(response.headers.get("content-length", 0))
                     with (
                         open(zip_path, "wb") as f,
@@ -79,6 +80,18 @@ def download_wesad(data_dir: Path) -> Path | None:
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
                             pbar.update(len(chunk))
+
+                    # Integrity gate: mirrors may return HTTP 200 with an HTML
+                    # error page. Never extract (or keep) a non-zip payload —
+                    # a poison WESAD.zip would otherwise linger as a false cache.
+                    if not zipfile.is_zipfile(zip_path):
+                        logger.warning(
+                            "Mirror returned non-zip body despite content-type "
+                            "'%s'; discarding poison file.",
+                            content_type,
+                        )
+                        zip_path.unlink(missing_ok=True)
+                        continue
 
                     with zipfile.ZipFile(zip_path, "r") as zf:
                         zf.extractall(data_dir)
@@ -90,6 +103,12 @@ def download_wesad(data_dir: Path) -> Path | None:
                 logger.warning("Mirror returned status %s", response.status_code)
         except Exception as e:
             logger.warning("Mirror failed: %s", e)
+            # Never leave a partial/corrupt archive behind as a false cache.
+            if zip_path.exists():
+                with contextlib.suppress(OSError):
+                    # Confirm corruption before deleting (keep valid resumes).
+                    if not zipfile.is_zipfile(zip_path):
+                        zip_path.unlink()
 
     logger.warning("All WESAD mirrors failed. Dataset will be skipped.")
     logger.warning("To use WESAD, manually download from https://archive.ics.uci.edu/dataset/465")
