@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -34,6 +35,80 @@ from synapse24.utils import validate_xdf
 # Global deterministic seed for Phase 0 exit gate reproducibility
 SEED = 42
 np.random.seed(SEED)
+
+BASELINE_REPORT_SCHEMA_VERSION = "1.0"
+
+BASELINE_DATASET_ALIASES: dict[str, list[str]] = {
+    "wesad": ["wesad"],
+    "mitbih": ["mitbih"],
+    "sleep_edf": ["sleep_edf"],
+    # README + CI contract: "both" = peripheral pair (excludes Sleep-EDF).
+    "both": ["wesad", "mitbih"],
+    "all": ["wesad", "mitbih", "sleep_edf"],
+}
+"""Dataset selector aliases (Roadmap.md §4: WESAD + MIT-BIH are the Phase 0 pair)."""
+
+
+def resolve_baseline_datasets(name: str) -> list[str]:
+    """Resolve a --dataset selector to concrete dataset keys.
+
+    Raises:
+        ValueError: Unknown selector (fail fast — an empty run must never
+            silently pass the exit gate).
+    """
+    try:
+        return list(BASELINE_DATASET_ALIASES[name])
+    except KeyError:
+        valid = sorted(BASELINE_DATASET_ALIASES)
+        raise ValueError(f"Unknown dataset '{name}'. Valid: {valid}") from None
+
+
+def validate_baseline_report_schema(report: dict[str, Any]) -> bool:
+    """Enforce baseline_report.json schema v1.0 (fail fast on contract drift).
+
+    Required top-level keys: seed, timestamp, datasets, xdf_validation,
+    schema_version == "1.0". The WESAD block must carry per_fold_scores
+    (fold variance must never be averaged away silently).
+
+    Raises:
+        ValueError: On any schema violation.
+    """
+    required = ("seed", "timestamp", "datasets", "xdf_validation", "schema_version")
+    for key in required:
+        if key not in report:
+            raise ValueError(f"baseline_report.json missing required key: '{key}'")
+
+    if report["schema_version"] != BASELINE_REPORT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported schema_version '{report['schema_version']}' "
+            f"(expected '{BASELINE_REPORT_SCHEMA_VERSION}')"
+        )
+
+    datasets = report["datasets"]
+    if not isinstance(datasets, dict) or not datasets:
+        raise ValueError("baseline_report.json 'datasets' must be a non-empty mapping")
+
+    if "wesad" in datasets:
+        wesad = datasets["wesad"]
+        if "error" in wesad:
+            # Explicit failure blocks are schema-valid (failure stays visible,
+            # exit code is driven by target_met flags, not by a crash here).
+            return True
+        for key in ("accuracy", "per_fold_scores", "n_splits", "n_subjects"):
+            if key not in wesad:
+                raise ValueError(f"WESAD block missing required key: '{key}'")
+        scores = wesad["per_fold_scores"]
+        if not isinstance(scores, list) or not scores:
+            raise ValueError("WESAD 'per_fold_scores' must be a non-empty list")
+        if int(wesad["n_splits"]) != len(scores):
+            raise ValueError("WESAD 'n_splits' must match len('per_fold_scores')")
+
+    xdf = report["xdf_validation"]
+    for key in ("files_validated", "files_failed"):
+        if key not in xdf:
+            raise ValueError(f"xdf_validation missing required key: '{key}'")
+
+    return True
 
 
 def extract_wesad_features(
@@ -451,7 +526,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset",
-        choices=["wesad", "mitbih", "sleep_edf", "all"],
+        choices=["wesad", "mitbih", "sleep_edf", "both", "all"],
         default="all",
     )
     parser.add_argument(
@@ -475,8 +550,9 @@ def _run_dataset_validation(
 ) -> dict:
     """Run validation for specified datasets."""
     all_results = {}
+    selected = resolve_baseline_datasets(args.dataset)
 
-    if args.dataset in ("wesad", "all"):
+    if "wesad" in selected:
         if args.use_cache:
             wesad_results = load_cached_results(args.output_dir, "wesad")
         else:
@@ -487,7 +563,7 @@ def _run_dataset_validation(
             )
         all_results["wesad"] = validate_wesad_stress_classification(wesad_results)
 
-    if args.dataset in ("mitbih", "all"):
+    if "mitbih" in selected:
         if args.use_cache:
             mitbih_results = load_cached_results(args.output_dir, "mitbih")
         else:
@@ -498,7 +574,7 @@ def _run_dataset_validation(
             )
         all_results["mitbih"] = validate_mitbih_rpeak_detection(mitbih_results)
 
-    if args.dataset in ("sleep_edf", "all"):
+    if "sleep_edf" in selected:
         if args.use_cache:
             sleep_edf_results = load_cached_results(args.output_dir, "sleep_edf")
         else:
@@ -515,14 +591,16 @@ def _run_dataset_validation(
 
 
 def _build_baseline_report(all_results: dict, xdf_summary: dict) -> dict:
-    """Build the comprehensive baseline report."""
-    return {
+    """Build the comprehensive baseline report (schema-validated before return)."""
+    report = {
         "seed": SEED,
         "timestamp": __import__("datetime").datetime.now().isoformat(),
         "datasets": all_results,
         "xdf_validation": xdf_summary,
-        "schema_version": "1.0",
+        "schema_version": BASELINE_REPORT_SCHEMA_VERSION,
     }
+    validate_baseline_report_schema(report)
+    return report
 
 
 def _save_reports(

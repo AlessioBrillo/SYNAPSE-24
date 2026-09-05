@@ -353,5 +353,232 @@ class TestRootCleanliness:
             assert len(root_matches) == 0, f"Forbidden files in root: {root_matches}"
 
 
+class TestBaselineDatasetAlias:
+    """validate_baseline.py must accept --dataset both (README + CI contract)."""
+
+    @staticmethod
+    def _load_script():
+        import importlib.util
+
+        script = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
+        spec = importlib.util.spec_from_file_location("validate_baseline", script)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_both_alias_resolves_to_wesad_and_mitbih(self):
+        """'both' resolves to exactly {wesad, mitbih} (excludes sleep_edf)."""
+        module = self._load_script()
+        assert module.resolve_baseline_datasets("both") == ["wesad", "mitbih"]
+
+    def test_all_alias_includes_sleep_edf(self):
+        """'all' resolves to wesad + mitbih + sleep_edf."""
+        module = self._load_script()
+        assert module.resolve_baseline_datasets("all") == ["wesad", "mitbih", "sleep_edf"]
+
+    def test_single_dataset_alias(self):
+        """Single names resolve to themselves."""
+        module = self._load_script()
+        assert module.resolve_baseline_datasets("wesad") == ["wesad"]
+        assert module.resolve_baseline_datasets("mitbih") == ["mitbih"]
+
+    def test_unknown_dataset_raises(self):
+        """Unknown dataset names raise ValueError (fail fast, no silent empty run)."""
+        module = self._load_script()
+        with pytest.raises(ValueError, match="Unknown dataset"):
+            module.resolve_baseline_datasets("eeg_only")
+
+
+class TestBaselineReportSchemaValidator:
+    """baseline_report.json schema v1.0 enforcement (no silent contract drift)."""
+
+    @staticmethod
+    def _load_script():
+        import importlib.util
+
+        script = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
+        spec = importlib.util.spec_from_file_location("validate_baseline_schema", script)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def _valid_report() -> dict:
+        return {
+            "seed": 42,
+            "timestamp": "2026-01-01T00:00:00",
+            "datasets": {
+                "wesad": {
+                    "accuracy": 0.83,
+                    "std": 0.05,
+                    "per_fold_scores": [0.8, 0.85, 0.82, 0.84, 0.84],
+                    "n_splits": 5,
+                    "n_subjects": 15,
+                    "feature_source": "fusion_windows_60s",
+                },
+                "mitbih": {"mean_sensitivity": 0.997, "mean_ppv": 0.997},
+            },
+            "xdf_validation": {"files_validated": 2, "files_failed": 0},
+            "schema_version": "1.0",
+        }
+
+    def test_valid_report_passes(self):
+        module = self._load_script()
+        assert module.validate_baseline_report_schema(self._valid_report()) is True
+
+    def test_missing_key_fails(self):
+        module = self._load_script()
+        report = self._valid_report()
+        del report["schema_version"]
+        with pytest.raises(ValueError, match="missing required key"):
+            module.validate_baseline_report_schema(report)
+
+    def test_wrong_schema_version_fails(self):
+        module = self._load_script()
+        report = self._valid_report()
+        report["schema_version"] = "0.9"
+        with pytest.raises(ValueError, match="schema_version"):
+            module.validate_baseline_report_schema(report)
+
+    def test_wesad_without_per_fold_scores_fails(self):
+        """WESAD block without per_fold_scores hides fold variance — reject."""
+        module = self._load_script()
+        report = self._valid_report()
+        del report["datasets"]["wesad"]["per_fold_scores"]
+        with pytest.raises(ValueError, match="per_fold_scores"):
+            module.validate_baseline_report_schema(report)
+
+
+class TestXdfZeroDropRoundtrip:
+    """XDF write -> pyxdf read must recover every sample (zero-drop gate)."""
+
+    def test_two_node_roundtrip_zero_drop(self):
+        """Forearm T0 (64Hz) + head T1 (500Hz) streams survive XDF round-trip."""
+        from synapse24.utils import verify_xdf_roundtrip
+
+        rng = np.random.default_rng(42)
+        streams = [
+            {
+                "name": "SYNAPSE_PPG",
+                "type": "PPG",
+                "data": rng.standard_normal((640, 3)),
+                "timestamps": np.arange(640, dtype=np.float64) / 64.0,
+                "sampling_rate": 64.0,
+            },
+            {
+                "name": "SYNAPSE_EEG",
+                "type": "EEG",
+                "data": rng.standard_normal((1000, 2)),
+                "timestamps": np.arange(1000, dtype=np.float64) / 500.0,
+                "sampling_rate": 500.0,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = verify_xdf_roundtrip(streams, Path(tmpdir) / "roundtrip.xdf")
+        assert result["all_streams_valid"]
+        assert result["total_dropped"] == 0
+        assert result["n_streams"] == 2
+
+    def test_roundtrip_detects_sample_loss(self):
+        """Corrupted XDF (truncated samples) must fail the gate, not pass silently."""
+        from synapse24.utils import verify_xdf_roundtrip
+
+        rng = np.random.default_rng(7)
+        streams = [
+            {
+                "name": "SYNAPSE_PPG",
+                "type": "PPG",
+                "data": rng.standard_normal((100, 1)),
+                "timestamps": np.arange(100, dtype=np.float64) / 64.0,
+                "sampling_rate": 64.0,
+                "drop_last_n": 10,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = verify_xdf_roundtrip(streams, Path(tmpdir) / "lossy.xdf")
+        assert not result["all_streams_valid"]
+        assert result["total_dropped"] == 10
+
+
+class TestPhase0EdgeGate:
+    """ESP32-S3 int8 exit gate: strict triage profile, realistic hub profile."""
+
+    def test_triage_pass(self):
+        """Small int8 triage model passes the strict Tier-0 gate."""
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+
+        result = check_phase0_exit_gate(
+            model_size_kb=48.0,
+            estimated_ram_kb=96.0,
+            estimated_latency_ms=22.0,
+            accuracy_drop_percent=1.5,
+            ops_used=["FULLY_CONNECTED", "QUANTIZE"],
+            profile="triage",
+        )
+        assert result["passed"]
+        assert result["failures"] == []
+
+    def test_triage_fails_on_ram(self):
+        """Oversized arena fails triage even if everything else passes."""
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+
+        result = check_phase0_exit_gate(
+            model_size_kb=48.0,
+            estimated_ram_kb=512.0,
+            estimated_latency_ms=22.0,
+            accuracy_drop_percent=1.5,
+            ops_used=["FULLY_CONNECTED"],
+            profile="triage",
+        )
+        assert not result["passed"]
+        assert any("RAM" in f for f in result["failures"])
+
+    def test_triage_fails_on_accuracy_drop(self):
+        """Int8 collapse (>3pp drop) fails triage — quantization must be redone."""
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+
+        result = check_phase0_exit_gate(
+            model_size_kb=48.0,
+            estimated_ram_kb=96.0,
+            estimated_latency_ms=22.0,
+            accuracy_drop_percent=5.0,
+            ops_used=["FULLY_CONNECTED"],
+            profile="triage",
+        )
+        assert not result["passed"]
+        assert any("accuracy" in f.lower() for f in result["failures"])
+
+    def test_hub_fusion_profile_allows_larger_model(self):
+        """WESAD fusion LSTM runs on the Pi hub — larger envelope than triage."""
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+
+        result = check_phase0_exit_gate(
+            model_size_kb=200.0,
+            estimated_ram_kb=350.0,
+            estimated_latency_ms=120.0,
+            accuracy_drop_percent=2.0,
+            ops_used=["LSTM", "FULLY_CONNECTED"],
+            profile="hub_fusion",
+        )
+        assert result["passed"]
+
+    def test_unknown_profile_raises(self):
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+
+        with pytest.raises(ValueError, match="Unknown exit-gate profile"):
+            check_phase0_exit_gate(
+                model_size_kb=10.0,
+                estimated_ram_kb=10.0,
+                estimated_latency_ms=5.0,
+                accuracy_drop_percent=0.0,
+                ops_used=[],
+                profile="quantum",
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

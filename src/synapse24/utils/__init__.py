@@ -9,6 +9,7 @@ from .xdf import (
     create_stream_info_from_dict,
     generate_synthetic_timestamps,
     validate_xdf,
+    verify_xdf_roundtrip,
     write_xdf,
 )
 
@@ -18,6 +19,7 @@ __all__ = [
     "create_stream_info_from_dict",
     "generate_synthetic_timestamps",
     "validate_xdf",
+    "verify_xdf_roundtrip",
     "write_xdf",
     "LSLStreamManager",
     "create_quality_metadata_stream",

@@ -418,6 +418,13 @@ class MultiPodClockSync:
         self._hub_acc_buffer.append(acc_magnitude)
         self._hub_acc_timestamps.append(timestamp)
 
+    def hub_acc_snapshot(self) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        """Return a copy of the hub ACC buffer and its timestamps."""
+        return (
+            np.array(self._hub_acc_buffer, dtype=np.float64),
+            np.array(self._hub_acc_timestamps, dtype=np.float64),
+        )
+
     def add_pod_acc(self, pod_id: str, acc_magnitude: float, timestamp: float) -> None:
         """Add pod ACC sample for cross-correlation."""
         self.drift_estimator.add_acc_sample(pod_id, acc_magnitude, timestamp)
