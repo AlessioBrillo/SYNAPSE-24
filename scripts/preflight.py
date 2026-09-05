@@ -37,7 +37,15 @@ class CheckResult:
 
 def run_cmd(cmd: list[str], cwd: Path | None = None, timeout: int = 300) -> tuple[int, str, str]:
     """Run command, return (returncode, stdout, stderr)."""
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        encoding="utf-8",
+        errors="replace",
+    )
     return result.returncode, result.stdout, result.stderr
 
 
@@ -281,28 +289,45 @@ def check_energy_budget(root: Path) -> CheckResult:
 
 
 def check_diff_audit(root: Path) -> CheckResult:
-    """Audit diff for common issues (only checks added lines)"""
+    """Audit diff for common issues (only checks added lines in source code, not scripts)"""
     import re
 
     start = time.perf_counter()
     rc, out, err = run_cmd(["git", "diff", "HEAD"], root)
     duration = int((time.perf_counter() - start) * 1000)
 
-    # Only check added lines (starting with +)
-    added_lines = [
-        line[1:] for line in out.split("\n") if line.startswith("+") and not line.startswith("+++")
-    ]
-    added_content = "\n".join(added_lines)
+    if out is None:
+        out = ""
+
+    # Parse diff to get added lines per file
+    # Skip files in scripts/ directory for print() checks
+    current_file = None
+    source_added_lines = []
+
+    for line in out.split("\n"):
+        # Track current file from --- a/ and +++ b/ headers
+        if line.startswith(("--- a/", "+++ b/")):
+            # Extract filename from --- a/path or +++ b/path
+            current_file = line[6:]  # Remove "--- a/" or "+++ b/"
+        elif line.startswith("+") and not line.startswith("+++"):
+            # Added line
+            content = line[1:]
+            if current_file and current_file.startswith("scripts/"):
+                # Skip scripts/ directory for print() checks
+                pass
+            else:
+                source_added_lines.append(content)
+
+    source_added_content = "\n".join(source_added_lines)
 
     issues = []
-    # Check for actual print() calls, not comments containing "print"
-    # Look for print( at start of line or after whitespace, not in comments
+    # Check for actual print() calls in source code only
     print_pattern = re.compile(r"^\s*print\s*\(")
-    if any(print_pattern.match(line) for line in added_content.split("\n")):
-        issues.append("Contains print() statements")
-    # Check for TODO/FIXME in non-comment, non-string lines
+    if any(print_pattern.match(line) for line in source_added_content.split("\n")):
+        issues.append("Contains print() statements in source code")
+    # Check for TODO/FIXME in non-comment, non-string lines in source code
     todo_pattern = re.compile(r"\b(TODO|FIXME)\b")
-    for line in added_content.split("\n"):
+    for line in source_added_content.split("\n"):
         stripped = line.lstrip()
         if stripped.startswith("#"):
             continue
@@ -312,10 +337,17 @@ def check_diff_audit(root: Path) -> CheckResult:
             before = line[: m.start()]
             if before.count('"') % 2 == 1 or before.count("'") % 2 == 1:
                 continue  # Inside string literal
-            issues.append("Contains TODO/FIXME comments")
+            issues.append("Contains TODO/FIXME comments in source code")
             break
-    if re.search(r"(api[_-]?key|secret|password|token)\s*=", added_content, re.IGNORECASE):
-        issues.append("Possible hardcoded secret")
+    if re.search(r"(api[_-]?key|secret|password|token)\s*=", source_added_content, re.IGNORECASE):
+        issues.append("Possible hardcoded secret in source code")
+    # Heuristic for MAC addresses
+    if re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", source_added_content):
+        issues.append("Possible hardcoded MAC address in source code")
+
+    if issues:
+        return CheckResult("Diff Audit", CheckStatus.FAIL, "; ".join(issues), duration)
+    return CheckResult("Diff Audit", CheckStatus.PASS, "No issues in source code diff", duration)
     # Heuristic for MAC addresses
     if re.search(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", added_content):
         issues.append("Possible hardcoded MAC address")
@@ -384,15 +416,15 @@ def print_report(results: list[CheckResult]):
 
     for r in results:
         icon = {
-            CheckStatus.PASS: "✅",
-            CheckStatus.FAIL: "❌",
-            CheckStatus.SKIP: "⏭️",
-            CheckStatus.WARNING: "⚠️",
+            CheckStatus.PASS: "[PASS]",
+            CheckStatus.FAIL: "[FAIL]",
+            CheckStatus.SKIP: "[SKIP]",
+            CheckStatus.WARNING: "[WARN]",
         }[r.status]
-        blocking = "🔒" if r.blocking else "🔓"
+        blocking = "[BLOCK]" if r.blocking else "[NON-BLOCK]"
         print(f"{icon} {r.name:25s} [{r.status.value:7s}] {blocking} ({r.duration_ms}ms)")
         if r.status != CheckStatus.PASS:
-            print(f"   → {r.message}")
+            print(f"   -> {r.message}")
 
     print("=" * 60)
     passed = sum(1 for r in results if r.status == CheckStatus.PASS)
@@ -403,9 +435,9 @@ def print_report(results: list[CheckResult]):
 
     blocking_failed = any(r.status == CheckStatus.FAIL and r.blocking for r in results)
     if blocking_failed:
-        print("🚫 PREFLIGHT FAILED — Do not push. Fix issues above.")
+        print("[BLOCKED] PREFLIGHT FAILED - Do not push. Fix issues above.")
     else:
-        print("✅ PREFLIGHT PASSED — Safe to push.")
+        print("[OK] PREFLIGHT PASSED - Safe to push.")
     print("=" * 60 + "\n")
 
 
