@@ -4,9 +4,27 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 from synapse24.signal_quality import Tier
+
+NOMINAL_VOLTAGE_V: Final[float] = 3.7
+"""Nominal LiPo cell voltage for mWh <-> mAh conversion (Architecture.md §55-62)."""
+
+
+def mah_for_power(mw: float, hours: float) -> float:
+    """Convert constant power draw over time to charge consumed.
+
+    mWh = mW * h; mAh = mWh / V_nominal.
+    """
+    return float(mw * hours / NOMINAL_VOLTAGE_V)
+
+
+def hours_for_charge(mah: float, mw: float) -> float:
+    """Convert remaining charge to hours at constant power draw."""
+    if mw <= 0:
+        return float("inf")
+    return float(mah * NOMINAL_VOLTAGE_V / mw)
 
 
 @dataclass
@@ -114,25 +132,25 @@ class PowerBudgetManager:
         return self.profiles[self._current_tier].avg_mw
 
     def get_consumed_mah(self) -> float:
-        """Get total consumed mAh so far."""
+        """Get total consumed mAh so far (mAh = mW*h / 3.7V)."""
         now = time.time()
         consumed = 0.0
 
         # Completed sessions
-        consumed += self._tier0_total_h * self.profiles[Tier.T0].avg_mw / 1000 * 3.7  # Approx
-        consumed += self._tier1_total_h * self.profiles[Tier.T1].avg_mw / 1000 * 3.7
-        consumed += self._tier2_total_h * self.profiles[Tier.T2].avg_mw / 1000 * 3.7
+        consumed += mah_for_power(self.profiles[Tier.T0].avg_mw, self._tier0_total_h)
+        consumed += mah_for_power(self.profiles[Tier.T1].avg_mw, self._tier1_total_h)
+        consumed += mah_for_power(self.profiles[Tier.T2].avg_mw, self._tier2_total_h)
 
         # Current session
         if self._current_tier == Tier.T0 and self._tier0_start:
             h = (now - self._tier0_start) / 3600
-            consumed += h * self.profiles[Tier.T0].avg_mw / 1000 * 3.7
+            consumed += mah_for_power(self.profiles[Tier.T0].avg_mw, h)
         elif self._current_tier == Tier.T1 and self._tier1_start:
             h = (now - self._tier1_start) / 3600
-            consumed += h * self.profiles[Tier.T1].avg_mw / 1000 * 3.7
+            consumed += mah_for_power(self.profiles[Tier.T1].avg_mw, h)
         elif self._current_tier == Tier.T2 and self._tier2_start:
             h = (now - self._tier2_start) / 3600
-            consumed += h * self.profiles[Tier.T2].avg_mw / 1000 * 3.7
+            consumed += mah_for_power(self.profiles[Tier.T2].avg_mw, h)
 
         return consumed
 
@@ -146,9 +164,7 @@ class PowerBudgetManager:
         if remaining_mah <= 0:
             return 0.0
         current_mw = self.get_current_consumption_mw()
-        if current_mw <= 0:
-            return float("inf")
-        return remaining_mah / (current_mw / 1000 * 3.7)
+        return hours_for_charge(remaining_mah, current_mw)
 
     def can_afford_tier1(self, duration_h: float) -> bool:
         """Check if we can afford a Tier 1 session of given duration."""
@@ -158,11 +174,11 @@ class PowerBudgetManager:
 
         # Projected consumption
         projected_mah = self.get_consumed_mah()
-        projected_mah += duration_h * self.profiles[Tier.T1].avg_mw / 1000 * 3.7
+        projected_mah += mah_for_power(self.profiles[Tier.T1].avg_mw, duration_h)
 
         # Must leave enough for remaining Tier 0 time
         remaining_target_h = self.target_lifetime_h - self._get_total_elapsed_h()
-        tier0_needed_mah = remaining_target_h * self.profiles[Tier.T0].avg_mw / 1000 * 3.7
+        tier0_needed_mah = mah_for_power(self.profiles[Tier.T0].avg_mw, remaining_target_h)
 
         return (projected_mah + tier0_needed_mah) <= self.usable_mah
 
@@ -174,10 +190,10 @@ class PowerBudgetManager:
             return False
 
         projected_mah = self.get_consumed_mah()
-        projected_mah += duration_h * self.profiles[Tier.T2].avg_mw / 1000 * 3.7
+        projected_mah += mah_for_power(self.profiles[Tier.T2].avg_mw, duration_h)
 
         remaining_target_h = self.target_lifetime_h - self._get_total_elapsed_h()
-        tier0_needed_mah = remaining_target_h * self.profiles[Tier.T0].avg_mw / 1000 * 3.7
+        tier0_needed_mah = mah_for_power(self.profiles[Tier.T0].avg_mw, remaining_target_h)
 
         return (projected_mah + tier0_needed_mah) <= self.usable_mah
 

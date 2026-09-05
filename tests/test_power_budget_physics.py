@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from synapse24.acquisition.power_budget import NOMINAL_VOLTAGE_V, PowerBudgetManager
+from synapse24.signal_quality import Tier
 
 
 def _isolated_manager(**kwargs) -> PowerBudgetManager:
@@ -28,7 +29,7 @@ class TestPowerBudgetPhysics:
     """mAh conversion must follow mAh = mWh / V."""
 
     def test_nominal_voltage_constant(self):
-        assert NOMINAL_VOLTAGE_V == pytest.approx(3.7)
+        assert pytest.approx(3.7) == NOMINAL_VOLTAGE_V
 
     def test_24h_tier0_endurance_math(self):
         """5mW x 24h = 120mWh / 3.7V = ~32.43mAh consumed."""
@@ -53,11 +54,7 @@ class TestPowerBudgetPhysics:
         """Full usable 2700mAh at 5mW -> 2700*3.7/5 = 1998h."""
         mgr = _isolated_manager(hub_battery_mah=3000, reserve_mah=300)
         # Force Tier 0 current draw.
-        mgr._current_tier = mgr.profiles.keys().__iter__().__next__()  # Tier.T0
-        from synapse24.signal_quality import Tier
-
-        mgr._current_tier = Tier.T0
-        mgr._tier0_start = None  # noqa: SLF001
+        mgr._current_tier = Tier.T0  # noqa: SLF001
         expected_h = 2700.0 * NOMINAL_VOLTAGE_V / 5.0
         assert expected_h == pytest.approx(1998.0, abs=1.0)
         assert mgr.get_estimated_remaining_h() == pytest.approx(expected_h, rel=0.05)
