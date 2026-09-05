@@ -246,6 +246,16 @@ XDF_BOUNDARY_SIGNATURE = bytes(
 XDF_FILEHEADER_XML = b"<info><version>1.0</version></info>"
 
 
+def _channel_format_from_xml(xml: str) -> str:
+    """Extract <channel_format> from an LSL StreamInfo XML document."""
+    import re
+
+    match = re.search(r"<channel_format>(.*?)</channel_format>", xml)
+    if match:
+        return match.group(1).strip() or "float32"
+    return "float32"
+
+
 def _write_varlen_int(f: IO[bytes] | bytearray, value: int) -> None:
     """Write an XDF variable-length integer (1/4/8-byte selector + value).
 
@@ -328,18 +338,27 @@ def write_xdf(  # noqa: PLR0915
                 # Allow equal timestamps for irregular streams, but warn
                 pass
 
-            # Extract StreamConfig
+            # Extract StreamConfig. A StreamInfo carries its full header
+            # (channel_format, labels, units, tier/device metadata) only in
+            # its XML: re-deriving a bare config from scalar accessors drops
+            # channel_format, so string streams (Markers/Metadata) were
+            # re-emitted as float32 headers while the payload stayed strings.
+            # pyxdf then consumed the wrong byte count per sample and silently
+            # dropped every stream after the corrupted one.
+            header_xml_override: bytes | None = None
             if isinstance(info, StreamConfig):
                 config = info
             elif isinstance(info, StreamInfo):
-                # Extract from StreamInfo (limited)
+                original_xml = info.as_xml()
                 config = StreamConfig(
                     name=info.name(),
                     stream_type=info.type(),
                     channel_count=info.channel_count(),
                     sampling_rate=info.nominal_srate(),
+                    channel_format=_channel_format_from_xml(original_xml),
                     source_id=info.source_id(),
                 )
+                header_xml_override = original_xml.encode("utf-8")
             elif isinstance(info, dict):
                 dict_type = info.get("type", "Other")
                 dict_format = info.get(
@@ -367,9 +386,14 @@ def write_xdf(  # noqa: PLR0915
                     f"Channel count mismatch: config={config.channel_count}, data={n_channels}"
                 )
 
-            # STREAMHEADER chunk (XML)
-            stream_info = create_stream_info(config)
-            xml_bytes = stream_info.as_xml().encode("utf-8")
+            # STREAMHEADER chunk (XML). Prefer the original StreamInfo XML
+            # when available: it preserves channel labels, units and
+            # tier/device metadata that scalar re-derivation would drop.
+            if header_xml_override is not None:
+                xml_bytes = header_xml_override
+            else:
+                stream_info = create_stream_info(config)
+                xml_bytes = stream_info.as_xml().encode("utf-8")
             _write_xdf_chunk(f, XDF_CHUNK_TAGS["STREAMHEADER"], xml_bytes, stream_id)
 
             # SAMPLES chunk(s), one per block. XDF 1.0 layout per sample:
