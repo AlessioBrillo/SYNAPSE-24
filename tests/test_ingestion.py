@@ -616,9 +616,32 @@ class TestXDFUtils:
         assert info.channel_count() == 1
         assert info.nominal_srate() == 250
 
-    @pytest.mark.skip(reason="XDF writing not implemented in pyxdf; requires LabRecorder")
-    def test_write_xdf_roundtrip(self):
-        """Test XDF write and read roundtrip (skipped - write not available)."""
+    def test_write_xdf_roundtrip(self, tmp_path):
+        """Writer output must round-trip through pyxdf with zero sample loss."""
+        import numpy as np
+
+        from synapse24.utils import verify_xdf_roundtrip
+
+        rng = np.random.default_rng(42)
+        streams = [
+            {
+                "name": "SYNAPSE_ECG",
+                "type": "ECG",
+                "data": rng.standard_normal((700, 1)),
+                "timestamps": np.arange(700, dtype=np.float64) / 700.0,
+                "sampling_rate": 700.0,
+            },
+            {
+                "name": "SYNAPSE_Markers",
+                "type": "Markers",
+                "data": np.array([["baseline"], ["stress"]], dtype=object),
+                "timestamps": np.array([0.0, 0.5], dtype=np.float64),
+                "sampling_rate": 0.0,
+            },
+        ]
+        result = verify_xdf_roundtrip(streams, tmp_path / "roundtrip.xdf")
+        assert result["all_streams_valid"]
+        assert result["total_dropped"] == 0
 
     def test_generate_synthetic_timestamps(self):
         """Test timestamp generation."""

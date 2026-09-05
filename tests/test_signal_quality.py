@@ -959,9 +959,29 @@ class TestWriteXDF:
 class TestValidateXDF:
     """Tests for validate_xdf function."""
 
-    def test_validate_xdf_valid_file(self):
-        """Test validating a valid XDF file - skip for now as XDF writer needs refinement."""
-        pytest.skip("XDF writer validation needs format refinement")
+    def test_validate_xdf_valid_file(self, tmp_path):
+        """Writer output must pass pyxdf-backed validation (XDF 1.0 contract)."""
+        from synapse24.utils import create_stream_info_from_dict, validate_xdf, write_xdf
+
+        data = np.random.randn(200, 2).astype(np.float64)
+        timestamps = np.arange(200, dtype=np.float64) / 100.0
+        info = create_stream_info_from_dict(
+            {
+                "name": "TEST_ECG",
+                "type": "ECG",
+                "channel_count": 2,
+                "sampling_rate": 100,
+                "channel_names": ["ECG1", "ECG2"],
+                "channel_units": ["µV", "µV"],
+            }
+        )
+        xdf_path = tmp_path / "valid.xdf"
+        write_xdf(xdf_path, [{"info": info, "data": data, "timestamps": timestamps}])
+
+        summary = validate_xdf(xdf_path)
+        assert summary["validation"]["all_streams_valid"]
+        assert summary["n_streams"] == 1
+        assert summary["streams"][0]["n_samples"] == 200
 
     def test_validate_xdf_missing_file(self, tmp_path):
         """Test validate_xdf raises on missing file."""
