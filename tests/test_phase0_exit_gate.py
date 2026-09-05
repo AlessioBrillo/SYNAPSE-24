@@ -362,7 +362,8 @@ class TestBaselineDatasetAlias:
 
         script = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
         spec = importlib.util.spec_from_file_location("validate_baseline", script)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -386,7 +387,7 @@ class TestBaselineDatasetAlias:
     def test_unknown_dataset_raises(self):
         """Unknown dataset names raise ValueError (fail fast, no silent empty run)."""
         module = self._load_script()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Unknown dataset"):
             module.resolve_baseline_datasets("eeg_only")
 
 
@@ -399,7 +400,8 @@ class TestBaselineReportSchemaValidator:
 
         script = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
         spec = importlib.util.spec_from_file_location("validate_baseline_schema", script)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -432,14 +434,14 @@ class TestBaselineReportSchemaValidator:
         module = self._load_script()
         report = self._valid_report()
         del report["schema_version"]
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="missing required key"):
             module.validate_baseline_report_schema(report)
 
     def test_wrong_schema_version_fails(self):
         module = self._load_script()
         report = self._valid_report()
         report["schema_version"] = "0.9"
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="schema_version"):
             module.validate_baseline_report_schema(report)
 
     def test_wesad_without_per_fold_scores_fails(self):
@@ -447,7 +449,7 @@ class TestBaselineReportSchemaValidator:
         module = self._load_script()
         report = self._valid_report()
         del report["datasets"]["wesad"]["per_fold_scores"]
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="per_fold_scores"):
             module.validate_baseline_report_schema(report)
 
 
@@ -567,7 +569,7 @@ class TestPhase0EdgeGate:
     def test_unknown_profile_raises(self):
         from synapse24.edge_ai.deployment import check_phase0_exit_gate
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Unknown exit-gate profile"):
             check_phase0_exit_gate(
                 model_size_kb=10.0,
                 estimated_ram_kb=10.0,

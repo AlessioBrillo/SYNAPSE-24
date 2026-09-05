@@ -160,6 +160,90 @@ def deploy_model(
     )
 
 
+PHASE0_EXIT_GATE: dict[str, dict[str, float]] = {
+    "triage": {
+        "max_model_kb": 128.0,
+        "max_ram_kb": 128.0,
+        "max_latency_ms": 50.0,
+        "max_accuracy_drop_pp": 3.0,
+    },
+    "hub_fusion": {
+        "max_model_kb": 250.0,
+        "max_ram_kb": 400.0,
+        "max_latency_ms": 500.0,
+        "max_accuracy_drop_pp": 3.0,
+    },
+}
+"""Phase 0 exit-gate envelopes (Architecture.md §49, Roadmap.md §4).
+
+Two profiles because the decoupled architecture runs two different models:
+- ``triage``: always-on Tier-0 detector on ESP32-S3 (strict: must fit a
+  small TFLM arena and answer in real time).
+- ``hub_fusion``: WESAD fusion classifier on the Pi hub (larger envelope).
+
+The 24 KB ultra-target from the triage literature is an SNN research spike,
+not the exit gate for ANN baselines — gating ANN work on SNN numbers would
+block Phase 1 on the wrong metric. The gate tightens once triage moves to SNN.
+"""
+
+
+def check_phase0_exit_gate(
+    model_size_kb: float,
+    estimated_ram_kb: float,
+    estimated_latency_ms: float,
+    accuracy_drop_percent: float,
+    ops_used: list[str],
+    profile: str = "triage",
+) -> dict[str, Any]:
+    """Check int8 deployment metrics against the Phase 0 exit-gate envelope.
+
+    Args:
+        model_size_kb: TFLite flatbuffer size.
+        estimated_ram_kb: TFLM arena + buffer estimate.
+        estimated_latency_ms: On-target inference estimate.
+        accuracy_drop_percent: float32 -> int8 accuracy delta in pp.
+        ops_used: TFLite ops in the converted model (recorded, not gated).
+        profile: ``triage`` (ESP32-S3) or ``hub_fusion`` (Pi hub).
+
+    Returns:
+        Dict with ``profile``, ``passed``, ``failures`` and ``limits``.
+
+    Raises:
+        ValueError: Unknown profile.
+    """
+    if profile not in PHASE0_EXIT_GATE:
+        valid = sorted(PHASE0_EXIT_GATE)
+        raise ValueError(f"Unknown exit-gate profile '{profile}'. Valid: {valid}")
+
+    limits = PHASE0_EXIT_GATE[profile]
+    failures: list[str] = []
+    if model_size_kb > limits["max_model_kb"]:
+        failures.append(
+            f"Model size {model_size_kb:.1f} KB exceeds {limits['max_model_kb']:.0f} KB"
+        )
+    if estimated_ram_kb > limits["max_ram_kb"]:
+        failures.append(
+            f"Estimated RAM {estimated_ram_kb:.1f} KB exceeds {limits['max_ram_kb']:.0f} KB"
+        )
+    if estimated_latency_ms > limits["max_latency_ms"]:
+        failures.append(
+            f"Latency {estimated_latency_ms:.1f} ms exceeds {limits['max_latency_ms']:.0f} ms"
+        )
+    if accuracy_drop_percent > limits["max_accuracy_drop_pp"]:
+        failures.append(
+            f"Accuracy drop {accuracy_drop_percent:.2f}pp exceeds "
+            f"{limits['max_accuracy_drop_pp']:.0f}pp — redo quantization"
+        )
+
+    return {
+        "profile": profile,
+        "passed": not failures,
+        "failures": failures,
+        "limits": dict(limits),
+        "ops_used": list(ops_used),
+    }
+
+
 def _generate_cmake(
     edge_model: EdgeModel,
     quantization_result: QuantizationResult,
