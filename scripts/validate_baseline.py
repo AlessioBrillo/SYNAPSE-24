@@ -5,6 +5,12 @@ Reproduces:
 1. WESAD 3-class stress classification (ECG+EDA+ACC) - target ≥80% accuracy
 2. MIT-BIH R-peak detection - target Se ≥99.6%, PPV ≥99.6%
 3. Sleep-EDF sleep staging - target Cohen's κ ≥0.75 vs. gold standard
+
+Architecture Decision (Principal Architect):
+- Deterministic seeding: np.random.seed(42), RandomForest(random_state=42)
+- Subject-grouped CV for WESAD (no subject leakage across folds)
+- Per-fold scores reported in baseline_report.json
+- RMSSD MAE target: <5 ms (full set), <2 ms on clean records
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import cohen_kappa_score
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import GroupKFold, StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -24,13 +30,18 @@ from synapse24.ingestion import Tier, ingest_mitbih, ingest_sleep_edf, ingest_we
 from synapse24.signal_quality import validate_sleep_staging_against_gold
 from synapse24.utils import validate_xdf
 
+# Global deterministic seed for Phase 0 exit gate reproducibility
+SEED = 42
+np.random.seed(SEED)
+
 
 def extract_wesad_features(
     subject_result: dict,
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, str] | None:
     """Extract features and labels for stress classification from WESAD subject.
 
     Uses segments: baseline (1) vs stress (2) vs amusement (3) for 3-class.
+    Returns (features, labels, subject_id) for subject-grouped CV.
     """
     segments = subject_result.get("segments", {})
 
@@ -68,7 +79,8 @@ def extract_wesad_features(
         features_list.append(feat)
         labels_list.append(label_id)
 
-    return np.array(features_list), np.array(labels_list)
+    subject_id = subject_result.get("subject_id", "unknown")
+    return np.array(features_list), np.array(labels_list), subject_id
 
 
 def validate_wesad_stress_classification(
@@ -78,41 +90,49 @@ def validate_wesad_stress_classification(
     """Validate WESAD 3-class stress classification.
 
     Target: ≥80% accuracy (published benchmark: 80% for 3-class, 93% for binary)
+    Uses subject-grouped GroupKFold to prevent data leakage.
     """
     all_features = []
     all_labels = []
+    all_groups = []
 
     for result in results:
         extracted = extract_wesad_features(result)
         if extracted is not None:
-            feats, labels = extracted
+            feats, labels, subject_id = extracted
             all_features.append(feats)
             all_labels.append(labels)
+            all_groups.extend([subject_id] * len(labels))
 
     if not all_features:
-        return {"accuracy": 0.0, "error": "No valid segments"}
+        return {"accuracy": 0.0, "error": "No valid segments", "per_fold_scores": []}
 
     X = np.vstack(all_features)
     y = np.hstack(all_labels)
+    groups = np.array(all_groups)
 
     # Remove any NaN/inf
     mask = np.all(np.isfinite(X), axis=1)
     X = X[mask]
     y = y[mask]
+    groups = groups[mask]
 
     if len(np.unique(y)) < 3:
-        return {"accuracy": 0.0, "error": "Less than 3 classes present"}
+        return {"accuracy": 0.0, "error": "Less than 3 classes present", "per_fold_scores": []}
 
-    # Random Forest with CV
+    # Random Forest with subject-grouped CV (GroupKFold - no subject leakage)
     pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)),
+            ("clf", RandomForestClassifier(n_estimators=200, random_state=SEED, n_jobs=-1)),
         ]
     )
 
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    scores = cross_val_score(pipeline, X, y, cv=cv, scoring="accuracy", n_jobs=-1)
+    # GroupKFold: each fold holds out entire subjects
+    n_subjects = len(np.unique(groups))
+    effective_splits = min(n_splits, n_subjects)
+    cv = GroupKFold(n_splits=effective_splits)
+    scores = cross_val_score(pipeline, X, y, groups=groups, cv=cv, scoring="accuracy", n_jobs=-1)
 
     return {
         "accuracy": float(np.mean(scores)),
@@ -120,8 +140,11 @@ def validate_wesad_stress_classification(
         "min": float(np.min(scores)),
         "max": float(np.max(scores)),
         "n_samples": len(X),
+        "n_subjects": n_subjects,
         "n_classes": len(np.unique(y)),
+        "n_splits": effective_splits,
         "target_met": np.mean(scores) >= 0.80,
+        "per_fold_scores": [float(s) for s in scores],
     }
 
 
@@ -131,10 +154,12 @@ def validate_mitbih_rpeak_detection(
     """Validate MIT-BIH R-peak detection against published baselines.
 
     Target: Sensitivity ≥99.6%, PPV ≥99.6% (standard benchmark)
+    RMSSD MAE: <5 ms (full set), <2 ms on clean records
     """
     sensitivities = []
     ppvs = []
     maes = []
+    clean_maes = []
 
     for result in results:
         sens = result.get("r_peak_sensitivity", 0)
@@ -147,9 +172,12 @@ def validate_mitbih_rpeak_detection(
             ppvs.append(ppv)
         if mae > 0:
             maes.append(mae)
+            # Clean records: MAE < 10ms typically indicates good quality
+            if mae < 10:
+                clean_maes.append(mae)
 
     if not sensitivities:
-        return {"error": "No valid results"}
+        return {"error": "No valid results", "per_fold_scores": []}
 
     return {
         "mean_sensitivity": float(np.mean(sensitivities)),
@@ -160,9 +188,15 @@ def validate_mitbih_rpeak_detection(
         "min_ppv": float(np.min(ppvs)),
         "mean_rmssd_mae_ms": float(np.mean(maes)),
         "std_rmssd_mae_ms": float(np.std(maes)),
+        "mean_rmssd_mae_clean_ms": float(np.mean(clean_maes))
+        if clean_maes
+        else float(np.mean(maes)),
         "target_sensitivity_met": np.mean(sensitivities) >= 0.996,
         "target_ppv_met": np.mean(ppvs) >= 0.996,
+        "target_rmssd_mae_met": np.mean(maes) < 5.0,
+        "target_rmssd_mae_clean_met": np.mean(clean_maes) < 2.0 if clean_maes else False,
         "n_records": len(sensitivities),
+        "n_clean_records": len(clean_maes),
     }
 
 
@@ -311,7 +345,42 @@ def validate_sleep_edf_sleep_staging(
     }
 
 
-def main():
+def run_xdf_validation_summary(output_dir: Path) -> dict:
+    """Run XDF validation on all generated XDF files and return summary."""
+    xdf_files = list(output_dir.glob("*.xdf"))
+    summary = {
+        "files_validated": 0,
+        "files_failed": 0,
+        "details": [],
+    }
+
+    for xdf_path in xdf_files:
+        try:
+            xdf_summary = validate_xdf(xdf_path)
+            summary["files_validated"] += 1
+            summary["details"].append(
+                {
+                    "file": xdf_path.name,
+                    "valid": xdf_summary["validation"]["all_streams_valid"],
+                    "streams": len(xdf_summary["streams"]),
+                    "duration_s": xdf_summary.get("duration_s", 0),
+                }
+            )
+        except Exception as e:
+            summary["files_failed"] += 1
+            summary["details"].append(
+                {
+                    "file": xdf_path.name,
+                    "valid": False,
+                    "error": str(e),
+                }
+            )
+
+    return summary
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Validate against published baselines")
@@ -344,9 +413,14 @@ def main():
         action="store_true",
         help="Read validation data from cached XDF/JSON files instead of re-ingesting",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    tier = Tier(args.tier)
+
+def _run_dataset_validation(
+    args: argparse.Namespace,
+    tier: Tier,
+) -> dict:
+    """Run validation for specified datasets."""
     all_results = {}
 
     if args.dataset in ("wesad", "all"):
@@ -358,8 +432,7 @@ def main():
                 output_dir=args.output_dir,
                 tier=tier,
             )
-        wesad_metrics = validate_wesad_stress_classification(wesad_results)
-        all_results["wesad"] = wesad_metrics
+        all_results["wesad"] = validate_wesad_stress_classification(wesad_results)
 
     if args.dataset in ("mitbih", "all"):
         if args.use_cache:
@@ -370,8 +443,7 @@ def main():
                 output_dir=args.output_dir,
                 tier=tier,
             )
-        mitbih_metrics = validate_mitbih_rpeak_detection(mitbih_results)
-        all_results["mitbih"] = mitbih_metrics
+        all_results["mitbih"] = validate_mitbih_rpeak_detection(mitbih_results)
 
     if args.dataset in ("sleep_edf", "all"):
         if args.use_cache:
@@ -382,23 +454,101 @@ def main():
                 output_dir=args.output_dir,
                 tier=tier,
             )
-        sleep_edf_metrics = validate_sleep_edf_sleep_staging(sleep_edf_results, args.data_dir)
-        all_results["sleep_edf"] = sleep_edf_metrics
+        all_results["sleep_edf"] = validate_sleep_edf_sleep_staging(sleep_edf_results, args.data_dir)
 
-    # Save validation results
-    output_path = args.output_dir / "baseline_validation.json"
+    return all_results
+
+
+def _build_baseline_report(all_results: dict, xdf_summary: dict) -> dict:
+    """Build the comprehensive baseline report."""
+    return {
+        "seed": SEED,
+        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "datasets": all_results,
+        "xdf_validation": xdf_summary,
+        "schema_version": "1.0",
+    }
+
+
+def _save_reports(
+    all_results: dict,
+    baseline_report: dict,
+    output_dir: Path,
+) -> Path:
+    """Save validation results and baseline report to disk."""
+    output_path = output_dir / "baseline_validation.json"
     with open(output_path, "w") as f:
         json.dump(all_results, f, indent=2, default=str)
 
-    # Overall pass/fail
+    report_path = output_dir / "baseline_report.json"
+    with open(report_path, "w") as f:
+        json.dump(baseline_report, f, indent=2, default=str)
+
+    return report_path
+
+
+def _print_report(
+    all_results: dict,
+    xdf_summary: dict,
+    report_path: Path,
+) -> bool:
+    """Print validation report and return overall pass/fail."""
+    print(f"\n{'=' * 60}")
+    print("BASELINE VALIDATION REPORT")
+    print(f"{'=' * 60}")
+    print(f"Seed: {SEED}")
+    print(f"Report saved to: {report_path}")
+    print(
+        f"XDF files validated: {xdf_summary['files_validated']}, failed: {xdf_summary['files_failed']}"
+    )
+
     overall_pass = True
     if "wesad" in all_results:
-        overall_pass &= all_results["wesad"].get("target_met", False)
+        w = all_results["wesad"]
+        print(
+            f"WESAD 3-class: {w.get('accuracy', 0):.3f} (target ≥0.80) {'✅' if w.get('target_met') else '❌'}"
+        )
+        overall_pass &= w.get("target_met", False)
+
     if "mitbih" in all_results:
-        overall_pass &= all_results["mitbih"].get("target_sensitivity_met", False)
-        overall_pass &= all_results["mitbih"].get("target_ppv_met", False)
+        m = all_results["mitbih"]
+        print(
+            f"MIT-BIH Se: {m.get('mean_sensitivity', 0):.4f} (target ≥0.996) {'✅' if m.get('target_sensitivity_met') else '❌'}"
+        )
+        print(
+            f"MIT-BIH PPV: {m.get('mean_ppv', 0):.4f} (target ≥0.996) {'✅' if m.get('target_ppv_met') else '❌'}"
+        )
+        print(
+            f"MIT-BIH RMSSD MAE: {m.get('mean_rmssd_mae_ms', 0):.2f}ms (target <5ms) {'✅' if m.get('target_rmssd_mae_met') else '❌'}"
+        )
+        print(
+            f"MIT-BIH RMSSD MAE (clean): {m.get('mean_rmssd_mae_clean_ms', 0):.2f}ms (target <2ms) {'✅' if m.get('target_rmssd_mae_clean_met') else '❌'}"
+        )
+        overall_pass &= m.get("target_sensitivity_met", False)
+        overall_pass &= m.get("target_ppv_met", False)
+        overall_pass &= m.get("target_rmssd_mae_met", False)
+
     if "sleep_edf" in all_results:
-        overall_pass &= all_results["sleep_edf"].get("target_met", False)
+        s = all_results["sleep_edf"]
+        print(
+            f"Sleep-EDF κ: {s.get('mean_cohen_kappa', 0):.3f} (target ≥0.75) {'✅' if s.get('target_met') else '❌'}"
+        )
+        overall_pass &= s.get("target_met", False)
+
+    print(f"\nOverall: {'PASS ✅' if overall_pass else 'FAIL ❌'}")
+    return overall_pass
+
+
+def main() -> int:
+    """Main entry point for baseline validation."""
+    args = _parse_args()
+    tier = Tier(args.tier)
+
+    all_results = _run_dataset_validation(args, tier)
+    xdf_summary = run_xdf_validation_summary(args.output_dir)
+    baseline_report = _build_baseline_report(all_results, xdf_summary)
+    report_path = _save_reports(all_results, baseline_report, args.output_dir)
+    overall_pass = _print_report(all_results, xdf_summary, report_path)
 
     return 0 if overall_pass else 1
 
@@ -411,9 +561,8 @@ def load_cached_results(output_dir: Path, dataset: str) -> list[dict]:
         # MIT-BIH files are named like 100_quality.json
         pattern = "*_quality.json"
         for json_file in output_dir.glob(pattern):
-            # Skip non-MITBIH files (WESAD uses S2, S3, etc. and Sleep-EDF uses different naming)
             name = json_file.stem.replace("_quality", "")
-            if name.isdigit() or name.startswith("2"):  # MIT-BIH records are 100-234
+            if name.isdigit() or name.startswith("2"):
                 try:
                     with open(json_file) as f:
                         data = json.load(f)
@@ -426,7 +575,6 @@ def load_cached_results(output_dir: Path, dataset: str) -> list[dict]:
                 except Exception as e:
                     print(f"Warning: Failed to load {json_file}: {e}")
     elif dataset == "wesad":
-        # WESAD files are named like S2_quality.json, S3_quality.json
         for json_file in output_dir.glob("S*_quality.json"):
             try:
                 with open(json_file) as f:
@@ -435,7 +583,6 @@ def load_cached_results(output_dir: Path, dataset: str) -> list[dict]:
             except Exception as e:
                 print(f"Warning: Failed to load {json_file}: {e}")
     elif dataset == "sleep_edf":
-        # Sleep-EDF files would have subject IDs
         for json_file in output_dir.glob("*sleep*quality.json"):
             try:
                 with open(json_file) as f:
