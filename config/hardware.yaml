@@ -21,7 +21,7 @@ pods:
     tier: 1
     channels: 16
     sampling_rate: 500
-    ble_address: "AA:BB:CC:DD:EE:FF"
+    ble_address: "${SYNAPSE_HEAD_BLE}"
     placement: "frontal_parietal"
     electrode_type: "dry_gold_pin"
     is_hub: false
@@ -34,7 +34,7 @@ pods:
     tier: 0
     channels: 2
     sampling_rate: 250
-    ble_address: "11:22:33:44:55:66"
+    ble_address: "${SYNAPSE_INEAR_BLE}"
     placement: "in_ear"
     electrode_type: "dry_gold_pin"
     is_hub: false
@@ -55,6 +55,6 @@ pods:
       ecg: 500
       imu: 100
       temp: 1
-    ble_address: "AA:BB:CC:DD:EE:00"
+    ble_address: "${SYNAPSE_FOREARM_BLE}"
     placement: "forearm"
     is_hub: true

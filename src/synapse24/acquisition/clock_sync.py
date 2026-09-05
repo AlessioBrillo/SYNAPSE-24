@@ -27,6 +27,16 @@ from scipy.signal import correlate
 from synapse24.signal_quality import Tier
 
 
+def _default_clock() -> float:
+    """LSL clock domain (Guardian Principle 3), wall-time fallback for CI."""
+    try:
+        from pylsl import local_clock
+
+        return float(local_clock())
+    except Exception:
+        return float(time.time())
+
+
 @dataclass(frozen=True)
 class TierSyncBudget:
     """Per-tier synchronization budget.
@@ -123,8 +133,13 @@ class SyncMarkerManager:
     Each pod records local_clock() when marker arrives.
     """
 
-    def __init__(self, config: SyncConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: SyncConfig | None = None,
+        clock_fn: Callable[[], float] | None = None,
+    ) -> None:
         self.config = config if config is not None else SyncConfig()
+        self._clock: Callable[[], float] = clock_fn or _default_clock
         self._marker_stream = None
         self._sequence = 0
         self._last_broadcast = 0.0
@@ -143,7 +158,7 @@ class SyncMarkerManager:
     def broadcast_sync(self, hub_timestamp: float | None = None) -> SyncMarker:
         """Broadcast a SYNC marker to all subscribers."""
         if hub_timestamp is None:
-            hub_timestamp = time.time()
+            hub_timestamp = self._clock()
 
         marker = SyncMarker(
             sequence=self._sequence,
@@ -163,7 +178,7 @@ class SyncMarkerManager:
             for cb in callbacks:
                 try:
                     # Simulate pod receiving marker at its local clock
-                    pod_time = time.time()  # In real implementation, pod's local_clock()
+                    pod_time = self._clock()
                     cb(marker, pod_time)
                 except Exception:
                     pass
@@ -176,13 +191,13 @@ class SyncMarkerManager:
         """Check if it's time to broadcast a sync marker.
 
         Args:
-            current_time: Hub clock time (defaults to wall time).
+            current_time: Hub clock time (defaults to LSL clock domain).
             tier: If provided, use per-tier interval from TierSyncBudget
                 (T0=60s, T1/T2=10s per Architecture.md §92). If None,
                 fall back to legacy global sync_interval_s.
         """
         if current_time is None:
-            current_time = time.time()
+            current_time = self._clock()
         if tier is not None:
             _, interval_s = self.config.get_budget_for_tier(tier)
         else:
@@ -381,9 +396,13 @@ class MultiPodClockSync:
     - TimestampCorrector: Apply corrections to pod data
     """
 
-    def __init__(self, config: SyncConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: SyncConfig | None = None,
+        clock_fn: Callable[[], float] | None = None,
+    ) -> None:
         self.config = config if config is not None else SyncConfig()
-        self.marker_manager = SyncMarkerManager(self.config)
+        self.marker_manager = SyncMarkerManager(self.config, clock_fn=clock_fn)
         self.drift_estimator = ClockDriftEstimator(self.config)
         self.corrector = TimestampCorrector()
 
