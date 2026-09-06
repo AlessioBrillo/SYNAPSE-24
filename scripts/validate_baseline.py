@@ -220,6 +220,7 @@ def validate_wesad_stress_classification(
     all_features = []
     all_labels = []
     all_groups = []
+    contributing_surrogate: list[bool] = []
 
     use_windows = any(bool(r.get("fusion_windows")) for r in results)
     feature_source = "fusion_windows_60s" if use_windows else "segments_legacy"
@@ -232,6 +233,11 @@ def validate_wesad_stress_classification(
             all_features.append(feats)
             all_labels.append(labels)
             all_groups.extend([subject_id] * len(labels))
+            contributing_surrogate.append(bool(result.get("surrogate", False)))
+
+    # Surrogate provenance: True only when every contributing subject result
+    # is explicitly flagged surrogate — a mixed or real run never reports it.
+    all_surrogate = bool(contributing_surrogate) and all(contributing_surrogate)
 
     if not all_features:
         return {
@@ -239,6 +245,7 @@ def validate_wesad_stress_classification(
             "error": "No valid segments",
             "per_fold_scores": [],
             "feature_source": feature_source,
+            "surrogate": all_surrogate,
         }
 
     X = np.vstack(all_features)
@@ -257,6 +264,7 @@ def validate_wesad_stress_classification(
             "error": "Less than 3 classes present",
             "per_fold_scores": [],
             "feature_source": feature_source,
+            "surrogate": all_surrogate,
         }
 
     # Random Forest with subject-grouped CV (GroupKFold - no subject leakage)
@@ -285,6 +293,7 @@ def validate_wesad_stress_classification(
         "target_met": bool(np.mean(scores) >= 0.80),
         "per_fold_scores": [float(s) for s in scores],
         "feature_source": feature_source,
+        "surrogate": all_surrogate,
         "window_config": dict(FUSION_WINDOW_CONFIG) if use_windows else {},
     }
 
@@ -675,6 +684,7 @@ def _print_report(
         w = all_results["wesad"]
         print(
             f"WESAD 3-class: {w.get('accuracy', 0):.3f} (target >=0.80) [{_mark(w.get('target_met'))}]"
+            + (" [SURROGATE]" if w.get("surrogate") else " [REAL]")
         )
         overall_pass = overall_pass and bool(w.get("target_met", False))
 

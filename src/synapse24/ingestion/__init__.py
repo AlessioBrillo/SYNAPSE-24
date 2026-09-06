@@ -38,6 +38,12 @@ from .wesad import (
     resample_labels,
     segment_by_label,
 )
+from .wesad_surrogate import (
+    SURROGATE_SEED,
+    generate_surrogate_subject_results,
+    surrogate_fusion_windows,
+    write_surrogate_xdf,
+)
 
 __all__ = [
     "FUSION_WINDOW_CONFIG",
@@ -68,5 +74,9 @@ __all__ = [
     "resample_labels",
     "segment_by_label",
     "FusionWindow",
+    "SURROGATE_SEED",
     "Tier",
+    "generate_surrogate_subject_results",
+    "surrogate_fusion_windows",
+    "write_surrogate_xdf",
 ]

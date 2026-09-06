@@ -79,7 +79,8 @@ class TestSurrogateClosureGate:
 
         script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
         spec = importlib.util.spec_from_file_location("validate_baseline", script_path)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
@@ -98,7 +99,8 @@ class TestSurrogateClosureGate:
 
         script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
         spec = importlib.util.spec_from_file_location("validate_baseline_sf", script_path)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
@@ -112,17 +114,20 @@ class TestSurrogateXdfProof:
 
     def test_surrogate_xdf_zero_drop(self, tmp_path: Path) -> None:
         assert _SURROGATE_IMPORTABLE
-        import numpy as np
-
         from synapse24.ingestion.wesad_surrogate import write_surrogate_xdf
-        from synapse24.utils import validate_xdf, verify_xdf_roundtrip
+        from synapse24.utils import validate_xdf
 
         out = tmp_path / "S2_wesad_surrogate.xdf"
         write_surrogate_xdf(out, subject_id="S2", seed=SURROGATE_SEED)
         assert out.read_bytes()[:4] == b"XDF:"
         summary = validate_xdf(out)
         assert summary["validation"]["all_streams_valid"]
-        assert verify_xdf_roundtrip(out)["total_dropped"] == 0
+        # ECG 1000 + PPG 640 + ACC 320 samples must all survive the write.
+        recovered = {s["name"]: int(s["n_samples"]) for s in summary["streams"]}
+        assert sum("SURROGATE" in name for name in recovered) == 3
+        assert recovered["SYNAPSE_ECG_SURROGATE_S2"] == 1000
+        assert recovered["SYNAPSE_PPG_SURROGATE_S2"] == 640
+        assert recovered["SYNAPSE_ACC_SURROGATE_S2"] == 320
 
 
 @pytest.mark.baseline
@@ -137,7 +142,8 @@ class TestRealWesadClosure:
 
         script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
         spec = importlib.util.spec_from_file_location("validate_baseline_real", script_path)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
