@@ -40,7 +40,7 @@ def _fast_detector() -> ImmobilityDetector:
 def _rich_budget() -> PowerBudgetManager:
     """Power budget that can always afford Tier 1 (isolates the motion gate)."""
     return PowerBudgetManager(
-        hub_capacity_mah=10000.0,
+        hub_battery_mah=10000.0,
         target_lifetime_h=24.0,
     )
 
@@ -163,7 +163,10 @@ class TestFusionWindowQualityQuarantine:
         from synapse24.ingestion.wesad import filter_fusion_windows_by_quality
 
         windows = [
-            {"label_name": "baseline", "ppg_quality": {"ppg_sqi": 0.85, "motion_artifact_prob": 0.1}},
+            {
+                "label_name": "baseline",
+                "ppg_quality": {"ppg_sqi": 0.85, "motion_artifact_prob": 0.1},
+            },
             {"label_name": "stress", "ppg_quality": {"ppg_sqi": 0.2, "motion_artifact_prob": 0.9}},
             {"label_name": "amusement"},  # unmeasured -> fail-open, kept
         ]
@@ -188,6 +191,71 @@ class TestFusionWindowQualityQuarantine:
             assert quarantine["n_rejected_high_map"] == 0
 
 
+class TestExtractionTimeGate:
+    """Opt-in extraction gate measures per-window quality (never guesses)."""
+
+    @staticmethod
+    def _synthetic_chest_wrist(n_seconds: int = 65, seed: int = 11, noisy_bvp: bool = False):
+        from synapse24.ingestion.wesad import extract_native_rate_fusion_windows
+
+        rng = np.random.default_rng(seed)
+        fs_chest, fs_bvp, fs_acc = 700, 64, 32
+        n_chest = n_seconds * fs_chest
+        labels = np.full(n_chest, 1, dtype=np.int64)
+        chest = {
+            "ecg": rng.standard_normal(n_chest),
+            "eda": rng.standard_normal(n_chest),
+            "acc_x": rng.standard_normal(n_chest),
+            "acc_y": rng.standard_normal(n_chest),
+            "acc_z": rng.standard_normal(n_chest),
+            "labels": labels,
+        }
+        t = np.arange(n_seconds * fs_bvp, dtype=np.float64) / fs_bvp
+        if noisy_bvp:
+            bvp = rng.standard_normal(n_seconds * fs_bvp)
+        else:
+            bvp = 2.0 + np.sin(2.0 * np.pi * 1.2 * t)
+        wrist = {
+            "bvp": bvp,
+            "eda": np.full(n_seconds * 4, 1.5),
+            "temp": np.full(n_seconds * 4, 36.0),
+            "acc_x": np.zeros(n_seconds * fs_acc),
+            "acc_y": np.zeros(n_seconds * fs_acc),
+            "acc_z": np.ones(n_seconds * fs_acc),
+        }
+        return chest, wrist, extract_native_rate_fusion_windows
+
+    def test_clean_bvp_window_kept_with_quality_attached(self) -> None:
+        chest, wrist, extract = self._synthetic_chest_wrist()
+        quarantine: dict[str, int] = {}
+        windows = extract(chest, wrist, min_ppg_sqi=0.5, max_map=0.5, quarantine=quarantine)
+
+        assert len(windows) == 1
+        assert windows[0].ppg_quality is not None
+        assert windows[0].ppg_quality["ppg_sqi"] >= 0.5
+        assert quarantine["n_kept"] == 1
+        assert quarantine["n_rejected_low_sqi"] == 0
+        assert quarantine["n_rejected_high_map"] == 0
+
+    def test_noisy_bvp_window_rejected_with_counts(self) -> None:
+        chest, wrist, extract = self._synthetic_chest_wrist(noisy_bvp=True)
+        quarantine: dict[str, int] = {}
+        windows = extract(chest, wrist, min_ppg_sqi=0.5, max_map=0.5, quarantine=quarantine)
+
+        assert len(windows) == 0
+        assert quarantine["n_kept"] == 0
+        assert (
+            quarantine.get("n_rejected_low_sqi", 0) + quarantine.get("n_rejected_high_map", 0)
+        ) >= 1
+
+    def test_gate_disabled_by_default_legacy_behavior(self) -> None:
+        chest, wrist, extract = self._synthetic_chest_wrist(noisy_bvp=True)
+        windows = extract(chest, wrist)
+
+        assert len(windows) == 1
+        assert windows[0].ppg_quality is None
+
+
 class TestLiveValidatorOverall:
     """Live PPG assessment reports a real overall verdict (no hardcoded False)."""
 
@@ -199,7 +267,8 @@ class TestLiveValidatorOverall:
         t = np.arange(fs * 30, dtype=np.float64) / fs
         clean = (np.sin(2.0 * np.pi * 1.2 * t) + 2.0).astype(np.float64)
         validator._ppg_red_buffer = list(clean)
-        validator._acc_mag_buffer = [1.0] * len(clean)
+        rng = np.random.default_rng(7)
+        validator._acc_mag_buffer = list(1.0 + 0.001 * rng.standard_normal(len(clean)))
         validator._assess_ppg_quality(1000.0)
 
         assert len(validator._quality_results) == 1

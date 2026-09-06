@@ -47,6 +47,22 @@ class TransitionEvent:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass
+class MotionGateConfig:
+    """Motion-quality gate for Tier 0 -> Tier 1 promotion.
+
+    Architecture.md §74: motion artifact is the dominant EEG/fNIRS failure
+    mode, so promotion must be gated on measured PPG quality, not just
+    immobility + power budget. Defaults match the Tier-0 literature
+    thresholds (QualityThresholds.for_tier(T0): Karlen et al. 2013 wearable
+    PPG SQI >= 0.5; MAP tolerance <= 0.5 for ambulatory context).
+    """
+
+    sqi_min: float = 0.5
+    map_max: float = 0.5
+    required_consecutive_clean: int = 2
+
+
 class TierStateMachine:
     """State machine for managing tiered acquisition.
 
@@ -225,6 +241,7 @@ class AcquisitionController:
         power_budget: PowerBudgetManager | None = None,
         pod_coordinator: SensorPodCoordinator | None = None,
         clock_fn: Callable[[], float] | None = None,
+        motion_gate: MotionGateConfig | None = None,
     ) -> None:
         self._clock: Callable[[], float] = clock_fn or _default_clock
         self.state_machine = TierStateMachine(
@@ -234,18 +251,88 @@ class AcquisitionController:
         self.night_scheduler = night_scheduler
         self.power_budget = power_budget
         self.pod_coordinator = pod_coordinator
+        self.motion_gate = motion_gate or MotionGateConfig()
 
         self._last_imu_update = 0.0
         self._last_night_check = 0.0
         self._night_check_interval = 60.0  # Check night window every minute
+
+        # Latest motion-quality assessment (None = unmeasured, fail-open).
+        self._latest_sqi: float | None = None
+        self._latest_map: float | None = None
+        self._consecutive_clean = 0
+        self._consecutive_contaminated = 0
 
     def _on_transition(self, event: TransitionEvent) -> None:
         """Handle tier transition - coordinate pods."""
         if self.pod_coordinator:
             self.pod_coordinator.on_tier_change(event)
 
-    def update_imu(self, accel_magnitude: float, timestamp: float | None = None) -> None:
-        """Update IMU-based immobility detection."""
+    def update_motion_quality(
+        self,
+        ppg_sqi: float | None,
+        motion_artifact_prob: float | None,
+        timestamp: float | None = None,
+    ) -> None:
+        """Feed a PPG motion-quality assessment into the promotion gate.
+
+        Architecture.md §74: promotion requires measured-clean signal.
+        A streak of required_consecutive_clean assessments arms promotion;
+        a streak of contaminated assessments while in Tier 1 demotes back
+        to Tier 0 (movement-demotion path). Missing values are fail-open
+        (unmeasured, counters untouched).
+        """
+        if ppg_sqi is None or motion_artifact_prob is None:
+            return
+
+        self._latest_sqi = ppg_sqi
+        self._latest_map = motion_artifact_prob
+
+        if self._is_motion_clean(ppg_sqi, motion_artifact_prob):
+            self._consecutive_clean += 1
+            self._consecutive_contaminated = 0
+        else:
+            self._consecutive_contaminated += 1
+            self._consecutive_clean = 0
+
+        if (
+            self.state_machine.is_tier1()
+            and self._consecutive_contaminated >= self.motion_gate.required_consecutive_clean
+        ):
+            self.state_machine.demote_to_tier0(
+                "movement_detected",
+                metadata={
+                    "sqi": ppg_sqi,
+                    "map": motion_artifact_prob,
+                    "consecutive_contaminated": self._consecutive_contaminated,
+                },
+            )
+            self._consecutive_contaminated = 0
+
+    def _is_motion_clean(self, sqi: float, map_score: float) -> bool:
+        """Check a single assessment against the motion gate thresholds."""
+        return sqi >= self.motion_gate.sqi_min and map_score <= self.motion_gate.map_max
+
+    def _motion_gate_armed(self) -> bool:
+        """True when no quality measured yet (fail-open) or streak is clean."""
+        if self._latest_sqi is None or self._latest_map is None:
+            return True
+        return self._consecutive_clean >= self.motion_gate.required_consecutive_clean
+
+    def update_imu(
+        self,
+        accel_magnitude: float,
+        timestamp: float | None = None,
+        *,
+        ppg_sqi: float | None = None,
+        motion_artifact_prob: float | None = None,
+    ) -> None:
+        """Update IMU-based immobility detection.
+
+        Optional ppg_sqi/motion_artifact_prob are assessed inline through
+        the motion gate (Architecture.md §74). When omitted, the legacy
+        immobility + power-budget path is preserved (fail-open).
+        """
         if self.immobility_detector is None:
             return
 
@@ -254,12 +341,22 @@ class AcquisitionController:
 
         self._last_imu_update = timestamp
 
+        if ppg_sqi is not None or motion_artifact_prob is not None:
+            self.update_motion_quality(ppg_sqi, motion_artifact_prob, timestamp)
+
         if self.immobility_detector.update(accel_magnitude, timestamp):
             if self.state_machine.is_tier0() and self.power_budget:
-                if self.power_budget.can_afford_tier1(duration_h=2):
-                    self.state_machine.promote_to_tier1("immobility_detected")
+                if self.power_budget.can_afford_tier1(duration_h=2) and self._motion_gate_armed():
+                    metadata = {}
+                    if self._latest_sqi is not None and self._latest_map is not None:
+                        metadata = {
+                            "sqi": self._latest_sqi,
+                            "map": self._latest_map,
+                            "consecutive_clean": self._consecutive_clean,
+                        }
+                    self.state_machine.promote_to_tier1("immobility_detected", metadata)
                 else:
-                    # Log power budget rejection
+                    # Log power budget / motion-gate rejection
                     pass
 
     def check_night_window(self, timestamp: float | None = None) -> None:
@@ -333,4 +430,13 @@ class AcquisitionController:
                 for e in self.state_machine.transition_history[-5:]
             ],
             "power_budget": self.power_budget.get_status() if self.power_budget else None,
+            "motion_gate": {
+                "sqi_min": self.motion_gate.sqi_min,
+                "map_max": self.motion_gate.map_max,
+                "required_consecutive_clean": self.motion_gate.required_consecutive_clean,
+                "latest_sqi": self._latest_sqi,
+                "latest_map": self._latest_map,
+                "consecutive_clean": self._consecutive_clean,
+                "armed": self._motion_gate_armed(),
+            },
         }

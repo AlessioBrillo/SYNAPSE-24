@@ -14,12 +14,14 @@ from .coordinator import SensorPodCoordinator
 from .immobility import ImmobilityDetector
 from .night_window import NightWindowScheduler
 from .power_budget import NOMINAL_VOLTAGE_V, PowerBudgetManager, hours_for_charge, mah_for_power
-from .state_machine import TierStateMachine, TierTransition
+from .state_machine import AcquisitionController, MotionGateConfig, TierStateMachine, TierTransition
 from .sync_marker_stream import SyncMarkerRecorder, SyncMarkerStream, SyncStreamConfig
 
 __all__ = [
     "TierStateMachine",
     "TierTransition",
+    "AcquisitionController",
+    "MotionGateConfig",
     "ImmobilityDetector",
     "NOMINAL_VOLTAGE_V",
     "PowerBudgetManager",
