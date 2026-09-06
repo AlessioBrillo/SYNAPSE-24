@@ -9,6 +9,14 @@ from .quantization import (
     quantize_model,
 )
 from .training import EdgeImpulseTrainer, TrainingConfig
+from .wesad_int8_closure import (
+    ClosureMatrix,
+    build_closure_matrix,
+    estimate_triage_footprint,
+    groupkfold_scores,
+    run_wesad_int8_closure,
+    simulate_int8_roundtrip,
+)
 
 __all__ = [
     "EdgeModel",
@@ -24,4 +32,10 @@ __all__ = [
     "deploy_model",
     "DeploymentConfig",
     "DeploymentResult",
+    "ClosureMatrix",
+    "build_closure_matrix",
+    "estimate_triage_footprint",
+    "groupkfold_scores",
+    "run_wesad_int8_closure",
+    "simulate_int8_roundtrip",
 ]

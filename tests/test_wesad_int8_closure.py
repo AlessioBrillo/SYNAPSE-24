@@ -44,7 +44,7 @@ class TestClosureMatrixContract:
 
         assert matrix.X.shape == (6 * 3 * 4, 11)
         assert matrix.y.shape == (72,)
-        assert set(int(v) for v in matrix.y) == {0, 1, 2}
+        assert {int(v) for v in matrix.y} == {0, 1, 2}
         assert len(matrix.groups) == 72
         assert len(set(matrix.groups)) == 6
         assert matrix.all_surrogate is True
