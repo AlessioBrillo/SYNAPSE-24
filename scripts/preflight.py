@@ -2,10 +2,10 @@
 """SYNAPSE-24 Preflight Quality Gate.
 
 Run before every push to catch errors early.
-Usage:
-    uv run preflight          # Full check
-    uv run preflight quick    # Format, lint, typecheck, unit tests only
-    uv run preflight diff     # Diff audit only
+Usage (from repo root):
+    uv run python scripts/preflight.py         # Full check
+    uv run python scripts/preflight.py quick  # Format, lint, typecheck, unit tests only
+    uv run python scripts/preflight.py diff   # Diff audit only
 """
 
 from __future__ import annotations
