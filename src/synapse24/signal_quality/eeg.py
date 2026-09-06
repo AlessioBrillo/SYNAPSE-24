@@ -154,7 +154,13 @@ def compute_yasa_sleep_staging(
 ) -> dict[str, Any]:
     """Run YASA sleep staging on EEG (+ optional EOG/EMG) and return hypnogram.
 
-    Uses MNE Raw object as required by YASA >= 0.7.
+    Uses MNE Raw object as required by YASA >= 0.7. A 0.3-45 Hz FIR bandpass is
+    applied first, following the standard YASA preprocessing used for the
+    Sleep-EDF benchmark (Vallat & Walker, 2021).
+
+    Auxiliary channels are included only when they share the EEG sampling rate
+    and length (an MNE Raw has a single sfreq; e.g. Sleep-EDF SC EMG at 1 Hz
+    is dropped while EOG at 100 Hz is kept).
 
     Args:
         eeg_signal: EEG signal (1D array, µV)
@@ -171,6 +177,7 @@ def compute_yasa_sleep_staging(
         - 'confidence': Per-epoch confidence scores
         - 'stages': Stage labels (strings)
         - 'sampling_rate': Hypnogram sampling rate (1/30 Hz = 30s epochs)
+        - 'aux_channels_used': Names of auxiliary channels actually staged with
     """
     try:
         import mne
@@ -180,41 +187,52 @@ def compute_yasa_sleep_staging(
             f"Required package not installed: {e}. Install with: pip install mne yasa"
         )
 
-    # Build MNE Raw object from numpy arrays
+    # Build MNE Raw object from numpy arrays. Auxiliaries join only on exact
+    # shape match: one Raw carries a single sfreq and vstack needs equal length.
+    eeg_signal = np.asarray(eeg_signal, dtype=np.float64).ravel()
     ch_names = [eeg_ch_name]
     ch_types = ["eeg"]
     data = [eeg_signal.reshape(1, -1)]
+    aux_channels_used: list[str] = []
 
-    if eog_signal is not None:
-        ch_names.append(eog_ch_name)
-        ch_types.append("eog")
-        data.append(eog_signal.reshape(1, -1))
-
-    if emg_signal is not None:
-        ch_names.append(emg_ch_name)
-        ch_types.append("emg")
-        data.append(emg_signal.reshape(1, -1))
+    for aux_signal, aux_name, aux_type in (
+        (eog_signal, eog_ch_name, "eog"),
+        (emg_signal, emg_ch_name, "emg"),
+    ):
+        if aux_signal is not None:
+            aux_arr = np.asarray(aux_signal, dtype=np.float64).ravel()
+            if aux_arr.shape == eeg_signal.shape:
+                ch_names.append(aux_name)
+                ch_types.append(aux_type)
+                data.append(aux_arr.reshape(1, -1))
+                aux_channels_used.append(aux_name)
 
     info = mne.create_info(ch_names=ch_names, sfreq=sampling_rate, ch_types=ch_types)
     raw = mne.io.RawArray(np.vstack(data), info, verbose=False)
+    raw.filter(l_freq=0.3, h_freq=min(45.0, sampling_rate / 2.0 - 1.0), verbose=False)
 
     # Run sleep staging
     sls = yasa.SleepStaging(
         raw,
         eeg_name=eeg_ch_name,
-        eog_name=eog_ch_name if eog_signal is not None else None,
-        emg_name=emg_ch_name if emg_signal is not None else None,
+        eog_name=eog_ch_name if eog_ch_name in aux_channels_used else None,
+        emg_name=emg_ch_name if emg_ch_name in aux_channels_used else None,
     )
     hypnogram_obj = sls.predict()
-    proba = sls.predict_proba()
+    try:
+        proba = hypnogram_obj.proba  # YASA >= 0.7 (predict_proba deprecated)
+    except AttributeError:
+        proba = sls.predict_proba()  # YASA < 0.7 fallback
 
     # Extract hypnogram and confidence
     hypnogram = hypnogram_obj.hypno  # pandas Series with stage strings
     confidence = proba.max(axis=1).values
 
-    # Map YASA string stages to integer codes (matching Sleep-EDF convention)
+    # Map YASA string stages to integer codes (matching Sleep-EDF convention).
+    # YASA >= 0.7 emits "WAKE" (older releases used "W").
     stage_map = {
         "W": 0,
+        "WAKE": 0,
         "N1": 1,
         "N2": 2,
         "N3": 3,
@@ -227,7 +245,43 @@ def compute_yasa_sleep_staging(
         "confidence": confidence,
         "stages": hypnogram.values,
         "sampling_rate": 1 / 30.0,  # 30-second epochs
+        "aux_channels_used": aux_channels_used,
     }
+
+
+# Native Sleep-EDF stage codes (PhysioNet sleep-edfx hypnograms) mapped onto
+# the YASA code space used by compute_yasa_sleep_staging / compute_yasa_kappa.
+# Native 3 + 4 both mean N3 (Rechtschaffen & Kales slow-wave stages merged in
+# AASM); native 5 is REM while YASA emits REM as 4. MOVE (6) and UNK (9) are
+# preserved so compute_yasa_kappa can exclude them from scoring.
+NATIVE_TO_YASA_STAGE: dict[int, int] = {
+    0: 0,  # W
+    1: 1,  # N1
+    2: 2,  # N2
+    3: 3,  # N3
+    4: 3,  # N3 (stage 4 folded into N3)
+    5: 4,  # REM
+    6: 6,  # MOVE (excluded from kappa)
+    9: 9,  # UNK (excluded from kappa)
+}
+
+
+def normalize_gold_hypnogram_to_yasa(
+    gold_hypnogram: npt.NDArray[np.int64],
+) -> npt.NDArray[np.int64]:
+    """Map native Sleep-EDF stage codes onto the YASA code space.
+
+    Unknown codes map to UNK (9) so they are excluded from kappa scoring
+    rather than silently shifting epoch alignment.
+
+    Args:
+        gold_hypnogram: Native Sleep-EDF codes per 30 s epoch.
+
+    Returns:
+        YASA-space codes per epoch (0=W, 1=N1, 2=N2, 3=N3, 4=REM, 6=MOVE, 9=UNK).
+    """
+    gold = np.asarray(gold_hypnogram, dtype=np.int64).ravel()
+    return np.array([NATIVE_TO_YASA_STAGE.get(int(code), 9) for code in gold], dtype=np.int64)
 
 
 def compute_yasa_kappa(
@@ -321,7 +375,11 @@ def validate_sleep_staging_against_gold(
     Args:
         eeg_signal: EEG signal (primary channel, e.g., Fpz-Cz)
         sampling_rate: Sampling rate in Hz
-        gold_hypnogram: Gold standard hypnogram (integer codes per 30s epoch)
+        gold_hypnogram: Gold standard hypnogram in NATIVE Sleep-EDF codes
+            per 30 s epoch (0=W, 1=N1, 2=N2, 3=N3, 4=N3, 5=REM, 6=MOVE,
+            9=UNK). Normalized to YASA space exactly once, inside this
+            function — callers must NOT pre-normalize (the map is not
+            idempotent: YASA REM=4 would fold into N3=3).
         gold_times: Timestamps for each gold hypnogram epoch (seconds from start)
         eog_signal: Optional EOG signal
         emg_signal: Optional EMG signal
@@ -329,6 +387,9 @@ def validate_sleep_staging_against_gold(
     Returns:
         Dictionary with YASA results, Cohen's kappa, and pass/fail against threshold
     """
+    # Normalize native Sleep-EDF codes (3+4=N3, 5=REM) to YASA space (3=N3, 4=REM).
+    gold_hypnogram = normalize_gold_hypnogram_to_yasa(np.asarray(gold_hypnogram))
+
     # Run YASA
     yasa_result = compute_yasa_sleep_staging(eeg_signal, sampling_rate, eog_signal, emg_signal)
 
