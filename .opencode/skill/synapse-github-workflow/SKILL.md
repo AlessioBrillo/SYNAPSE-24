@@ -115,13 +115,13 @@ Closes: #42
 **Run before every push**:
 ```bash
 # Full preflight (recommended)
-uv run preflight
+uv run python scripts/preflight.py
 
 # Quick: skip tests
-uv run preflight quick
+uv run python scripts/preflight.py quick
 
 # Diff audit only
-uv run preflight diff
+uv run python scripts/preflight.py diff
 ```
 
 ### Preflight Checks

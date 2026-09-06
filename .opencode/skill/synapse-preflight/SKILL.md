@@ -1,7 +1,7 @@
 ---
 name: synapse-preflight
 description: Local quality gate for SYNAPSE-24. Runs format, lint, typecheck, tests, baseline validation, security audit, and energy budget check before push.
-when_to_use: Before every push to remote. Run `uv run preflight` or `uv run preflight quick` or `uv run preflight diff`.
+when_to_use: Before every push to remote. Run `uv run python scripts/preflight.py` or `uv run python scripts/preflight.py quick` or `uv run python scripts/preflight.py diff`.
 user-invocable: true
 ---
 
@@ -23,9 +23,9 @@ uv sync --dev
 
 | Command | Checks | Time |
 |---------|--------|------|
-| `uv run preflight` | All (format, lint, typecheck, unit, integration, baseline, security, energy) | ~3-5 min |
-| `uv run preflight quick` | Format, lint, typecheck, unit tests only | ~1 min |
-| `uv run preflight diff` | Diff audit only (security, secrets, TODO, print) | ~5 sec |
+| `uv run python scripts/preflight.py` | All (format, lint, typecheck, unit, integration, baseline, security, energy) | ~3-5 min |
+| `uv run python scripts/preflight.py quick` | Format, lint, typecheck, unit tests only | ~1 min |
+| `uv run python scripts/preflight.py diff` | Diff audit only (security, secrets, TODO, print) | ~5 sec |
 
 ## Implementation: `scripts/preflight.py`
 
@@ -357,8 +357,8 @@ if __name__ == "__main__":
 
 ## Quality Gates
 
-- [ ] `preflight` passes before every push
-- [ ] `preflight quick` passes before every commit (recommended via pre-commit hook)
+- [ ] `uv run python scripts/preflight.py` passes before every push
+- [ ] `uv run python scripts/preflight.py quick` passes before every commit (recommended via pre-commit hook)
 - [ ] CI runs same checks (format, lint, typecheck, unit, integration, baseline)
 - [ ] Security audit runs in CI (non-blocking warnings)
 - [ ] Energy budget check runs on power-related changes
@@ -372,7 +372,7 @@ repos:
     hooks:
       - id: synapse-preflight-quick
         name: SYNAPSE Preflight (Quick)
-        entry: uv run preflight quick
+        entry: uv run python scripts/preflight.py quick
         language: system
         pass_filenames: false
         always_run: true

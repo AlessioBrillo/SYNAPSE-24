@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "24/7 multimodal bio-sensing wearable platform — Phase 0: Software & Public Data Foundation"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-scripts = { preflight = "scripts.preflight:main" }
 dependencies = [
     # Core scientific stack
     "numpy>=1.26.0,<2.0",
