@@ -286,29 +286,32 @@ class TestSleepEDFIngestion:
         """Test loading Sleep-EDF record with mocked edfio."""
         from synapse24.ingestion.sleep_edf import load_sleep_edf_record
 
-        # Mock PSG EDF
+        # Mock PSG EDF (edfio>=0.4 API: .digital / .sampling_frequency)
         mock_psg = MagicMock()
         mock_psg.signals = []
         # Add EEG channel
         ch1 = MagicMock()
         ch1.label = "EEG Fpz-Cz"
-        ch1.sample_rate = 100
-        ch1.samples = np.random.randn(10000).astype(np.float32)
-        ch1.n_samples = 10000
+        ch1.sampling_frequency = 100.0
+        ch1.digital = np.arange(10000)
+        ch1.digital_min = 0
+        ch1.digital_max = 9999
+        ch1.physical_min = 0.0
+        ch1.physical_max = 99.99
         mock_psg.signals.append(ch1)
         # Add EOG channel
         ch2 = MagicMock()
         ch2.label = "EOG horizontal"
-        ch2.sample_rate = 100
-        ch2.samples = np.random.randn(10000).astype(np.float32)
-        ch2.n_samples = 10000
+        ch2.sampling_frequency = 100.0
+        ch2.digital = np.arange(10000)
+        ch2.digital_min = 0
+        ch2.digital_max = 9999
+        ch2.physical_min = 0.0
+        ch2.physical_max = 99.99
         mock_psg.signals.append(ch2)
-        mock_psg.header.patient = "SC4001"
-        mock_psg.header.recording = "PSG"
-        mock_psg.header.startdate = "01.01.20"
-        mock_psg.header.duration = 100.0
+        mock_psg.duration = 100.0
 
-        # Mock Hypnogram EDF
+        # Mock Hypnogram EDF (edfio>=0.4 API: .text)
         mock_hyp = MagicMock()
         mock_hyp.annotations = []
         # Add some annotations
@@ -316,7 +319,7 @@ class TestSleepEDFIngestion:
             ann = MagicMock()
             ann.onset = i * 30.0
             ann.duration = 30.0
-            ann.description = f"Sleep stage {i % 5}"
+            ann.text = f"Sleep stage {i % 5}"
             mock_hyp.annotations.append(ann)
 
         mock_read_edf.side_effect = [mock_psg, mock_hyp]

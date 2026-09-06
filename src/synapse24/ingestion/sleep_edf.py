@@ -38,8 +38,19 @@ from synapse24.utils import (
     write_xdf,
 )
 
-# Sleep-EDF Expanded on PhysioNet
-SLEEP_EDF_URL = "https://physionet.org/files/sleep-edfx/1.0.0/"
+# Sleep-EDF Expanded on PhysioNet (EDF files live under per-cohort subfolders).
+SLEEP_EDF_BASE_URL = "https://physionet.org/files/sleep-edfx/1.0.0/"
+SLEEP_EDF_SUBDIR = {"SC": "sleep-cassette", "ST": "sleep-telemetry"}
+
+# Minimal valid EDF sizes (bytes): PSG carries hours of signals, hypnograms
+# only annotations. Anything smaller is a poison cache (cf. WESAD zip guard).
+_MIN_PSG_BYTES = 1_000_000
+_MIN_HYPNOGRAM_BYTES = 500
+
+# Closure subjects for the Phase 0 exit gate (healthy SC cohort, Fpz-Cz @100 Hz).
+CLOSURE_SUBJECTS = ("SC4001", "SC4101")
+
+EPOCH_DURATION_S = 30.0
 SLEEP_EDF_RECORDS = [
     # Sleep Cassette (SC) - healthy subjects
     "SC4001E0-PSG.edf",
@@ -232,28 +243,149 @@ STAGE_MAP = {
 STAGE_TO_INT = {v: k for k, v in STAGE_MAP.items()}
 
 
-def download_sleep_edf(data_dir: Path) -> Path:
-    """Download Sleep-EDF Expanded dataset from PhysioNet."""
+def _record_url(psg_file: str) -> str:
+    """Direct PhysioNet URL for a Sleep-EDF record (SC/ST cohort subfolders)."""
+    prefix = psg_file[:2]
+    subdir = SLEEP_EDF_SUBDIR.get(prefix)
+    if subdir is None:
+        raise ValueError(f"Unknown Sleep-EDF cohort prefix: {psg_file!r}")
+    return f"{SLEEP_EDF_BASE_URL}{subdir}/{psg_file}"
+
+
+def _check_edf_integrity(path: Path, min_bytes: int) -> bool:
+    """True when path looks like a real EDF file (magic + size)."""
+    try:
+        if path.stat().st_size < min_bytes:
+            return False
+        with open(path, "rb") as f:
+            return f.read(8) == b"0       "
+    except OSError:
+        return False
+
+
+def _download_file(url: str, dest: Path, min_bytes: int) -> None:
+    """Stream-download url to dest, quarantining poison/incomplete files."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with requests.get(url, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        f.write(chunk)
+        if not _check_edf_integrity(tmp, min_bytes):
+            _quarantine(tmp, url)
+        tmp.replace(dest)
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+def _quarantine(path: Path, url: str) -> None:
+    """Remove a poison download and report it (kept separate per TRY301)."""
+    path.unlink(missing_ok=True)
+    raise ValueError(f"Downloaded file failed EDF integrity check: {url}")
+
+
+def download_sleep_edf(data_dir: Path, subjects: list[str] | None = None) -> Path:
+    """Download Sleep-EDF Expanded records from PhysioNet via direct HTTP.
+
+    wfdb.dl_database cannot fetch .edf files, so PSG + hypnogram pairs are
+    streamed from the sleep-cassette/ and sleep-telemetry/ subfolders with
+    EDF magic + size integrity checks (poison-cache quarantine).
+
+    Args:
+        data_dir: Directory for raw Sleep-EDF data.
+        subjects: Subject IDs like "SC4001" (default: closure subjects only;
+            pass explicit IDs to fetch more; nothing downloads when every
+            requested pair is already cached and valid).
+
+    Returns:
+        The data directory.
+    """
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if already downloaded (look for any .edf file)
-    if any(data_dir.glob("*.edf")):
-        return data_dir
+    if subjects is None:
+        subjects = list(CLOSURE_SUBJECTS)
 
-    logger.info("Downloading Sleep-EDF Expanded dataset...")
+    wanted = [f"{s}E0-PSG.edf" for s in subjects] + [f"{s}EC-Hypnogram.edf" for s in subjects]
+    missing = [
+        f
+        for f in wanted
+        if not _check_edf_integrity(
+            data_dir / f, _MIN_PSG_BYTES if "PSG" in f else _MIN_HYPNOGRAM_BYTES
+        )
+    ]
+    # Quarantine stale invalid files so a retry re-downloads them.
+    for f in wanted:
+        path = data_dir / f
+        if path.exists() and f in missing:
+            with contextlib.suppress(OSError):
+                path.unlink()
 
-    # We'll use wfdb for downloading like MIT-BIH
-    import wfdb
-
-    for record in tqdm(SLEEP_EDF_RECORDS, desc="Downloading Sleep-EDF"):
-        record_name = record.replace(".edf", "")
+    for record in tqdm(missing, desc="Downloading Sleep-EDF"):
         try:
-            wfdb.dl_database("sleep-edfx", str(data_dir), records=[record_name])
+            _download_file(
+                _record_url(record),
+                data_dir / record,
+                _MIN_PSG_BYTES if "PSG" in record else _MIN_HYPNOGRAM_BYTES,
+            )
         except Exception as e:
             logger.warning(f"Failed to download {record}: {e}")
 
     return data_dir
+
+
+def _physical_samples(signal: Any) -> npt.NDArray[np.float64]:
+    """Convert an edfio signal's raw digital samples to physical units (µV)."""
+    digital = np.asarray(signal.digital, dtype=np.float64)
+    span = float(signal.digital_max - signal.digital_min)
+    if span == 0:
+        return digital
+    scale = float(signal.physical_max - signal.physical_min) / span
+    return np.asarray(float(signal.physical_min) + (digital - float(signal.digital_min)) * scale)
+
+
+def _annotation_text(annotation: Any) -> str:
+    """Best-effort annotation text across edfio versions (.text / .description)."""
+    text = getattr(annotation, "text", getattr(annotation, "description", ""))
+    if isinstance(text, bytes):
+        with contextlib.suppress(UnicodeDecodeError):
+            text = text.decode("utf-8", errors="replace")
+    return str(text)
+
+
+def expand_hypnogram_annotations(
+    annotations: list[Any],
+    epoch_duration: float = EPOCH_DURATION_S,
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+    """Expand Sleep-EDF bout annotations into fixed 30 s epoch labels.
+
+    Real hypnogram files annotate stage bouts (onset + long duration), not
+    individual epochs: each bout emits floor(duration / epoch_duration) epochs
+    starting at its onset. Unparseable bouts are skipped; unscored ("?") bouts
+    are kept as UNK (9) so kappa excludes them without shifting alignment.
+
+    Returns:
+        (hypnogram, hypnogram_times): native Sleep-EDF codes and epoch onsets
+        in seconds from recording start.
+    """
+    stages: list[int] = []
+    times: list[float] = []
+    for ann in annotations:
+        onset = float(getattr(ann, "onset", 0.0) or 0.0)
+        duration = float(getattr(ann, "duration", 0.0) or 0.0)
+        stage = _parse_hypnogram_stage(_annotation_text(ann))
+        if stage is None or duration <= 0:
+            continue
+        n_epochs = int(duration // epoch_duration)
+        for k in range(n_epochs):
+            stages.append(stage)
+            times.append(onset + k * epoch_duration)
+    return np.array(stages, dtype=np.int64), np.array(times, dtype=np.float64)
 
 
 def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any]:
@@ -273,24 +405,21 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
     """
     import edfio
 
-    # Load PSG (signals)
+    # Load PSG (signals) and hypnogram (bout annotations)
     psg = edfio.read_edf(psg_path)
-
-    # Load Hypnogram (annotations)
     hyp = edfio.read_edf(hypnogram_path)
 
-    # Organize channels by type
-    eeg_channels = {}
-    eog_channels = {}
-    emg_channels = {}
-    other_channels = {}
-    fs_dict = {}
+    # Organize channels by type (edfio>=0.4: .label / .sampling_frequency)
+    eeg_channels: dict[str, npt.NDArray[np.float64]] = {}
+    eog_channels: dict[str, npt.NDArray[np.float64]] = {}
+    emg_channels: dict[str, npt.NDArray[np.float64]] = {}
+    other_channels: dict[str, npt.NDArray[np.float64]] = {}
+    fs_dict: dict[str, int] = {}
 
-    for i, ch in enumerate(psg.signals):
-        label = ch.label.upper()
-        # edfio API: use ch.samples or ch.data depending on version
-        signal_data = np.array(getattr(ch, "samples", getattr(ch, "data", [])), dtype=np.float32)
-        fs = getattr(ch, "sample_rate", getattr(ch, "sample_frequency", 100))
+    for ch in psg.signals:
+        label = str(ch.label).upper()
+        signal_data = _physical_samples(ch)
+        fs = int(float(ch.sampling_frequency))
         fs_dict[label] = fs
 
         if "EEG" in label or "FPZ" in label or "PZ" in label or "CZ" in label or "OZ" in label:
@@ -302,43 +431,19 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
         else:
             other_channels[label] = signal_data
 
-    # Extract hypnogram annotations
-    hypnogram: list[int] = []
-    hypnogram_times: list[float] = []
+    # Expand bout annotations into fixed 30 s epochs
+    hypnogram_arr, hypnogram_times_arr = expand_hypnogram_annotations(
+        list(hyp.annotations), epoch_duration=EPOCH_DURATION_S
+    )
 
-    for ann in hyp.annotations:
-        # Sleep-EDF hypnogram uses 30-second epochs with stage codes
-        # Duration is typically 30 seconds per annotation
-        onset = getattr(ann, "onset", 0.0)
-        ann_duration = getattr(ann, "duration", None)
-        duration = ann_duration if ann_duration is not None and ann_duration > 0 else 30.0
-        description = getattr(ann, "description", "").strip()
-
-        # Parse stage from description (e.g., "Sleep stage W", "Sleep stage 1", etc.)
-        stage = _parse_hypnogram_stage(description)
-        if stage is not None:
-            hypnogram.append(stage)
-            hypnogram_times.append(onset)
-
-    hypnogram_arr: npt.NDArray[np.int64] = np.array(hypnogram, dtype=int)
-    hypnogram_times_arr: npt.NDArray[np.float64] = np.array(hypnogram_times, dtype=np.float64)
-
-    # Total duration from PSG
-    max_duration = 0.0
-    for ch in psg.signals:
-        n_samples = getattr(ch, "n_samples", getattr(ch, "samples", None))
-        sample_rate = getattr(ch, "sample_rate", getattr(ch, "sample_frequency", 100))
-        if n_samples is not None and sample_rate:
-            dur = n_samples / sample_rate
-            max_duration = max(max_duration, dur)
+    duration_s = float(psg.duration)
 
     metadata = {
         "subject_id": psg_path.stem.replace("-PSG", "").replace("E0", "").replace("EC", ""),
         "header": {
-            "patient": getattr(psg, "header", getattr(psg, "patient", None)),
-            "recording": getattr(psg, "header", getattr(psg, "recording", None)),
-            "startdate": getattr(psg, "header", getattr(psg, "startdate", None)),
-            "duration": getattr(psg, "header", getattr(psg, "duration", max_duration)),
+            "patient": str(getattr(psg, "patient", "")),
+            "recording": str(getattr(psg, "recording", "")),
+            "duration": duration_s,
         },
     }
 
@@ -350,40 +455,44 @@ def load_sleep_edf_record(psg_path: Path, hypnogram_path: Path) -> dict[str, Any
         "hypnogram": hypnogram_arr,
         "hypnogram_times": hypnogram_times_arr,
         "fs_dict": fs_dict,
-        "duration_s": max_duration,
+        "duration_s": duration_s,
         "metadata": metadata,
     }
 
 
 def _parse_hypnogram_stage(description: str) -> int | None:
-    """Parse sleep stage from hypnogram annotation description."""
-    desc = description.upper()
+    """Parse sleep stage from hypnogram annotation description.
 
-    # Common formats: "Sleep stage W", "Sleep stage 1", "Sleep stage R", etc.
-    patterns = [
-        (("UNSCORED",), 9),  # Must come before UNK
-        (("W", "WAKE", "STAGE W"), 0),
-        (("1", "STAGE 1", "N1"), 1),
-        (("2", "STAGE 2", "N2"), 2),
-        (("3", "STAGE 3", "N3"), 3),
-        (("4", "STAGE 4", "N3"), 4),
-        (("R", "REM", "STAGE R"), 5),
-        (("MOVE", "MOVEMENT"), 6),
-        (("UNK",), 9),
-    ]
-
-    for keywords, stage in patterns:
-        if any(kw in desc for kw in keywords):
-            return stage
-
-    # Try numeric
-    for char in desc:
-        if char.isdigit():
-            val = int(char)
-            if val in STAGE_MAP:
-                return val
-
-    return None
+    Matches on the trailing token ("Sleep stage W" -> "W", "Movement time" ->
+    "TIME") so stage digits never collide with other words. Returns native
+    Sleep-EDF codes; "?" (unscored) maps to UNK (9) instead of being dropped.
+    """
+    text = str(description).strip().upper()
+    if not text:
+        return None
+    token = text.split()[-1]
+    return {
+        "W": 0,
+        "WAKE": 0,
+        "0": 0,
+        "1": 1,
+        "N1": 1,
+        "2": 2,
+        "N2": 2,
+        "3": 3,
+        "N3": 3,
+        "4": 4,
+        "R": 5,
+        "REM": 5,
+        "5": 5,
+        "MOVE": 6,
+        "MOVEMENT": 6,
+        "TIME": 6,
+        "?": 9,
+        "UNSCORED": 9,
+        "UNK": 9,
+        "9": 9,
+    }.get(token)
 
 
 def extract_epochs(
@@ -557,7 +666,11 @@ def process_sleep_edf_subject(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     psg_path = data_dir / psg_file
-    hypnogram_file = psg_file.replace("PSG", "Hypnogram")
+    # Real naming: SC4001E0-PSG.edf <-> SC4001EC-Hypnogram.edf (E0->EC swap).
+    if psg_file.endswith("E0-PSG.edf"):
+        hypnogram_file = psg_file[: -len("E0-PSG.edf")] + "EC-Hypnogram.edf"
+    else:  # Fallback for non-canonical names
+        hypnogram_file = psg_file.replace("PSG", "Hypnogram")
     hypnogram_path = data_dir / hypnogram_file
 
     if not psg_path.exists() or not hypnogram_path.exists():
@@ -693,7 +806,10 @@ def ingest_sleep_edf(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    download_sleep_edf(data_dir)
+    if records is None:
+        download_sleep_edf(data_dir)
+    else:
+        download_sleep_edf(data_dir, subjects=[r[: -len("E0-PSG.edf")] for r in records])
 
     # Find available PSG files
     available_psg = sorted([f.name for f in data_dir.glob("*PSG.edf")])
