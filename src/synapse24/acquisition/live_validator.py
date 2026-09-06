@@ -257,16 +257,23 @@ class LiveTier0Validator:
 
         quality = compute_ppg_quality(ppg_arr, fs, accel_mag, self._thresholds)
 
+        sqi = float(quality.get("ppg_sqi", 0.0))
+        map_score = float(quality.get("motion_artifact_prob", 1.0))
+        overall = sqi >= self._thresholds.ppg_sqi_min and map_score <= self._thresholds.map_max
+
         result = {
             "timestamp": timestamp,
             "modality": "ppg",
             "quality": quality,
+            "overall": overall,
             "buffer_len": len(ppg_arr),
         }
         self._quality_results.append(result)
 
-        evals: dict[str, Any] = {}
-        overall = False
+        evals: dict[str, Any] = {
+            "ppg_sqi_pass": sqi >= self._thresholds.ppg_sqi_min,
+            "motion_artifact_pass": map_score <= self._thresholds.map_max,
+        }
         logger.info(
             f"  PPG Quality @ {timestamp:.1f}s: PASS={overall}, "
             f"SQI={quality.get('ppg_sqi', 'N/A'):.3f}, "
@@ -281,6 +288,21 @@ class LiveTier0Validator:
         self._ppg_timestamps = self._ppg_timestamps[-keep_samples:]
         if self._acc_mag_buffer:
             self._acc_mag_buffer = self._acc_mag_buffer[-keep_samples:]
+
+    @property
+    def latest_motion_quality(self) -> tuple[float | None, float | None]:
+        """Latest (ppg_sqi, motion_artifact_prob) for the promotion gate.
+
+        Returns (None, None) when no PPG assessment has run yet (fail-open).
+        """
+        for result in reversed(self._quality_results):
+            if result.get("modality") == "ppg":
+                quality = result.get("quality", {})
+                return (
+                    float(quality.get("ppg_sqi", 0.0)),
+                    float(quality.get("motion_artifact_prob", 1.0)),
+                )
+        return None, None
 
     def _finalize(self) -> dict[str, Any]:
         """Finalize validation, export XDF and JSON."""
