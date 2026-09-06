@@ -30,7 +30,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from synapse24.ingestion import Tier, ingest_mitbih, ingest_sleep_edf, ingest_wesad
-from synapse24.ingestion.wesad import FUSION_WINDOW_CONFIG, fusion_window_quality_to_features
+from synapse24.ingestion.wesad import (
+    FUSION_WINDOW_CONFIG,
+    FUSION_WINDOW_QUALITY_GATE,
+    fusion_window_passes_quality_gate,
+    fusion_window_quality_to_features,
+)
 from synapse24.signal_quality import validate_sleep_staging_against_gold
 from synapse24.utils import validate_xdf
 
@@ -177,12 +182,21 @@ def extract_wesad_features(
 
 def extract_wesad_window_features(
     subject_result: dict,
+    *,
+    apply_quality_gate: bool = True,
+    quarantine: dict[str, int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, str] | None:
     """Canonical 60s fusion-window feature extraction (single source of truth).
 
     Consumes result["fusion_windows"] (quality_metadata per 60s window,
     overlap_s=0, purity>=0.9 per FUSION_WINDOW_CONFIG). One sample per window.
     Returns (features, labels, subject_id) or None if no 3-class windows.
+
+    Architecture.md §74: windows with measured-bad motion quality
+    (SQI < 0.5 or MAP > 0.5 per FUSION_WINDOW_QUALITY_GATE) are rejected
+    from the feature matrix; rejections accumulate into quarantine
+    (n_kept / n_rejected_low_sqi / n_rejected_high_map) for provenance.
+    Missing ppg_quality is fail-open (kept).
     """
     windows = subject_result.get("fusion_windows", [])
     if not windows:
@@ -193,12 +207,27 @@ def extract_wesad_window_features(
     for window_meta in windows:
         if not isinstance(window_meta, dict):
             continue
+        if apply_quality_gate and not fusion_window_passes_quality_gate(window_meta):
+            if quarantine is not None:
+                ppg_q = window_meta.get("ppg_quality", {}) or {}
+                sqi = ppg_q.get("ppg_sqi")
+                map_score = ppg_q.get("motion_artifact_prob")
+                if sqi is not None and float(sqi) < FUSION_WINDOW_QUALITY_GATE["min_ppg_sqi"]:
+                    quarantine["n_rejected_low_sqi"] = quarantine.get("n_rejected_low_sqi", 0) + 1
+                if (
+                    map_score is not None
+                    and float(map_score) > FUSION_WINDOW_QUALITY_GATE["max_map"]
+                ):
+                    quarantine["n_rejected_high_map"] = quarantine.get("n_rejected_high_map", 0) + 1
+            continue
         parsed = fusion_window_quality_to_features(window_meta)
         if parsed is None:
             continue
         feats, label_id = parsed
         features_list.append(feats)
         labels_list.append(label_id)
+    if quarantine is not None:
+        quarantine["n_kept"] = quarantine.get("n_kept", 0) + len(features_list)
     if not features_list:
         return None
     return np.array(features_list), np.array(labels_list), subject_id
@@ -224,7 +253,19 @@ def validate_wesad_stress_classification(
 
     use_windows = any(bool(r.get("fusion_windows")) for r in results)
     feature_source = "fusion_windows_60s" if use_windows else "segments_legacy"
-    extractor = extract_wesad_window_features if use_windows else extract_wesad_features
+
+    quality_quarantine: dict[str, int] = {
+        "n_kept": 0,
+        "n_rejected_low_sqi": 0,
+        "n_rejected_high_map": 0,
+    }
+
+    def _window_extractor(result: dict) -> tuple[np.ndarray, np.ndarray, str] | None:
+        return extract_wesad_window_features(
+            result, apply_quality_gate=True, quarantine=quality_quarantine
+        )
+
+    extractor = _window_extractor if use_windows else extract_wesad_features
 
     for result in results:
         extracted = extractor(result)
@@ -295,6 +336,8 @@ def validate_wesad_stress_classification(
         "feature_source": feature_source,
         "surrogate": all_surrogate,
         "window_config": dict(FUSION_WINDOW_CONFIG) if use_windows else {},
+        "quality_gate": dict(FUSION_WINDOW_QUALITY_GATE) if use_windows else {},
+        "quality_quarantine": dict(quality_quarantine) if use_windows else {},
     }
 
 

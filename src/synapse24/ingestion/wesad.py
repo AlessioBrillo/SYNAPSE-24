@@ -508,6 +508,88 @@ FUSION_WINDOW_LABEL_TO_ID: dict[str, int] = {
     "amusement": 2,
 }
 
+FUSION_WINDOW_QUALITY_GATE: dict[str, float] = {
+    "min_ppg_sqi": 0.5,
+    "max_map": 0.5,
+}
+"""Motion-quality gate for 60s fusion windows (Architecture.md §74).
+
+Matches the Tier-0 promotion thresholds: a window with *measured* PPG
+quality below SQI 0.5 or MAP above 0.5 is rejected from the feature matrix
+with quarantine counts surfaced. Windows with *missing* ppg_quality are
+fail-open (kept): unmeasured must never silently shrink the dataset.
+"""
+
+
+def fusion_window_passes_quality_gate(
+    window_meta: dict[str, Any],
+    min_ppg_sqi: float = 0.5,
+    max_map: float = 0.5,
+) -> bool:
+    """Check one fusion-window quality_metadata dict against the motion gate.
+
+    Fail-open on missing ppg_quality (unmeasured), fail-closed on measured
+    contamination (SQI < min or MAP > max).
+    """
+    ppg_q = window_meta.get("ppg_quality")
+    if not isinstance(ppg_q, dict) or not ppg_q:
+        return True
+    sqi = ppg_q.get("ppg_sqi")
+    map_score = ppg_q.get("motion_artifact_prob")
+    if sqi is None and map_score is None:
+        return True
+    sqi_bad = sqi is not None and float(sqi) < min_ppg_sqi
+    map_bad = map_score is not None and float(map_score) > max_map
+    return not (sqi_bad or map_bad)
+
+
+def _record_quality_rejection(
+    quarantine: dict[str, int],
+    ppg_quality: dict[str, Any],
+    min_ppg_sqi: float | None,
+    max_map: float | None,
+) -> None:
+    """Increment quarantine counters for one rejected window's PPG quality."""
+    sqi = ppg_quality.get("ppg_sqi")
+    map_score = ppg_quality.get("motion_artifact_prob")
+    if sqi is not None and min_ppg_sqi is not None and float(sqi) < min_ppg_sqi:
+        quarantine["n_rejected_low_sqi"] = quarantine.get("n_rejected_low_sqi", 0) + 1
+    if map_score is not None and max_map is not None and float(map_score) > max_map:
+        quarantine["n_rejected_high_map"] = quarantine.get("n_rejected_high_map", 0) + 1
+
+
+def filter_fusion_windows_by_quality(
+    windows: list[Any],
+    min_ppg_sqi: float = 0.5,
+    max_map: float = 0.5,
+) -> tuple[list[Any], dict[str, int]]:
+    """Split fusion windows (dicts or FusionWindow) into kept + quarantine.
+
+    Returns (kept, quarantine) where quarantine carries n_kept,
+    n_rejected_low_sqi, n_rejected_high_map for baseline_report provenance.
+    """
+    kept: list[Any] = []
+    n_low_sqi = 0
+    n_high_map = 0
+    for window in windows:
+        meta = window if isinstance(window, dict) else getattr(window, "quality_metadata", None)
+        if not isinstance(meta, dict):
+            meta = getattr(window, "ppg_quality", None)
+            meta = {"ppg_quality": meta} if isinstance(meta, dict) else {}
+        if fusion_window_passes_quality_gate(meta, min_ppg_sqi, max_map):
+            kept.append(window)
+            continue
+        counts: dict[str, int] = {}
+        _record_quality_rejection(counts, meta.get("ppg_quality", {}) or {}, min_ppg_sqi, max_map)
+        n_low_sqi += counts.get("n_rejected_low_sqi", 0)
+        n_high_map += counts.get("n_rejected_high_map", 0)
+    quarantine = {
+        "n_kept": len(kept),
+        "n_rejected_low_sqi": n_low_sqi,
+        "n_rejected_high_map": n_high_map,
+    }
+    return kept, quarantine
+
 
 def fusion_window_quality_to_features(
     window_meta: dict[str, Any],
@@ -569,12 +651,82 @@ class FusionWindow:
     quality_metadata: dict[str, Any] | None = None
 
 
+def _window_ppg_quality(
+    wrist_signals_window: dict[str, npt.NDArray[np.float64]],
+    fs_wrist_bvp: int,
+    fs_wrist_acc: int,
+) -> dict[str, float]:
+    """Compute PPG quality for one fusion window from native-rate signals.
+
+    Uses the window BVP at fs_wrist_bvp with ACC magnitude interpolated to
+    the BVP grid for the motion-artifact term. Never raises: on any failure
+    returns an empty dict (fail-open downstream).
+    """
+    from synapse24.signal_quality import compute_ppg_quality
+
+    try:
+        bvp = np.asarray(wrist_signals_window["bvp"], dtype=np.float64)
+        acc_mag = np.sqrt(
+            np.asarray(wrist_signals_window["acc_x"], dtype=np.float64) ** 2
+            + np.asarray(wrist_signals_window["acc_y"], dtype=np.float64) ** 2
+            + np.asarray(wrist_signals_window["acc_z"], dtype=np.float64) ** 2
+        )
+        acc_grid = np.linspace(0.0, len(acc_mag) / fs_wrist_acc, len(acc_mag))
+        bvp_grid = np.linspace(0.0, len(bvp) / fs_wrist_bvp, len(bvp))
+        acc_resampled = np.interp(bvp_grid, acc_grid, acc_mag).astype(np.float64)
+        quality = compute_ppg_quality(bvp, fs_wrist_bvp, acc_resampled, None)
+        return {
+            "ppg_sqi": float(quality.get("ppg_sqi", 0.0)),
+            "perfusion_index": float(quality.get("perfusion_index", 0.0)),
+            "motion_artifact_prob": float(quality.get("motion_artifact_prob", 1.0)),
+        }
+    except (KeyError, ValueError, TypeError):
+        return {}
+
+
+def _slice_wrist_window(
+    wrist: dict[str, npt.NDArray[np.float64]],
+    start_idx: int,
+    end_idx: int,
+    fs_chest: int,
+    fs_wrist_bvp: int,
+    fs_wrist_acc: int,
+) -> dict[str, npt.NDArray[np.float64]]:
+    """Slice wrist signals at native rates for one chest-defined window.
+
+    BVP at fs_wrist_bvp, ACC at fs_wrist_acc, EDA/Temp at 4 Hz — no
+    resampling, index mapping only (Architecture.md §51-53).
+    """
+    # Wrist BVP is at 64 Hz, chest at 700 Hz
+    wrist_start = int(start_idx * fs_wrist_bvp / fs_chest)
+    wrist_end = int(end_idx * fs_wrist_bvp / fs_chest)
+    window = {k: v[wrist_start:wrist_end] for k, v in wrist.items() if k in ("bvp",)}
+
+    # Wrist ACC at 32 Hz
+    acc_start = int(start_idx * fs_wrist_acc / fs_chest)
+    acc_end = int(end_idx * fs_wrist_acc / fs_chest)
+    window["acc_x"] = wrist["acc_x"][acc_start:acc_end]
+    window["acc_y"] = wrist["acc_y"][acc_start:acc_end]
+    window["acc_z"] = wrist["acc_z"][acc_start:acc_end]
+
+    # Wrist EDA/Temp at 4 Hz
+    fs_wrist_eda = 4
+    eda_start = int(start_idx * fs_wrist_eda / fs_chest)
+    eda_end = int(end_idx * fs_wrist_eda / fs_chest)
+    window["eda"] = wrist["eda"][eda_start:eda_end]
+    window["temp"] = wrist["temp"][eda_start:eda_end]
+    return window
+
+
 def extract_native_rate_fusion_windows(
     chest: dict[str, npt.NDArray[np.float64] | npt.NDArray[np.int64]],
     wrist: dict[str, npt.NDArray[np.float64]],
     window_s: float = 60.0,
     overlap_s: float = 0.0,
     min_label_purity: float = 0.9,
+    min_ppg_sqi: float | None = None,
+    max_map: float | None = None,
+    quarantine: dict[str, int] | None = None,
 ) -> list[FusionWindow]:
     """Extract 60s native-rate fusion windows from WESAD chest + wrist signals.
 
@@ -591,6 +743,12 @@ def extract_native_rate_fusion_windows(
         window_s: Window duration in seconds (default 60s per WESAD protocol)
         overlap_s: Overlap in seconds (0 for validation, 30 for inference)
         min_label_purity: Minimum fraction of window with same label (default 0.9)
+        min_ppg_sqi: Opt-in motion gate — reject windows with measured PPG
+            SQI below this (None disables the gate, legacy behavior)
+        max_map: Opt-in motion gate — reject windows with measured motion
+            artifact probability above this (None disables the gate)
+        quarantine: Optional dict collecting rejection counts
+            (n_kept / n_rejected_low_sqi / n_rejected_high_map)
 
     Returns:
         List of FusionWindow objects with native-rate signals + per-window quality
@@ -642,49 +800,57 @@ def extract_native_rate_fusion_windows(
         # Extract chest signals for this window (native 700 Hz)
         chest_signals = {k: v[start_idx:end_idx] for k, v in chest.items()}
 
-        # Compute corresponding wrist window boundaries
-        # Wrist BVP is at 64 Hz, chest at 700 Hz
-        wrist_start = int(start_idx * fs_wrist_bvp / fs_chest)
-        wrist_end = int(end_idx * fs_wrist_bvp / fs_chest)
-        wrist_signals_window = {
-            k: v[wrist_start:wrist_end] for k, v in wrist.items() if k in ("bvp",)
-        }
-
-        # Wrist ACC at 32 Hz
-        acc_start = int(start_idx * fs_wrist_acc / fs_chest)
-        acc_end = int(end_idx * fs_wrist_acc / fs_chest)
-        wrist_signals_window["acc_x"] = wrist["acc_x"][acc_start:acc_end]
-        wrist_signals_window["acc_y"] = wrist["acc_y"][acc_start:acc_end]
-        wrist_signals_window["acc_z"] = wrist["acc_z"][acc_start:acc_end]
-
-        # Wrist EDA/Temp at 4 Hz
-        fs_wrist_eda = 4
-        eda_start = int(start_idx * fs_wrist_eda / fs_chest)
-        eda_end = int(end_idx * fs_wrist_eda / fs_chest)
-        wrist_signals_window["eda"] = wrist["eda"][eda_start:eda_end]
-        wrist_signals_window["temp"] = wrist["temp"][eda_start:eda_end]
+        wrist_signals_window = _slice_wrist_window(
+            wrist, start_idx, end_idx, fs_chest, fs_wrist_bvp, fs_wrist_acc
+        )
 
         # Start/end time in seconds (from chest timestamps)
         start_time_s = start_idx / fs_chest
         end_time_s = end_idx / fs_chest
 
-        windows.append(
-            FusionWindow(
-                subject_id="",  # Set by caller
-                window_idx=window_idx,
-                start_time_s=start_time_s,
-                end_time_s=end_time_s,
-                label=int(dominant_label),
-                label_name=label_name,
-                chest_signals=chest_signals,
-                wrist_signals=wrist_signals_window,
-                chest_fs=fs_chest,
-                wrist_bvp_fs=fs_wrist_bvp,
-                wrist_acc_fs=fs_wrist_acc,
-            )
+        candidate = FusionWindow(
+            subject_id="",  # Set by caller
+            window_idx=window_idx,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+            label=int(dominant_label),
+            label_name=label_name,
+            chest_signals=chest_signals,
+            wrist_signals=wrist_signals_window,
+            chest_fs=fs_chest,
+            wrist_bvp_fs=fs_wrist_bvp,
+            wrist_acc_fs=fs_wrist_acc,
         )
 
+        # Opt-in motion-quality gate (default None = legacy behavior).
+        # Computes per-window PPG quality from the native-rate wrist BVP
+        # (+ACC magnitude) so the gate measures instead of guessing.
+        if min_ppg_sqi is not None or max_map is not None:
+            candidate.ppg_quality = _window_ppg_quality(
+                candidate.wrist_signals, fs_wrist_bvp, fs_wrist_acc
+            )
+            if not fusion_window_passes_quality_gate(
+                {"ppg_quality": candidate.ppg_quality},
+                min_ppg_sqi=min_ppg_sqi if min_ppg_sqi is not None else 0.0,
+                max_map=max_map if max_map is not None else 1.0,
+            ):
+                if quarantine is not None:
+                    _record_quality_rejection(
+                        quarantine,
+                        candidate.ppg_quality or {},
+                        min_ppg_sqi,
+                        max_map,
+                    )
+                continue
+
+        windows.append(candidate)
+
         window_idx += 1
+
+    if quarantine is not None:
+        quarantine.setdefault("n_rejected_low_sqi", 0)
+        quarantine.setdefault("n_rejected_high_map", 0)
+        quarantine["n_kept"] = len(windows)
 
     return windows
 
