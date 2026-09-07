@@ -12,6 +12,7 @@ from .clock_sync import (
 )
 from .coordinator import SensorPodCoordinator
 from .immobility import ImmobilityDetector
+from .live_lsl_sync import LiveTwoPodConfig, LSLUnavailableError, run_live_2pod_sync
 from .night_window import NightWindowScheduler
 from .power_budget import NOMINAL_VOLTAGE_V, PowerBudgetManager, hours_for_charge, mah_for_power
 from .state_machine import AcquisitionController, MotionGateConfig, TierStateMachine, TierTransition
@@ -40,4 +41,7 @@ __all__ = [
     "SyncMarkerStream",
     "SyncMarkerRecorder",
     "SyncStreamConfig",
+    "LiveTwoPodConfig",
+    "LSLUnavailableError",
+    "run_live_2pod_sync",
 ]

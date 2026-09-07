@@ -361,10 +361,8 @@ def _run_xdf_proof(
     return xdf_proof
 
 
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Validate clock synchronization pipeline")
+def add_arguments(parser):
+    """Register CLI arguments (importable for the CI contract test)."""
     parser.add_argument("--duration", type=float, default=3600.0, help="Simulation duration (s)")
     parser.add_argument("--sync-interval", type=float, default=60.0, help="Sync interval (s)")
     parser.add_argument("--output", type=Path, help="Output JSON path")
@@ -374,8 +372,79 @@ def main():
         action="store_true",
         help="Also prove zero-drop XDF round-trip for hub + fastest pod",
     )
+    parser.add_argument(
+        "--live-2pod",
+        action="store_true",
+        help="Run the live 2-pod LSL loopback gate instead of the simulation",
+    )
+    parser.add_argument(
+        "--live-duration",
+        type=float,
+        default=2.0,
+        help="Live capture duration in seconds (default: 2.0)",
+    )
+    return parser
+
+
+def run_live_validation(
+    live_duration: float = 2.0,
+    seed: int = 42,
+    output_path: Path | None = None,
+) -> dict:
+    """Run the live 2-pod LSL loopback gate and return its metrics.
+
+    Real liblsl wire (Architecture.md §92, Roadmap.md §138): forearm T0 pod
+    at normative rates + head-pod sync-marker channel, measured residual vs.
+    per-tier budgets, XDF zero-drop proof.
+    """
+    from synapse24.acquisition.live_lsl_sync import LiveTwoPodConfig, run_live_2pod_sync
+
+    xdf_path = (output_path.parent / (output_path.stem + ".live.xdf")) if output_path else None
+    print(f"Running live 2-pod LSL gate: {live_duration}s at normative Tier-0 rates...")
+    result = run_live_2pod_sync(
+        LiveTwoPodConfig(duration_s=live_duration, seed=seed, xdf_path=xdf_path)
+    )
+
+    print(
+        f"  Streams: {result['n_streams']}, "
+        f"recovered {result['total_recovered']}/{result['total_expected']}, "
+        f"dropped={result['total_dropped']}"
+    )
+    for stream in result["per_stream"]:
+        residual = stream["residual"]
+        print(
+            f"  {stream['name']}: p99={residual['p99_offset_ms']:.3f}ms, "
+            f"within_10ms={residual['within_10ms_pct']:.1f}%"
+        )
+    marker = result["tier1_marker"]
+    print(f"  Tier-1 marker [{marker['stream']}]: within_1ms={marker['within_1ms_pct']:.1f}%")
+    print(f"  XDF proof: dropped={result['xdf_proof']['total_dropped']}")
+    print("LIVE VALIDATION PASSED" if result["overall_pass"] else "LIVE VALIDATION FAILED")
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(result, f, indent=2, default=str)
+        print(f"\nResults saved to {output_path}")
+
+    return result
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Validate clock synchronization pipeline")
+    add_arguments(parser)
 
     args = parser.parse_args()
+
+    if args.live_2pod:
+        results = run_live_validation(
+            live_duration=args.live_duration,
+            seed=args.seed,
+            output_path=args.output,
+        )
+        sys.exit(0 if results["overall_pass"] else 1)
 
     results = run_validation(
         duration_s=args.duration,
