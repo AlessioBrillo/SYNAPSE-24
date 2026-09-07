@@ -25,6 +25,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 # Pre-registered closure pair — must match MITBIH_CLOSURE_RECORDS in
 # src/synapse24/ingestion/mitbih.py once the GREEN commit lands.
 CLOSURE_RECORDS = ("100", "119")
@@ -88,8 +90,8 @@ class TestMitbihClosureGate:
         by_id = {r["record_id"]: r for r in full["per_record"]}
         assert by_id["207"]["rmssd_mae_ms"] == 2444.83
         # Gated means stay closure-scoped (backward-compat keys).
-        assert report["mean_sensitivity"] == 0.9975
-        assert report["mean_ppv"] == 0.9975
+        assert report["mean_sensitivity"] == pytest.approx(0.9975)
+        assert report["mean_ppv"] == pytest.approx(0.9975)
 
     def test_closure_constants_match_ingestion(self) -> None:
         """Test pair must equal the canonical MITBIH_CLOSURE_RECORDS."""

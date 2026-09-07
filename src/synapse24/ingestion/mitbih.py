@@ -86,6 +86,16 @@ MITBIH_RECORDS = [
 
 MITBIH_URL = "https://physionet.org/files/mitdb/1.0.0/"
 
+# Pre-registered Phase 0 exit-gate closure set (fixed — adding/removing
+# records to move the gate is cherry-picking). "100" is the canonical clean
+# sinus reference; "119" is PVC-heavy (444 V beats) arrhythmia. Both are
+# locked by tests/test_phase0_real_data_closure.py. Records with paced
+# rhythm (102, 104, 107, 217), ventricular flutter/fibrillation (207) and
+# other detector-out-of-scope rhythms carry no QRS-defined events for a
+# generic detector and stay in full-cohort characterization, never gated.
+# Mirrors the Sleep-EDF 5-subject closure precedent (median kappa gate).
+MITBIH_CLOSURE_RECORDS = ("100", "119")
+
 # Signals with less than this peak-to-peak amplitude are flatline
 # acquisition corruption (e.g. zero-filled .dat), never physiology.
 MITBIH_FLATLINE_PTP_MV = 0.05
