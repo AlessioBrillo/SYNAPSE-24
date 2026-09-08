@@ -6,7 +6,9 @@ from .quantization import (
     QuantizationConfig,
     QuantizationResult,
     RepresentativeDatasetGenerator,
+    estimate_inference_latency,
     quantize_model,
+    save_quantization_artifacts,
 )
 from .training import EdgeImpulseTrainer, TrainingConfig
 from .wesad_int8_closure import (
@@ -29,6 +31,8 @@ __all__ = [
     "QuantizationConfig",
     "QuantizationResult",
     "RepresentativeDatasetGenerator",
+    "save_quantization_artifacts",
+    "estimate_inference_latency",
     "deploy_model",
     "DeploymentConfig",
     "DeploymentResult",

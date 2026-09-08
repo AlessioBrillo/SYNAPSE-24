@@ -15,7 +15,13 @@ from .immobility import ImmobilityDetector
 from .live_lsl_sync import LiveTwoPodConfig, LSLUnavailableError, run_live_2pod_sync
 from .night_window import NightWindowScheduler
 from .power_budget import NOMINAL_VOLTAGE_V, PowerBudgetManager, hours_for_charge, mah_for_power
-from .state_machine import AcquisitionController, MotionGateConfig, TierStateMachine, TierTransition
+from .state_machine import (
+    AcquisitionController,
+    MotionGateConfig,
+    TierStateMachine,
+    TierTransition,
+    TransitionEvent,
+)
 from .sync_marker_stream import SyncMarkerRecorder, SyncMarkerStream, SyncStreamConfig
 
 __all__ = [
@@ -44,4 +50,5 @@ __all__ = [
     "LiveTwoPodConfig",
     "LSLUnavailableError",
     "run_live_2pod_sync",
+    "TransitionEvent",
 ]
