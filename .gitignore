@@ -61,3 +61,14 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# Edge AI artifacts
+*.tflite
+*.h
+*.tflm
+edge_impulse/
+models/
+
+# Hardware configs (may contain BLE addresses)
+config/*.local.yaml
+config/secrets.yaml
