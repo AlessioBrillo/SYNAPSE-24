@@ -1,0 +1,113 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the sections below with as much detail as possible.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the bug
+      placeholder: e.g., "PPG SQI calculation returns NaN for flat signals"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal, self-contained steps to reproduce the behavior
+      placeholder: |
+        1. Run `uv run python -c "from synapse24.signal_quality import compute_ppg_sqi; import numpy as np; print(compute_ppg_sqi(np.ones(1000), 100))"`
+        2. Observe NaN output
+        3. Expected: 0.0 for constant signal
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: compute_ppg_sqi should return 0.0 for constant signals, matching the documented behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: Returns NaN with RuntimeWarning: invalid value encountered in divide
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component Area
+      description: Which subsystem is affected?
+      options:
+        - ingestion (WESAD, MIT-BIH, Sleep-EDF pipelines)
+        - signal_quality (ECG, PPG, EEG, fNIRS, EDA metrics)
+        - edge_ai (training, quantization, deployment)
+        - acquisition (tier state machine, power budget, clock sync)
+        - lsl_xdf (LSL stream management, XDF I/O)
+        - hardware (device registry, pod coordination)
+        - tests (test infrastructure, CI)
+        - docs (documentation, README, Architecture.md)
+        - ci (GitHub Actions workflows)
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version/Commit
+      description: Git commit hash or version where bug occurs
+      placeholder: e.g., `abc1234` or `v0.1.0`
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, key dependencies
+      placeholder: |
+        - OS: Windows 11 / Ubuntu 22.04
+        - Python: 3.11.9
+        - numpy: 1.26.4
+        - neurokit2: 0.2.9
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs/Stack Traces
+      description: Paste any relevant logs, stack traces, or error messages
+      render: text
+      placeholder: |
+        Traceback (most recent call last):
+          File "...", line X, in compute_ppg_sqi
+            ...
+        RuntimeWarning: invalid value encountered in divide
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I have provided a minimal reproduction case
+          required: true
+        - label: This bug is not a security vulnerability (if it is, email security@synapse24.org instead)
+          required: true

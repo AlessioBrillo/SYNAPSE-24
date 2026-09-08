@@ -1,0 +1,122 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please provide enough context for us to evaluate the request against our architecture and roadmap.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: A clear and concise description of the proposed feature
+      placeholder: e.g., "Add support for real-time LSL streaming from ESP32 sensor pods"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation & Use Case
+      description: Why is this feature needed? What problem does it solve?
+      placeholder: |
+        Currently, the ingestion pipeline only processes offline datasets. For Phase 1 hardware validation,
+        we need real-time LSL streaming from ESP32 pods to validate Tier 0 → Tier 1 transitions
+        with live IMU/PPG data.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component Area
+      description: Which subsystem would this affect?
+      options:
+        - ingestion (WESAD, MIT-BIH, Sleep-EDF pipelines)
+        - signal_quality (ECG, PPG, EEG, fNIRS, EDA metrics)
+        - edge_ai (training, quantization, deployment)
+        - acquisition (tier state machine, power budget, clock sync)
+        - lsl_xdf (LSL stream management, XDF I/O)
+        - hardware (device registry, pod coordination)
+        - tests (test infrastructure, CI)
+        - docs (documentation, README, Architecture.md)
+        - ci (GitHub Actions workflows)
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: architecture_alignment
+    attributes:
+      label: Architecture Alignment
+      description: How does this align with Architecture.md and Roadmap.md? Reference specific sections.
+      placeholder: |
+        Architecture.md §33-43: Tiered acquisition requires real-time IMU-based promotion triggers.
+        Roadmap.md Phase 1: "live ECG+PPG+IMU streaming, synchronized in LSL, with real-time HR/HRV"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your proposed implementation approach
+      placeholder: |
+        1. Add `ESP32Pod` class in `src/synapse24/hardware/` using BrainFlow board abstraction
+        2. Implement `LiveLSLStreamer` in `src/synapse24/acquisition/` pushing to LSL outlets
+        3. Add CLI command `synapse24 stream --pod <id>` in `scripts/`
+        4. Integration test with synthetic board in CI
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches you've considered and why they were rejected
+      placeholder: |
+        - Using Muse SDK directly: locked to consumer device, not our custom pods
+        - Raw BLE + custom protocol: reinvents LSL sync, higher maintenance
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How critical is this for your workflow?
+      options:
+        - low (nice to have, no timeline)
+        - medium (needed for current phase, flexible timeline)
+        - high (blocking current work, urgent)
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Specific, testable criteria for "done"
+      placeholder: |
+        - [ ] ESP32 pod streams 3-lead ECG + PPG + 9-axis IMU to LSL at native rates
+        - [ ] XDF round-trip validation: zero dropped samples
+        - [ ] Tier 0 → Tier 1 promotion triggered by IMU immobility detector
+        - [ ] Power budget enforcement active during streaming
+        - [ ] Coverage ≥80% for new modules
+      validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have read Architecture.md and Roadmap.md
+          required: true
+        - label: This feature aligns with the current phase goals
+          required: true
+        - label: I can contribute implementation or testing effort
+          required: false
