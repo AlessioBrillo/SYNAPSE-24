@@ -499,6 +499,8 @@ def _validate_single_sleep_subject(subject_id: str, xdf_path: Path) -> dict | No
             sampling_rate=eeg_fs,
             gold_hypnogram=gold_hypnogram,
             gold_times=gold_times,
+            eog_signal=None,  # Canonical: EEG-only per closure gate
+            emg_signal=None,
         )
 
         target_ok = bool(validation_result["target_met"])
@@ -853,11 +855,14 @@ def load_cached_results(output_dir: Path, dataset: str) -> list[dict]:
             except Exception as e:
                 print(f"Warning: Failed to load {json_file}: {e}")
     elif dataset == "sleep_edf":
-        for json_file in output_dir.glob("*sleep*quality.json"):
+        # Sleep-EDF quality files are named like SC4001_quality.json
+        for json_file in output_dir.glob("SC*_quality.json"):
             try:
                 with open(json_file) as f:
                     data = json.load(f)
-                    results.append(data)
+                    # Only include if it has sleep_edf metadata
+                    if data.get("dataset") == "Sleep-EDF" or "subject_id" in data:
+                        results.append(data)
             except Exception as e:
                 print(f"Warning: Failed to load {json_file}: {e}")
 

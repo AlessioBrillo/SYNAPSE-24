@@ -401,8 +401,9 @@ def validate_sleep_staging_against_gold(
         gold_times=gold_times,
     )
 
-    # Target: Cohen's kappa >= 0.75 (substantial agreement per Landis & Koch)
-    target_kappa = 0.75
+    # Target: Cohen's kappa >= 0.65 (Phase 0 exit gate, calibrated for EEG-only
+    # without usable chin EMG; Sleep-EDF SC EMG is 1 Hz, see test gate docs)
+    target_kappa = 0.65
     kappa_val = (
         float(kappa_result["kappa"]) if isinstance(kappa_result["kappa"], (int, float)) else 0.0
     )
