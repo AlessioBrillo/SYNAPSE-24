@@ -490,6 +490,7 @@ def verify_xdf_roundtrip(
                     channel_count=n_channels,
                     sampling_rate=float(spec.get("sampling_rate", 0)),
                     channel_format=spec.get("channel_format", "string" if is_string else "float32"),
+                    source_id=spec.get("source_id", ""),
                 ),
             }
         )

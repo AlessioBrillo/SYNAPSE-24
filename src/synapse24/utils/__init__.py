@@ -12,6 +12,11 @@ from .xdf import (
     verify_xdf_roundtrip,
     write_xdf,
 )
+from .xdf_correction import (
+    CorrectionResult,
+    correct_xdf_from_sync,
+    correct_xdf_timestamps,
+)
 
 __all__ = [
     "StreamConfig",
@@ -24,4 +29,7 @@ __all__ = [
     "LSLStreamManager",
     "create_quality_metadata_stream",
     "create_marker_stream",
+    "CorrectionResult",
+    "correct_xdf_timestamps",
+    "correct_xdf_from_sync",
 ]
