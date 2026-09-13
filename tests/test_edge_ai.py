@@ -24,6 +24,7 @@ from synapse24.edge_ai import (
     TargetPlatform,
     deploy_model,
     quantize_model,
+    save_quantization_artifacts,
 )
 from synapse24.edge_ai.quantization import QuantizationConfig, RepresentativeDatasetGenerator
 
@@ -33,22 +34,23 @@ class TestQuantization:
     """Tests for TFLM quantization pipeline."""
 
     def create_test_model(self) -> EdgeModel:
-        """Create a simple test model."""
+        """Create a simple test model compatible with INT8 quantization."""
         config = ModelConfig(
             model_type=ModelType.STRESS_BINARY,
             input_shape=(10, 12),  # 10 timesteps, 12 features
             num_classes=2,
             sampling_rate=700,
             window_duration_s=60,
-            architecture="lstm",
+            architecture="dense",  # Dense-only for INT8 compatibility
             hidden_units=32,
-            num_layers=1,
+            num_layers=2,
         )
 
-        # Build simple LSTM model
+        # Build simple Dense model (LSTM not compatible with INT8 TFLITE_BUILTINS_INT8)
         inputs = keras.Input(shape=config.input_shape)
-        x = keras.layers.LSTM(32, return_sequences=False)(inputs)
-        x = keras.layers.Dense(16, activation="relu")(x)
+        x = keras.layers.Flatten()(inputs)
+        x = keras.layers.Dense(config.hidden_units, activation="relu")(x)
+        x = keras.layers.Dense(config.hidden_units, activation="relu")(x)
         outputs = keras.layers.Dense(1, activation="sigmoid")(x)
         model = keras.Model(inputs, outputs, name=config.name)
 

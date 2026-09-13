@@ -12,16 +12,18 @@ from typing import Any, Optional
 import numpy as np
 import numpy.typing as npt
 
-try:
-    import tensorflow as tf
-    from tensorflow import keras
-    from tensorflow.lite.python import converter as tf_lite_converter
-except ImportError:  # pragma: no cover
-    tf = None
-    keras = None
-    tf_lite_converter = None
-
 from synapse24.edge_ai.model import EdgeModel, ModelConfig, TargetPlatform
+
+
+def _get_tf():
+    """Lazy import of TensorFlow to handle dynamic installation."""
+    try:
+        import tensorflow as tf
+        from tensorflow import keras
+
+        return tf, keras
+    except ImportError as e:
+        raise RuntimeError("TensorFlow not installed") from e
 
 
 @dataclass
@@ -83,9 +85,9 @@ class RepresentativeDatasetGenerator:
         self.model_config = model_config
         self.feature_scaler = feature_scaler
         self.wesad_results = wesad_results
-        self._cached_data: npt.NDArray[np.float64] | None = None
+        self._cached_data: npt.NDArray[np.float32] | None = None
 
-    def generate(self, num_samples: int = 100) -> npt.NDArray[np.float64]:
+    def generate(self, num_samples: int = 100) -> npt.NDArray[np.float32]:
         """Generate representative dataset for calibration."""
         if self._cached_data is not None and len(self._cached_data) >= num_samples:
             return self._cached_data[:num_samples]
@@ -98,7 +100,7 @@ class RepresentativeDatasetGenerator:
         self._cached_data = data
         return data
 
-    def _from_wesad_results(self, num_samples: int) -> npt.NDArray[np.float64]:
+    def _from_wesad_results(self, num_samples: int) -> npt.NDArray[np.float32]:
         """Extract real features from WESAD ingestion results."""
         from synapse24.edge_ai.training import create_wesad_training_data
 
@@ -120,13 +122,13 @@ class RepresentativeDatasetGenerator:
             noise = np.random.normal(0, 0.01, X.shape).astype(np.float32)
             X = X + noise
 
-        return X[:num_samples].astype(np.float64)
+        return X[:num_samples].astype(np.float32)
 
-    def _synthetic(self, num_samples: int) -> npt.NDArray[np.float64]:
+    def _synthetic(self, num_samples: int) -> npt.NDArray[np.float32]:
         """Generate synthetic representative data matching input shape."""
         input_shape = self.model_config.input_shape
         if len(input_shape) == 2 or len(input_shape) == 1:
-            data = np.random.randn(num_samples, *input_shape).astype(np.float64)
+            data = np.random.randn(num_samples, *input_shape).astype(np.float32)
         else:
             raise ValueError(f"Unsupported input shape: {input_shape}")
         return data
@@ -135,8 +137,8 @@ class RepresentativeDatasetGenerator:
 def quantize_model(
     edge_model: EdgeModel,
     quant_config: QuantizationConfig,
-    representative_data: npt.NDArray[np.float64] | None = None,
-    validation_data: tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]] | None = None,
+    representative_data: npt.NDArray[np.float32] | None = None,
+    validation_data: tuple[npt.NDArray[np.float32], npt.NDArray[np.int64]] | None = None,
 ) -> QuantizationResult:
     """Quantize a trained Keras model to TFLite with optional int8 quantization.
 
@@ -149,8 +151,7 @@ def quantize_model(
     Returns:
         QuantizationResult with TFLite model bytes and metadata
     """
-    if tf is None or keras is None:
-        raise RuntimeError("TensorFlow not installed")
+    tf, keras = _get_tf()
 
     if edge_model.model is None:
         raise ValueError("EdgeModel has no Keras model to quantize")
@@ -164,30 +165,42 @@ def quantize_model(
         for i in range(len(representative_data)):
             yield [representative_data[i : i + 1]]
 
-    # Convert to TFLite
-    converter = tf.lite.TFLiteConverter.from_keras_model(edge_model.model)
+    # Convert to TFLite via SavedModel export (Keras 3 compatible)
+    from pathlib import Path
 
-    if quant_config.quantization_type == "int8":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = representative_dataset_gen
-        converter.target_spec.supported_ops = quant_config.supported_ops
-        converter.inference_input_type = getattr(tf.lite, quant_config.inference_input_type)
-        converter.inference_output_type = getattr(tf.lite, quant_config.inference_output_type)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        saved_model_path = Path(tmpdir) / "saved_model"
+        edge_model.model.export(str(saved_model_path))
+        converter = tf.lite.TFLiteConverter.from_saved_model(str(saved_model_path))
 
-        # Ensure full integer quantization
-        converter.target_spec.supported_types = [tf.int8]
+        if quant_config.quantization_type == "int8":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.representative_dataset = representative_dataset_gen
+            converter.target_spec.supported_ops = quant_config.supported_ops
 
-    elif quant_config.quantization_type == "float16":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
+            # Map string dtype to tf.dtypes
+            dtype_map = {"int8": tf.int8, "float32": tf.float32}
+            converter.inference_input_type = dtype_map.get(
+                quant_config.inference_input_type, tf.int8
+            )
+            converter.inference_output_type = dtype_map.get(
+                quant_config.inference_output_type, tf.int8
+            )
 
-    elif quant_config.quantization_type == "int16":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.int16]
+            # Ensure full integer quantization
+            converter.target_spec.supported_types = [tf.int8]
 
-    # float32: no quantization, just convert
+        elif quant_config.quantization_type == "float16":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.target_spec.supported_types = [tf.float16]
 
-    tflite_model = converter.convert()
+        elif quant_config.quantization_type == "int16":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.target_spec.supported_types = [tf.int16]
+
+        # float32: no quantization, just convert
+
+        tflite_model = converter.convert()
 
     # Analyze model
     interpreter = tf.lite.Interpreter(model_content=tflite_model)
@@ -226,6 +239,8 @@ def _get_ops_used(tflite_model: bytes) -> list[str]:
     """Extract unique ops used in TFLite model."""
     try:
         import flatbuffers
+
+        tf, _ = _get_tf()
         from tensorflow.lite.schema import Model as TFLiteModel
 
         buf = bytearray(tflite_model)
@@ -247,14 +262,13 @@ def _get_ops_used(tflite_model: bytes) -> list[str]:
 
 def _detail_to_dict(detail: dict[str, Any]) -> dict[str, Any]:
     """Convert TFLite tensor detail to serializable dict."""
+    qp = detail.get("quantization_parameters", {})
     return {
         "name": detail["name"],
         "index": detail["index"],
         "shape": detail["shape"].tolist(),
         "dtype": str(detail["dtype"]),
-        "quantization": detail["quantization_parameters"].__dict__
-        if "quantization_parameters" in detail
-        else {},
+        "quantization": dict(qp) if qp else {},
     }
 
 
@@ -289,11 +303,12 @@ def _extract_calibration_stats(
 
 
 def _compute_accuracy_drop(
-    keras_model: keras.Model,
+    keras_model: Any,
     tflite_model: bytes,
-    validation_data: tuple[npt.NDArray[np.float64], npt.NDArray[np.int64]],
+    validation_data: tuple[npt.NDArray[np.float32], npt.NDArray[np.int64]],
 ) -> float:
     """Compute accuracy drop between FP32 Keras and INT8 TFLite."""
+    tf, keras = _get_tf()
     X_val, y_val = validation_data
 
     # Keras predictions
@@ -334,6 +349,21 @@ def _compute_accuracy_drop(
     return float((acc_keras - acc_tflite) * 100)
 
 
+class _NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
+
 def save_quantization_artifacts(
     result: QuantizationResult,
     edge_model: EdgeModel,
@@ -365,7 +395,7 @@ def save_quantization_artifacts(
         "target_platform": edge_model.config.target_platform.value,
     }
     metadata_path = output_dir / f"{name}_metadata.json"
-    metadata_path.write_text(json.dumps(metadata, indent=2))
+    metadata_path.write_text(json.dumps(metadata, indent=2, cls=_NumpyEncoder))
 
     # Generate C header for ESP32 (flatbuffer)
     header_path = output_dir / f"{name}.h"

@@ -617,8 +617,8 @@ def generate_deployment_report(
 |--------|-------|-------|--------|
 | Model Size | {deployment_result.model_size_kb:.1f} KB | Platform dependent | {"✅" if deployment_result.validation_passed else "❌"} |
 | Estimated RAM | {deployment_result.estimated_ram_kb:.1f} KB | Platform dependent | {"✅" if deployment_result.validation_passed else "❌"} |
-| Estimated Flash | {deployment_result.estimated_flash_kb:.1f} KB | Platform dependent | {"✅" if deployment_result.validation_passed else "❌"} |
-| Estimated Latency | {deployment_result.estimated_latency_ms:.1f} ms | < 50 ms target | {"✅" if deployment_result.estimated_latency_ms < 50 else "⚠️"} |
+| Estimated Flash | {deployment_result.estimated_flash_kb:.1f} KB | Platform dependent | {"PASS" if deployment_result.validation_passed else "FAIL"} |
+| Estimated Latency | {deployment_result.estimated_latency_ms:.1f} ms | < 50 ms target | {"PASS" if deployment_result.estimated_latency_ms < 50 else "WARN"} |
 
 ### TFLite Operations Used
 {chr(10).join(f"- {op}" for op in deployment_result.ops_included)}
@@ -627,7 +627,7 @@ def generate_deployment_report(
 {chr(10).join(f"- {note}" for note in deployment_result.validation_notes) if deployment_result.validation_notes else "All checks passed"}
 
 ### Deployment Status
-**{"✅ READY FOR DEPLOYMENT" if deployment_result.validation_passed else "❌ VALIDATION FAILED"}**
+**{"READY FOR DEPLOYMENT" if deployment_result.validation_passed else "VALIDATION FAILED"}**
 """
-    output_path.write_text(report)
+    output_path.write_text(report, encoding="utf-8")
     return output_path
