@@ -1,5 +1,10 @@
 # SYNAPSE-24 Hardware Configuration
 # Load via DeviceRegistry.load_from_yaml()
+# 
+# Guardian security checklist: BLE MACs / serials never hardcoded.
+# ``ble_address`` / ``serial_port`` support ``${ENV_VAR}`` expansion
+# (e.g. ``${SYNAPSE_HEAD_BLE}``); unset vars resolve to empty string
+# and the pod must be provisioned at deploy time, not in git.
 
 boards:
   synthetic:
@@ -12,7 +17,198 @@ boards:
       2: "eeg"
       3: "eeg"
 
+  esp32_tier0:
+    board_id: "ESP32_TIER0"
+    n_channels: 16
+    sampling_rate: 500
+    signal_types:
+      0: "ecg"
+      1: "ppg_red"
+      2: "ppg_ir"
+      3: "acc_x"
+      4: "acc_y"
+      5: "acc_z"
+      6: "gyro_x"
+      7: "gyro_y"
+      8: "gyro_z"
+      9: "mag_x"
+      10: "mag_y"
+      11: "mag_z"
+
+  cerelog:
+    board_id: "CERELOG_BOARD"
+    n_channels: 17
+    sampling_rate: 250
+    signal_types:
+      0: "eeg"
+      1: "eeg"
+      2: "eeg"
+      3: "eeg"
+      4: "eeg"
+      5: "eeg"
+      6: "eeg"
+      7: "eeg"
+      8: "acc"
+      9: "acc"
+      10: "acc"
+      11: "gyro"
+      12: "gyro"
+      13: "gyro"
+      14: "mag"
+      15: "mag"
+      16: "mag"
+
+  emotibit:
+    board_id: "EMOTIBIT_BOARD"
+    n_channels: 14
+    sampling_rate: 15
+    signal_types:
+      0: "ppg_green"
+      1: "ppg_ir"
+      2: "ppg_red"
+      3: "eda"
+      4: "temp"
+      5: "acc"
+      6: "acc"
+      7: "acc"
+      8: "gyro"
+      9: "gyro"
+      10: "gyro"
+      11: "mag"
+      12: "mag"
+      13: "mag"
+
+  pieeg:
+    board_id: "PIEEG_BOARD"
+    n_channels: 25
+    sampling_rate: 250
+    signal_types:
+      0: "eeg"
+      1: "eeg"
+      2: "eeg"
+      3: "eeg"
+      4: "eeg"
+      5: "eeg"
+      6: "eeg"
+      7: "eeg"
+      8: "eeg"
+      9: "eeg"
+      10: "eeg"
+      11: "eeg"
+      12: "eeg"
+      13: "eeg"
+      14: "eeg"
+      15: "eeg"
+      16: "acc"
+      17: "acc"
+      18: "acc"
+      19: "gyro"
+      20: "gyro"
+      21: "gyro"
+      22: "mag"
+      23: "mag"
+      24: "mag"
+
+  ganglion:
+    board_id: "GANGLION_BOARD"
+    n_channels: 13
+    sampling_rate: 200
+    signal_types:
+      0: "eeg"
+      1: "eeg"
+      2: "eeg"
+      3: "eeg"
+      4: "acc"
+      5: "acc"
+      6: "acc"
+      7: "gyro"
+      8: "gyro"
+      9: "gyro"
+      10: "mag"
+      11: "mag"
+      12: "mag"
+
+  cyton:
+    board_id: "CYTON_BOARD"
+    n_channels: 25
+    sampling_rate: 250
+    signal_types:
+      0: "eeg"
+      1: "eeg"
+      2: "eeg"
+      3: "eeg"
+      4: "eeg"
+      5: "eeg"
+      6: "eeg"
+      7: "eeg"
+      8: "eeg"
+      9: "eeg"
+      10: "eeg"
+      11: "eeg"
+      12: "eeg"
+      13: "eeg"
+      14: "eeg"
+      15: "eeg"
+      16: "acc"
+      17: "acc"
+      18: "acc"
+      19: "gyro"
+      20: "gyro"
+      21: "gyro"
+      22: "mag"
+      23: "mag"
+      24: "mag"
+
+  muse_s:
+    board_id: "MUSE_S_BOARD"
+    n_channels: 11
+    sampling_rate: 256
+    signal_types:
+      0: "eeg"
+      1: "eeg"
+      2: "eeg"
+      3: "eeg"
+      4: "ppg"
+      5: "acc"
+      6: "acc"
+      7: "acc"
+      8: "gyro"
+      9: "gyro"
+      10: "gyro"
+
 pods:
+  # Forearm Hub (Tier 0): PPG + ECG + IMU + Temp
+  # Normative rates: ECG 500Hz, PPG 64Hz, IMU 100Hz
+  forearm_001:
+    pod_id: "forearm_001"
+    name: "SYNAPSE Forearm Hub v1"
+    board_type: "ESP32_TIER0"
+    modalities: ["PPG", "ECG", "IMU", "Temp"]
+    tier: 0
+    channels:
+      ppg: 2
+      ecg: 1
+      imu: 9
+      temp: 1
+    sampling_rates:
+      ppg: 64
+      ecg: 500
+      imu: 100
+      temp: 1
+    ble_address: "${SYNAPSE_FOREARM_BLE}"
+    placement: "forearm"
+    electrode_type: "wet_ag_agcl"
+    is_hub: true
+    metadata:
+      battery_mah: 500
+      firmware: "synapse_tier0"
+      sensors:
+        ecg: "AD8232"
+        ppg: "MAX30102"
+        imu: "ICM-20948"
+        temp: "internal"
+
+  # Head Pod (Tier 1): High-density EEG + fNIRS
   head_001:
     pod_id: "head_001"
     name: "SYNAPSE Head Pod v1"
@@ -25,7 +221,13 @@ pods:
     placement: "frontal_parietal"
     electrode_type: "dry_gold_pin"
     is_hub: false
+    metadata:
+      battery_mah: 1000
+      sensors:
+        eeg: "ADS1299 x2"
+        fnirs: "MAX86141 x4"
 
+  # In-Ear Pod (Tier 0): Ultra-low-power 1-2ch EEG
   in_ear_001:
     pod_id: "in_ear_001"
     name: "SYNAPSE In-Ear Pod v1"
@@ -38,23 +240,101 @@ pods:
     placement: "in_ear"
     electrode_type: "dry_gold_pin"
     is_hub: false
+    metadata:
+      battery_mah: 100
+      sensors:
+        eeg: "custom_ultra_low_power"
 
-  forearm_001:
-    pod_id: "forearm_001"
-    name: "SYNAPSE Forearm Hub v1"
+  # Reference: EmotiBit (validated PPG/EDA/IMU/Temp)
+  emotibit_ref:
+    pod_id: "emotibit_ref"
+    name: "EmotiBit Reference"
     board_type: "EMOTIBIT_BOARD"
-    modalities: ["PPG", "ECG", "IMU", "Temp"]
+    modalities: ["PPG", "EDA", "IMU", "Temp"]
     tier: 0
     channels:
       ppg: 3
-      ecg: 1
+      eda: 1
       imu: 9
       temp: 1
     sampling_rates:
-      ppg: 64
-      ecg: 500
-      imu: 100
+      ppg: 15
+      eda: 15
+      imu: 50
       temp: 1
-    ble_address: "${SYNAPSE_FOREARM_BLE}"
-    placement: "forearm"
-    is_hub: true
+    ble_address: "${SYNAPSE_EMOTIBIT_BLE}"
+    placement: "upper_arm"
+    electrode_type: "dry_contact"
+    is_hub: false
+    metadata:
+      battery_mah: 500
+      validation: "Chen et al. 2024 HardwareX"
+
+  # Reference: Muse S (Tier 0 sleep EEG)
+  muse_s_ref:
+    pod_id: "muse_s_ref"
+    name: "Muse S Reference"
+    board_type: "MUSE_S_BOARD"
+    modalities: ["EEG_T0", "PPG", "IMU"]
+    tier: 0
+    channels:
+      eeg: 4
+      ppg: 1
+      imu: 9
+    sampling_rates:
+      eeg: 256
+      ppg: 64
+      imu: 50
+    ble_address: "${SYNAPSE_MUSE_BLE}"
+    placement: "forehead"
+    electrode_type: "dry_fabric"
+    is_hub: false
+    metadata:
+      battery_mah: 300
+      validation: "Muse SDK"
+
+# Sync configuration
+sync:
+  tier_budgets:
+    T0:
+      max_residual_drift_ms: 10.0
+      sync_interval_s: 60.0
+    T1:
+      max_residual_drift_ms: 1.0
+      sync_interval_s: 10.0
+  acc_corr_window_s: 30.0
+  min_acc_correlation: 0.7
+
+# Power budget
+power:
+  hub_battery_mah: 3000
+  pod_battery_mah: 500
+  target_lifetime_h: 24
+  reserve_mah: 300
+  profiles:
+    T0:
+      avg_mw: 5.0
+      peak_mw: 10.0
+    T1:
+      avg_mw: 50.0
+      peak_mw: 100.0
+      max_duration_h: 10.0
+    T2:
+      avg_mw: 100.0
+      peak_mw: 200.0
+      max_burst_min: 30.0
+
+# Edge AI deployment targets
+edge_ai:
+  triage_profile:  # ESP32-S3
+    max_model_kb: 48
+    max_ram_kb: 100
+    max_latency_ms: 30
+    max_accuracy_drop_pp: 3.0
+    target_platform: "ESP32_S3"
+  hub_fusion_profile:  # Raspberry Pi 5
+    max_model_kb: 200
+    max_ram_kb: 350
+    max_latency_ms: 120
+    max_accuracy_drop_pp: 2.0
+    target_platform: "RASPBERRY_PI"
