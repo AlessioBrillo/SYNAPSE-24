@@ -1,335 +1,154 @@
-/**
- * @file sync_marker_handler.cpp
- * @brief Sync Marker Handler Implementation
- *
- * Implements dual-method clock synchronization per Architecture.md §92:
- * 1. Sync markers: Direct timestamp comparison (provides offset + drift rate)
- * 2. ACC cross-correlation: Shared physical motion as reference (provides precise offset)
- *
- * Tier 0: 10ms tolerance, 60s interval
- * Tier 1: 1ms tolerance, 10s interval
- */
-
 #include "sync_marker_handler.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-#include <cmath>
-#include <cstring>
+#include <string.h>
+#include <math.h>
 
-static const char* TAG = "SYNC_MARKER";
+static const char* TAG = "sync_marker";
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+#define MIN_MARKERS_FOR_DRIFT 3
+#define MAX_DRIFT_PPM 1000.0f
 
-#define SYNC_MAX_PODS               4
-#define SYNC_MAX_HISTORY            100
-#define SYNC_ACC_BUFFER_SIZE        SYNAPSE_ACC_CORR_BUFFER_SIZE
-#define SYNC_MIN_CORRELATION        0.7f
+esp_err_t sync_marker_handler_init(sync_marker_handler_t* handler) {
+    if (!handler) return ESP_ERR_INVALID_ARG;
 
-// ============================================================================
-// DATA STRUCTURES
-// ============================================================================
-
-typedef struct {
-    char pod_id[16];
-    uint16_t sequence;
-    int64_t hub_timestamp_us;
-    int64_t pod_timestamp_us;
-    float offset_ms;
-    float drift_ppm;
-    float confidence;
-    bool valid;
-} sync_pod_estimate_t;
-
-typedef struct {
-    int16_t accel_x[SYNC_ACC_BUFFER_SIZE];
-    int16_t accel_y[SYNC_ACC_BUFFER_SIZE];
-    int16_t accel_z[SYNC_ACC_BUFFER_SIZE];
-    int64_t timestamps_us[SYNC_ACC_BUFFER_SIZE];
-    size_t head;
-    size_t count;
-} sync_acc_buffer_t;
-
-typedef struct {
-    uint16_t sequence;
-    int64_t hub_timestamp_us;
-    int64_t pod_timestamps_us[SYNC_MAX_PODS];
-    char pod_ids[SYNC_MAX_PODS][16];
-    int pod_count;
-} sync_marker_history_t;
-
-// ============================================================================
-// GLOBAL STATE
-// ============================================================================
-
-static sync_pod_estimate_t s_pod_estimates[SYNC_MAX_PODS];
-static sync_acc_buffer_t s_hub_acc_buffer;
-static sync_acc_buffer_t s_pod_acc_buffers[SYNC_MAX_PODS];
-static sync_marker_history_t s_marker_history[SYNC_MAX_HISTORY];
-static size_t s_marker_history_count = 0;
-static uint16_t s_sequence_counter = 0;
-static SemaphoreHandle_t s_mutex = NULL;
-static bool s_initialized = false;
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-static int find_pod_index(const char* pod_id) {
-    for (int i = 0; i < SYNC_MAX_PODS; i++) {
-        if (s_pod_estimates[i].valid && strcmp(s_pod_estimates[i].pod_id, pod_id) == 0) {
-            return i;
-        }
-    }
-    // Find empty slot
-    for (int i = 0; i < SYNC_MAX_PODS; i++) {
-        if (!s_pod_estimates[i].valid) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static float compute_accel_magnitude(int16_t x, int16_t y, int16_t z) {
-    return sqrtf((float)x * x + (float)y * y + (float)z * z);
-}
-
-static float cross_correlate(const int16_t* hub, const int16_t* pod, size_t len, int* out_lag) {
-    if (len < 100) return 0.0f;
-
-    float max_corr = -1.0f;
-    int best_lag = 0;
-
-    // Search lag from -len/4 to +len/4
-    int max_lag = len / 4;
-    for (int lag = -max_lag; lag <= max_lag; lag++) {
-        float sum_xy = 0.0f, sum_xx = 0.0f, sum_yy = 0.0f;
-        int valid = 0;
-
-        for (size_t i = 0; i < len; i++) {
-            int j = i + lag;
-            if (j >= 0 && j < (int)len) {
-                float x = (float)hub[i];
-                float y = (float)pod[j];
-                sum_xy += x * y;
-                sum_xx += x * x;
-                sum_yy += y * y;
-                valid++;
-            }
-        }
-
-        if (valid > 50) {
-            float denom = sqrtf(sum_xx * sum_yy) + 1e-10f;
-            float corr = sum_xy / denom;
-            if (corr > max_corr) {
-                max_corr = corr;
-                best_lag = lag;
-            }
-        }
-    }
-
-    if (out_lag) *out_lag = best_lag;
-    return max_corr;
-}
-
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-esp_err_t sync_marker_handler_init(void) {
-    ESP_LOGI(TAG, "Initializing Sync Marker Handler...");
-
-    s_mutex = xSemaphoreCreateMutex();
-    if (!s_mutex) return ESP_FAIL;
-
-    memset(s_pod_estimates, 0, sizeof(s_pod_estimates));
-    memset(&s_hub_acc_buffer, 0, sizeof(s_hub_acc_buffer));
-    memset(s_pod_acc_buffers, 0, sizeof(s_pod_acc_buffers));
-    memset(s_marker_history, 0, sizeof(s_marker_history));
-    s_marker_history_count = 0;
-    s_sequence_counter = 0;
-
-    s_initialized = true;
-    ESP_LOGI(TAG, "Sync Marker Handler initialized");
+    memset(handler, 0, sizeof(sync_marker_handler_t));
+    handler->initialized = true;
+    ESP_LOGI(TAG, "Sync marker handler initialized");
     return ESP_OK;
 }
 
-// ============================================================================
-// BROADCAST SYNC MARKER
-// ============================================================================
+esp_err_t sync_marker_handler_on_marker_received(sync_marker_handler_t* handler, uint32_t sequence, int64_t hub_timestamp_us, sync_marker_cb_t callback, void* user_ctx) {
+    if (!handler || !handler->initialized) return ESP_ERR_INVALID_STATE;
 
-void sync_marker_handler_broadcast(void) {
-    if (!s_initialized) return;
+    int64_t pod_timestamp_us = esp_timer_get_time();
 
-    int64_t hub_time = esp_timer_get_time();
-
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        // Store in history
-        size_t idx = s_marker_history_count % SYNC_MAX_HISTORY;
-        s_marker_history[idx].sequence = s_sequence_counter;
-        s_marker_history[idx].hub_timestamp_us = hub_time;
-        s_marker_history[idx].pod_count = 0;
-        s_marker_history_count++;
-        s_sequence_counter++;
-
-        xSemaphoreGive(s_mutex);
+    if (handler->count > 0 && sequence <= handler->last_sequence) {
+        ESP_LOGW(TAG, "Out-of-order sync marker: seq=%" PRIu32 " (last=%" PRIu32 ")", sequence, handler->last_sequence);
+        return ESP_ERR_INVALID_ARG;
     }
 
-    // Create and send sync marker
-    synapse_sync_marker_t marker = {
-        .sequence = s_sequence_counter - 1,
-        .hub_timestamp_us = hub_time,
-        .pod_timestamp_us = 0 // Will be filled by pod on receipt
+    sync_marker_entry_t entry = {
+        .sequence = sequence,
+        .hub_timestamp_us = hub_timestamp_us,
+        .pod_timestamp_us = pod_timestamp_us,
+        .offset_us = pod_timestamp_us - hub_timestamp_us,
+        .drift_ppm = 0.0f
     };
 
-    // Send via BLE (pod will receive and call on_received)
-    // The hub broadcasts, pods receive
-    ble_lsl_bridge_send_sync_marker(&marker);
+    if (handler->count >= MIN_MARKERS_FOR_DRIFT && handler->last_sequence > 0) {
+        int64_t hub_delta = hub_timestamp_us - handler->last_hub_ts;
+        int64_t pod_delta = pod_timestamp_us - handler->last_pod_ts;
+        if (hub_delta > 0) {
+            entry.drift_ppm = ((float)(pod_delta - hub_delta) / (float)hub_delta) * 1000000.0f;
+        }
+    }
 
-    ESP_LOGD(TAG, "Sync marker broadcast: seq=%d, time=%lld", marker.sequence, hub_time);
+    handler->history[handler->head] = entry;
+    handler->head = (handler->head + 1) % SYNC_MARKER_MAX_HISTORY;
+    if (handler->count < SYNC_MARKER_MAX_HISTORY) handler->count++;
+
+    handler->last_sequence = sequence;
+    handler->last_hub_ts = hub_timestamp_us;
+    handler->last_pod_ts = pod_timestamp_us;
+
+    if (callback) {
+        callback(sequence, hub_timestamp_us, pod_timestamp_us, user_ctx);
+    }
+
+    if (handler->count >= MIN_MARKERS_FOR_DRIFT) {
+        sync_marker_handler_estimate_drift(handler, &handler->estimated_drift_ppm, &handler->estimated_offset_us);
+    }
+
+    ESP_LOGD(TAG, "Sync marker: seq=%" PRIu32 ", offset=%" PRId64 " us, drift=%.2f ppm", sequence, entry.offset_us, entry.drift_ppm);
+    return ESP_OK;
 }
 
-// ============================================================================
-// HANDLE RECEIVED SYNC MARKER (Pod side)
-// ============================================================================
-
-void sync_marker_handler_on_received(const synapse_sync_marker_t* marker) {
-    if (!s_initialized || !marker) return;
-
-    int64_t pod_time = esp_timer_get_time();
-
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        // Find or create pod estimate
-        int idx = find_pod_index("hub"); // Hub is the reference
-        if (idx < 0) {
-            xSemaphoreGive(s_mutex);
-            return;
-        }
-
-        sync_pod_estimate_t* est = &s_pod_estimates[idx];
-        strncpy(est->pod_id, "hub", sizeof(est->pod_id) - 1);
-        est->sequence = marker->sequence;
-        est->hub_timestamp_us = marker->hub_timestamp_us;
-        est->pod_timestamp_us = pod_time;
-        est->valid = true;
-
-        // Simple offset estimation (single marker)
-        est->offset_ms = (float)(pod_time - marker->hub_timestamp_us) / 1000.0f;
-
-        // Update drift rate if we have history
-        if (s_marker_history_count > 1) {
-            // Linear regression on last N markers
-            const int N = 10;
-            int count = 0;
-            float sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-
-            for (int i = 0; i < N && i < (int)s_marker_history_count; i++) {
-                size_t hist_idx = (s_marker_history_count - 1 - i) % SYNC_MAX_HISTORY;
-                if (s_marker_history[hist_idx].sequence > 0) {
-                    float x = (float)s_marker_history[hist_idx].hub_timestamp_us / 1e6f;
-                    float y = (float)s_marker_history[hist_idx].pod_timestamps_us[0] / 1e6f;
-                    sum_x += x;
-                    sum_y += y;
-                    sum_xy += x * y;
-                    sum_xx += x * x;
-                    count++;
-                }
-            }
-
-            if (count >= 2) {
-                float n = (float)count;
-                float a = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x + 1e-10f);
-                float b = (sum_y - a * sum_x) / n;
-                est->drift_ppm = (a - 1.0f) * 1e6f;
-                est->offset_ms = b * 1000.0f;
-                est->confidence = (float)count / 10.0f;
-            }
-        }
-
-        xSemaphoreGive(s_mutex);
+esp_err_t sync_marker_handler_estimate_drift(sync_marker_handler_t* handler, float* drift_ppm, int64_t* offset_us) {
+    if (!handler || !handler->initialized || handler->count < MIN_MARKERS_FOR_DRIFT) {
+        return ESP_ERR_INVALID_STATE;
     }
+
+    int n = handler->count;
+    int start = (handler->head + SYNC_MARKER_MAX_HISTORY - n) % SYNC_MARKER_MAX_HISTORY;
+
+    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+    int valid_count = 0;
+
+    for (int i = 0; i < n; i++) {
+        int idx = (start + i) % SYNC_MARKER_MAX_HISTORY;
+        const sync_marker_entry_t* e = &handler->history[idx];
+
+        if (fabsf(e->drift_ppm) < MAX_DRIFT_PPM) {
+            double x = (double)e->hub_timestamp_us / 1e6;
+            double y = (double)e->offset_us;
+            sum_x += x;
+            sum_y += y;
+            sum_xy += x * y;
+            sum_x2 += x * x;
+            valid_count++;
+        }
+    }
+
+    if (valid_count < 2) {
+        if (drift_ppm) *drift_ppm = 0.0f;
+        if (offset_us) *offset_us = handler->history[(handler->head + SYNC_MARKER_MAX_HISTORY - 1) % SYNC_MARKER_MAX_HISTORY].offset_us;
+        return ESP_OK;
+    }
+
+    double denom = valid_count * sum_x2 - sum_x * sum_x;
+    double drift_rate = 0.0;
+    double offset = 0.0;
+
+    if (fabs(denom) > 1e-10) {
+        drift_rate = (valid_count * sum_xy - sum_x * sum_y) / denom;
+        offset = (sum_y - drift_rate * sum_x) / valid_count;
+    } else {
+        offset = sum_y / valid_count;
+    }
+
+    if (drift_ppm) *drift_ppm = (float)(drift_rate * 1e6);
+    if (offset_us) *offset_us = (int64_t)offset;
+
+    return ESP_OK;
 }
 
-// ============================================================================
-// FEED ACCELEROMETER FOR CROSS-CORRELATION
-// ============================================================================
+esp_err_t sync_marker_handler_correct_timestamp(const sync_marker_handler_t* handler, int64_t raw_pod_timestamp_us, int64_t* corrected_timestamp_us) {
+    if (!handler || !handler->initialized || !corrected_timestamp_us) return ESP_ERR_INVALID_ARG;
 
-void sync_marker_handler_feed_accel(int16_t ax, int16_t ay, int16_t az, int64_t timestamp_us) {
-    if (!s_initialized) return;
-
-    float mag = compute_accel_magnitude(ax, ay, az);
-
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        // Store in hub buffer
-        size_t head = s_hub_acc_buffer.head;
-        s_hub_acc_buffer.accel_x[head] = (int16_t)mag; // Store magnitude in x
-        s_hub_acc_buffer.accel_y[head] = 0;
-        s_hub_acc_buffer.accel_z[head] = 0;
-        s_hub_acc_buffer.timestamps_us[head] = timestamp_us;
-        s_hub_acc_buffer.head = (head + 1) % SYNC_ACC_BUFFER_SIZE;
-        if (s_hub_acc_buffer.count < SYNC_ACC_BUFFER_SIZE) {
-            s_hub_acc_buffer.count++;
-        }
-        xSemaphoreGive(s_mutex);
+    if (handler->count < MIN_MARKERS_FOR_DRIFT) {
+        *corrected_timestamp_us = raw_pod_timestamp_us - handler->estimated_offset_us;
+        return ESP_OK;
     }
+
+    double drift_rate = handler->estimated_drift_ppm / 1e6;
+    double offset = (double)handler->estimated_offset_us;
+    double raw_s = raw_pod_timestamp_us / 1e6;
+
+    double corrected_s = (raw_s - offset / 1e6) / (1.0 + drift_rate);
+    *corrected_timestamp_us = (int64_t)(corrected_s * 1e6);
+
+    return ESP_OK;
 }
 
-// ============================================================================
-// GET DRIFT ESTIMATE
-// ============================================================================
-
-bool sync_marker_handler_get_drift(const char* pod_id, float* offset_ms, float* drift_ppm) {
-    if (!s_initialized || !offset_ms || !drift_ppm) return false;
-
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        int idx = find_pod_index(pod_id);
-        if (idx >= 0 && s_pod_estimates[idx].valid) {
-            *offset_ms = s_pod_estimates[idx].offset_ms;
-            *drift_ppm = s_pod_estimates[idx].drift_ppm;
-            xSemaphoreGive(s_mutex);
-            return true;
-        }
-        xSemaphoreGive(s_mutex);
-    }
-    return false;
+esp_err_t sync_marker_handler_get_stats(const sync_marker_handler_t* handler, uint32_t* markers_received, float* drift_ppm, int64_t* offset_us) {
+    if (!handler) return ESP_ERR_INVALID_ARG;
+    if (markers_received) *markers_received = handler->count;
+    if (drift_ppm) *drift_ppm = handler->estimated_drift_ppm;
+    if (offset_us) *offset_us = handler->estimated_offset_us;
+    return ESP_OK;
 }
 
-// ============================================================================
-// CHECK TOLERANCE
-// ============================================================================
+esp_err_t sync_marker_handler_reset(sync_marker_handler_t* handler) {
+    if (!handler) return ESP_ERR_INVALID_ARG;
 
-bool sync_marker_handler_within_tolerance(int tier) {
-    if (!s_initialized) return true; // Fail open
-
-    float max_tolerance_ms = (tier == 1) ? 1.0f : 10.0f; // T1=1ms, T0=10ms
-
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        for (int i = 0; i < SYNC_MAX_PODS; i++) {
-            if (s_pod_estimates[i].valid) {
-                if (fabsf(s_pod_estimates[i].offset_ms) > max_tolerance_ms) {
-                    xSemaphoreGive(s_mutex);
-                    return false;
-                }
-            }
-        }
-        xSemaphoreGive(s_mutex);
-    }
-    return true;
-}
-
-// ============================================================================
-// DEINITIALIZATION
-// ============================================================================
-
-void sync_marker_handler_deinit(void) {
-    if (s_mutex) {
-        vSemaphoreDelete(s_mutex);
-        s_mutex = NULL;
-    }
-    s_initialized = false;
-    ESP_LOGI(TAG, "Sync Marker Handler deinitialized");
+    handler->count = 0;
+    handler->head = 0;
+    handler->last_hub_ts = 0;
+    handler->last_pod_ts = 0;
+    handler->last_sequence = 0;
+    handler->estimated_drift_ppm = 0.0f;
+    handler->estimated_offset_us = 0;
+    ESP_LOGI(TAG, "Sync marker handler reset");
+    return ESP_OK;
 }

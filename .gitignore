@@ -72,3 +72,9 @@ models/
 # Hardware configs (may contain BLE addresses)
 config/*.local.yaml
 config/secrets.yaml
+
+# ESP-IDF build artifacts
+firmware/**/build/
+firmware/**/managed_components/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
