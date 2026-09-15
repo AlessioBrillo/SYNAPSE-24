@@ -15,7 +15,7 @@ import numpy.typing as npt
 from synapse24.edge_ai.model import EdgeModel, ModelConfig, TargetPlatform
 
 
-def _get_tf():
+def _get_tf() -> tuple[Any, Any]:
     """Lazy import of TensorFlow to handle dynamic installation."""
     try:
         import tensorflow as tf
