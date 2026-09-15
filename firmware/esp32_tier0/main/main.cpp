@@ -88,18 +88,55 @@ static void triage_task_fn(void* arg) {
 
         if (count < 5) continue;
 
+        // Fill all 26 features (pad with zeros for features we don't have)
+        // Our model expects 26 features from IMU (chest ACC mean/std/entropy/freq x3, wrist ACC mean/std/entropy/freq x3, BVP mean/std)
+        // We only have IMU data, so we compute what we can and zero-pad the rest
         input.timestamp_us = esp_timer_get_time();
-        input.feature_count = 6;
-        input.features[0] = ax_sum / count;
-        input.features[1] = ay_sum / count;
-        input.features[2] = az_sum / count;
-        input.features[3] = gx_sum / count;
-        input.features[4] = gy_sum / count;
-        input.features[5] = gz_sum / count;
+        input.feature_count = TRIAGE_NUM_FEATURES;
+
+        // Features 0-3: chest ACC X mean, std, entropy, dom_freq
+        input.features[0] = ax_sum / count;  // mean X
+        input.features[1] = 0.0f;  // std X - need more samples
+        input.features[2] = 0.0f;  // entropy X
+        input.features[3] = 0.0f;  // dom_freq X
+
+        // Features 4-7: chest ACC Y
+        input.features[4] = ay_sum / count;
+        input.features[5] = 0.0f;
+        input.features[6] = 0.0f;
+        input.features[7] = 0.0f;
+
+        // Features 8-11: chest ACC Z
+        input.features[8] = az_sum / count;
+        input.features[9] = 0.0f;
+        input.features[10] = 0.0f;
+        input.features[11] = 0.0f;
+
+        // Features 12-15: wrist ACC X
+        input.features[12] = gx_sum / count;
+        input.features[13] = 0.0f;
+        input.features[14] = 0.0f;
+        input.features[15] = 0.0f;
+
+        // Features 16-19: wrist ACC Y
+        input.features[16] = gy_sum / count;
+        input.features[17] = 0.0f;
+        input.features[18] = 0.0f;
+        input.features[19] = 0.0f;
+
+        // Features 20-23: wrist ACC Z
+        input.features[20] = gz_sum / count;
+        input.features[21] = 0.0f;
+        input.features[22] = 0.0f;
+        input.features[23] = 0.0f;
+
+        // Features 24-25: BVP mean, std (not available, zero)
+        input.features[24] = 0.0f;
+        input.features[25] = 0.0f;
 
         if (triage_inference_run(&g_triage, &input, &output) == ESP_OK && output.valid) {
-            ESP_LOGI(TAG, "Triage: stress=%.3f, sleep=%.3f, artifact=%.3f, class=%d, time=%" PRId64 " us",
-                     output.stress_prob, output.sleep_prob, output.artifact_prob, output.stress_class, output.inference_time_us);
+            ESP_LOGI(TAG, "Triage: baseline=%.3f, stress=%.3f, artifact=%.3f, class=%d, time=%" PRId64 " us",
+                     output.baseline_prob, output.stress_prob, output.artifact_prob, output.predicted_class, output.inference_time_us);
         }
     }
 }
@@ -174,6 +211,9 @@ static void main_task_fn(void* arg) {
     ESP_ERROR_CHECK(ble_lsl_bridge_start(&g_ble_bridge));
 
     ESP_ERROR_CHECK(sync_marker_handler_init(&g_sync_handler));
+
+    // Initialize triage inference with embedded model
+    ESP_ERROR_CHECK(triage_inference_init(&g_triage));
 
     xTaskCreate(triage_task_fn, "triage_task", 8192, NULL, 5, &g_triage_task);
 
