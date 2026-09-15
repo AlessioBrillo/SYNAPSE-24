@@ -1,532 +1,220 @@
-/**
- * @file main.cpp
- * @brief SYNAPSE-24 ESP32-S3 Tier 0 Firmware Entry Point
- *
- * Architecture.md §23-31: Decoupled sensor pod, Tier 0 continuous H24
- * Architecture.md §33-43: Tiered acquisition with IMU-based promotion
- * Architecture.md §45-53: Edge triage (SNN/TinyML) for T0->T1 promotion
- * Architecture.md §92: Multi-node clock sync via markers + ACC cross-corr
- */
-
-#include "synapse_tier0_config.h"
-#include "sensors/ecg_ad8232.h"
-#include "sensors/ppg_max30102.h"
-#include "sensors/imu_icm20948.h"
-#include "ble/ble_lsl_bridge.h"
-#include "sync/sync_marker_handler.h"
-#include "power/power_monitor.h"
-#include "triage/triage_inference.h"
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-#include "freertos/timers.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
-#include "esp_bt.h"
-#include "esp_mac.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "driver/adc.h"
-#include <string.h>
 
-// ============================================================================
-// LOGGING
-// ============================================================================
-static const char* TAG = "SYNAPSE_T0";
+#include "sensor_scheduler.h"
+#include "ecg_ad8232.h"
+#include "ppg_max30102.h"
+#include "imu_icm20948.h"
+#include "ble_lsl_bridge.h"
+#include "sync_marker_handler.h"
+#include "triage_inference.h"
 
-// ============================================================================
-// GLOBAL STATE
-// ============================================================================
-static synapse_system_state_t g_system_state = SYNAPSE_STATE_INIT;
-static SemaphoreHandle_t g_state_mutex = NULL;
+static const char* TAG = "synapse_tier0";
 
-// Task handles for watchdog monitoring
-static TaskHandle_t g_task_ecg = NULL;
-static TaskHandle_t g_task_ppg = NULL;
-static TaskHandle_t g_task_imu = NULL;
-static TaskHandle_t g_task_ble = NULL;
-static TaskHandle_t g_task_sync = NULL;
-static TaskHandle_t g_task_triage = NULL;
-static TaskHandle_t g_task_power = NULL;
-static TaskHandle_t g_task_watchdog = NULL;
+#define SCHEDULER_QUEUE_SIZE 64
 
-// Queues for inter-task communication
-static QueueHandle_t g_queue_ecg = NULL;
-static QueueHandle_t g_queue_ppg = NULL;
-static QueueHandle_t g_queue_imu = NULL;
-static QueueHandle_t g_queue_ble_tx = NULL;
-static QueueHandle_t g_queue_sync = NULL;
+static sensor_scheduler_t g_scheduler;
+static ble_lsl_bridge_t g_ble_bridge;
+static sync_marker_handler_t g_sync_handler;
+static triage_inference_t g_triage;
+static QueueHandle_t g_scheduler_queue = NULL;
 
-// Watchdog timer
-static TimerHandle_t g_watchdog_timer = NULL;
-static volatile bool g_watchdog_fed = false;
+static TaskHandle_t g_main_task = NULL;
+static TaskHandle_t g_triage_task = NULL;
 
-// ============================================================================
-// FORWARD DECLARATIONS
-// ============================================================================
-static void task_ecg_acquisition(void* pvParameters);
-static void task_ppg_acquisition(void* pvParameters);
-static void task_imu_acquisition(void* pvParameters);
-static void task_ble_tx(void* pvParameters);
-static void task_sync_markers(void* pvParameters);
-static void task_triage_inference(void* pvParameters);
-static void task_power_monitor(void* pvParameters);
-static void task_watchdog(void* pvParameters);
-static void watchdog_timer_callback(TimerHandle_t xTimer);
-static esp_err_t init_hardware(void);
-static esp_err_t init_rtos_objects(void);
-static void set_state(synapse_system_state_t new_state);
-static void print_memory_stats(void);
+static ecg_ad8232_config_t g_ecg_config = {
+    .adc_channel = ADC1_CHANNEL_0,
+    .gpio_drdy = GPIO_NUM_4,
+    .vref_mv = 1100.0f,
+    .gain = 6.0f
+};
 
-// ============================================================================
-// MAIN ENTRY POINT
-// ============================================================================
+static ppg_max30102_config_t g_ppg_config = {
+    .i2c_port = I2C_NUM_0,
+    .i2c_addr = 0x57,
+    .gpio_int = GPIO_NUM_5,
+    .led_current_red = 0x1F,
+    .led_current_ir = 0x1F,
+    .led_current_green = 0x00,
+    .sample_rate = 0x03,
+    .pulse_width = 0x03,
+    .adc_range = 0x03
+};
+
+static imu_icm20948_config_t g_imu_config = {
+    .i2c_port = I2C_NUM_0,
+    .i2c_addr = 0x68,
+    .gpio_int = GPIO_NUM_6,
+    .accel_fsr_g = 8,
+    .gyro_fsr_dps = 500,
+    .accel_odr_hz = 100,
+    .gyro_odr_hz = 100
+};
+
+static void triage_task_fn(void* arg) {
+    (void)arg;
+    triage_input_t input = {0};
+    triage_output_t output = {0};
+    TickType_t last_wake = xTaskGetTickCount();
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(200));
+
+        if (!g_triage.initialized) continue;
+
+        int available = sensor_ring_buffer_available(&g_scheduler.buffers[SENSOR_TYPE_IMU]);
+        if (available < 10) continue;
+
+        sensor_sample_t imu_samples[10];
+        int count = 0;
+        float ax_sum = 0, ay_sum = 0, az_sum = 0;
+        float gx_sum = 0, gy_sum = 0, gz_sum = 0;
+
+        while (count < 10 && sensor_ring_buffer_pop(&g_scheduler.buffers[SENSOR_TYPE_IMU], &imu_samples[count])) {
+            ax_sum += imu_samples[count].data.imu.ax;
+            ay_sum += imu_samples[count].data.imu.ay;
+            az_sum += imu_samples[count].data.imu.az;
+            gx_sum += imu_samples[count].data.imu.gx;
+            gy_sum += imu_samples[count].data.imu.gy;
+            gz_sum += imu_samples[count].data.imu.gz;
+            count++;
+        }
+
+        if (count < 5) continue;
+
+        input.timestamp_us = esp_timer_get_time();
+        input.feature_count = 6;
+        input.features[0] = ax_sum / count;
+        input.features[1] = ay_sum / count;
+        input.features[2] = az_sum / count;
+        input.features[3] = gx_sum / count;
+        input.features[4] = gy_sum / count;
+        input.features[5] = gz_sum / count;
+
+        if (triage_inference_run(&g_triage, &input, &output) == ESP_OK && output.valid) {
+            ESP_LOGI(TAG, "Triage: stress=%.3f, sleep=%.3f, artifact=%.3f, class=%d, time=%" PRId64 " us",
+                     output.stress_prob, output.sleep_prob, output.artifact_prob, output.stress_class, output.inference_time_us);
+        }
+    }
+}
+
+static void sync_marker_callback(uint32_t sequence, int64_t hub_timestamp_us, int64_t pod_timestamp_us, void* user_ctx) {
+    (void)user_ctx;
+    ESP_LOGD(TAG, "Sync marker callback: seq=%" PRIu32 ", hub=%" PRId64 ", pod=%" PRId64, sequence, hub_timestamp_us, pod_timestamp_us);
+
+    ble_lsl_bridge_send_sync_marker(&g_ble_bridge, sequence, pod_timestamp_us);
+}
+
+static void main_task_fn(void* arg) {
+    (void)arg;
+    sensor_sample_t sample;
+
+    ESP_LOGI(TAG, "SYNAPSE-24 Tier 0 firmware starting...");
+
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_timer_init());
+
+    g_scheduler_queue = xQueueCreate(SCHEDULER_QUEUE_SIZE, sizeof(sensor_sample_t));
+    if (!g_scheduler_queue) {
+        ESP_LOGE(TAG, "Failed to create scheduler queue");
+        return;
+    }
+
+    ESP_ERROR_CHECK(sensor_scheduler_init(&g_scheduler, g_scheduler_queue));
+
+    TaskHandle_t ecg_task, ppg_task, imu_task;
+    sensor_config_t ecg_sensor = {
+        .type = SENSOR_TYPE_ECG,
+        .name = "ECG_AD8232",
+        .sampling_rate_hz = 250,
+        .init = (sensor_init_fn_t)ecg_ad8232_init,
+        .read = (sensor_read_fn_t)ecg_ad8232_read,
+        .deinit = (sensor_deinit_fn_t)ecg_ad8232_deinit,
+        .user_ctx = &g_ecg_config,
+        .task_handle = &ecg_task
+    };
+
+    sensor_config_t ppg_sensor = {
+        .type = SENSOR_TYPE_PPG,
+        .name = "PPG_MAX30102",
+        .sampling_rate_hz = 64,
+        .init = (sensor_init_fn_t)ppg_max30102_init,
+        .read = (sensor_read_fn_t)ppg_max30102_read,
+        .deinit = (sensor_deinit_fn_t)ppg_max30102_deinit,
+        .user_ctx = &g_ppg_config,
+        .task_handle = &ppg_task
+    };
+
+    sensor_config_t imu_sensor = {
+        .type = SENSOR_TYPE_IMU,
+        .name = "IMU_ICM20948",
+        .sampling_rate_hz = 100,
+        .init = (sensor_init_fn_t)imu_icm20948_init,
+        .read = (sensor_read_fn_t)imu_icm20948_read,
+        .deinit = (sensor_deinit_fn_t)imu_icm20948_deinit,
+        .user_ctx = &g_imu_config,
+        .task_handle = &imu_task
+    };
+
+    xTaskCreate(sensor_task_fn, "ecg_task", 4096, &ecg_sensor, 10, &ecg_task);
+    xTaskCreate(sensor_task_fn, "ppg_task", 4096, &ppg_sensor, 10, &ppg_task);
+    xTaskCreate(sensor_task_fn, "imu_task", 4096, &imu_sensor, 10, &imu_task);
+
+    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ecg_sensor));
+    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ppg_sensor));
+    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &imu_sensor));
+
+    ESP_ERROR_CHECK(ble_lsl_bridge_init(&g_ble_bridge, g_scheduler_queue));
+    ESP_ERROR_CHECK(ble_lsl_bridge_start(&g_ble_bridge));
+
+    ESP_ERROR_CHECK(sync_marker_handler_init(&g_sync_handler));
+
+    xTaskCreate(triage_task_fn, "triage_task", 8192, NULL, 5, &g_triage_task);
+
+    ESP_ERROR_CHECK(sensor_scheduler_start(&g_scheduler));
+
+    ESP_LOGI(TAG, "All subsystems started. Entering main loop...");
+
+    uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
+    uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
+    TickType_t last_stats = xTaskGetTickCount();
+
+    while (1) {
+        if (xQueueReceive(g_scheduler_queue, &sample, pdMS_TO_TICKS(100)) == pdTRUE) {
+            ble_lsl_bridge_send_sample(&g_ble_bridge, &sample);
+        }
+
+        if (xTaskGetTickCount() - last_wake >= pdMS_TO_TICKS(10000)) {
+            sensor_scheduler_get_stats(&g_scheduler, sample_counts, dropped_samples);
+            ESP_LOGI(TAG, "Stats: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32 " | Dropped: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32,
+                     sample_counts[0], sample_counts[1], sample_counts[2],
+                     dropped_samples[0], dropped_samples[1], dropped_samples[2]);
+
+            uint32_t markers;
+            float drift;
+            int64_t offset;
+            sync_marker_handler_get_stats(&g_sync_handler, &markers, &drift, &offset);
+            ESP_LOGI(TAG, "Sync: markers=%" PRIu32 ", drift=%.2f ppm, offset=%" PRId64 " us", markers, drift, offset);
+
+            size_t arena_used;
+            triage_inference_get_model_info(&g_triage, NULL, &arena_used);
+            ESP_LOGI(TAG, "TFLM arena used: %zu bytes", arena_used);
+
+            last_stats = xTaskGetTickCount();
+        }
+    }
+}
+
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "===========================================");
-    ESP_LOGI(TAG, "SYNAPSE-24 Tier 0 Firmware v%s", SYNAPSE_FIRMWARE_VERSION_STRING);
-    ESP_LOGI(TAG, "Hardware: %s", SYNAPSE_HARDWARE_REV);
-    ESP_LOGI(TAG, "Architecture: Decoupled Pod/Hub, Tiered Acquisition");
-    ESP_LOGI(TAG, "===========================================");
-
-    print_memory_stats();
-
-    // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    // Initialize hardware
-    ESP_ERROR_CHECK(init_hardware());
-
-    // Initialize RTOS objects (queues, mutexes, timers)
-    ESP_ERROR_CHECK(init_rtos_objects());
-
-    // Initialize subsystems
-    ESP_ERROR_CHECK(ecg_ad8232_init());
-    ESP_ERROR_CHECK(ppg_max30102_init());
-    ESP_ERROR_CHECK(imu_icm20948_init());
-    ESP_ERROR_CHECK(ble_lsl_bridge_init());
-    ESP_ERROR_CHECK(sync_marker_handler_init());
-    ESP_ERROR_CHECK(power_monitor_init());
-    ESP_ERROR_CHECK(triage_inference_init());
-
-    // Create tasks
-    xTaskCreatePinnedToCore(task_ecg_acquisition, "ecg_acq", SYNAPSE_STACK_ECG, NULL, SYNAPSE_TASK_PRIO_ECG, &g_task_ecg, 0);
-    xTaskCreatePinnedToCore(task_ppg_acquisition, "ppg_acq", SYNAPSE_STACK_PPG, NULL, SYNAPSE_TASK_PRIO_PPG, &g_task_ppg, 0);
-    xTaskCreatePinnedToCore(task_imu_acquisition, "imu_acq", SYNAPSE_STACK_IMU, NULL, SYNAPSE_TASK_PRIO_IMU, &g_task_imu, 0);
-    xTaskCreatePinnedToCore(task_ble_tx, "ble_tx", SYNAPSE_STACK_BLE, NULL, SYNAPSE_TASK_PRIO_BLE, &g_task_ble, 1);
-    xTaskCreatePinnedToCore(task_sync_markers, "sync_mkr", SYNAPSE_STACK_SYNC, NULL, SYNAPSE_TASK_PRIO_SYNC, &g_task_sync, 1);
-    xTaskCreatePinnedToCore(task_triage_inference, "triage", SYNAPSE_STACK_TRIAGE, NULL, SYNAPSE_TASK_PRIO_TRIAGE, &g_task_triage, 1);
-    xTaskCreatePinnedToCore(task_power_monitor, "power", SYNAPSE_STACK_POWER, NULL, SYNAPSE_TASK_PRIO_POWER, &g_task_power, 1);
-    xTaskCreatePinnedToCore(task_watchdog, "watchdog", SYNAPSE_STACK_WATCHDOG, NULL, SYNAPSE_TASK_PRIO_WATCHDOG, &g_task_watchdog, 0);
-
-    // Start watchdog timer
-    g_watchdog_timer = xTimerCreate("sys_wdt", pdMS_TO_TICKS(SYNAPSE_WDT_TIMEOUT_MS), pdTRUE, NULL, watchdog_timer_callback);
-    xTimerStart(g_watchdog_timer, 0);
-
-    // Transition to running state
-    set_state(SYNAPSE_STATE_T0_RUNNING);
-
-    ESP_LOGI(TAG, "All tasks started. Tier 0 acquisition running.");
-    ESP_LOGI(TAG, "ECG: %d Hz, PPG: %d Hz, IMU: %d Hz", SYNAPSE_ECG_SAMPLING_RATE_HZ, SYNAPSE_PPG_SAMPLING_RATE_HZ, SYNAPSE_IMU_SAMPLING_RATE_HZ);
-    ESP_LOGI(TAG, "Sync marker interval: %d ms", SYNAPSE_SYNC_MARKER_INTERVAL_MS);
-
-    // Main loop - monitor system health
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(10000)); // 10 second check interval
-
-        // Feed watchdog
-        g_watchdog_fed = true;
-
-        // Log status periodically
-        synapse_power_status_t power_status;
-        synapse_get_power_status(&power_status);
-        ESP_LOGI(TAG, "State: %d, Battery: %.0f mAh (%.1f h), Power: %.1f mW, T0: %.1f h, T1: %.1f h",
-                 g_system_state, power_status.battery_remaining_mah, power_status.estimated_remaining_h,
-                 power_status.current_power_mw, power_status.tier0_h_used, power_status.tier1_h_used);
-
-        print_memory_stats();
-    }
-}
-
-// ============================================================================
-// TASK IMPLEMENTATIONS
-// ============================================================================
-
-static void task_ecg_acquisition(void* pvParameters) {
-    ESP_LOGI(TAG, "ECG acquisition task started (Core 0, Priority %d)", SYNAPSE_TASK_PRIO_ECG);
-    synapse_ecg_sample_t sample;
-    TickType_t last_wake = xTaskGetTickCount();
-    const TickType_t period = pdMS_TO_TICKS(1000 / SYNAPSE_ECG_SAMPLING_RATE_HZ);
-
-    while (true) {
-        vTaskDelayUntil(&last_wake, period);
-
-        if (g_system_state != SYNAPSE_STATE_T0_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T1_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T2_RUNNING) {
-            continue;
-        }
-
-        // Read ECG sample
-        esp_err_t err = ecg_ad8232_read_sample(&sample);
-        if (err == ESP_OK) {
-            // Push to queue (non-blocking, drop if full)
-            xQueueSend(g_queue_ecg, &sample, 0);
-
-            // Also feed directly to triage if buffer ready
-            triage_inference_feed_ecg(&sample);
-        } else if (err == ESP_ERR_TIMEOUT) {
-            // ADC not ready, skip this cycle
-        } else {
-            ESP_LOGW(TAG, "ECG read error: %s", esp_err_to_name(err));
-        }
-    }
-}
-
-static void task_ppg_acquisition(void* pvParameters) {
-    ESP_LOGI(TAG, "PPG acquisition task started (Core 0, Priority %d)", SYNAPSE_TASK_PRIO_PPG);
-    synapse_ppg_sample_t sample;
-    TickType_t last_wake = xTaskGetTickCount();
-    const TickType_t period = pdMS_TO_TICKS(1000 / SYNAPSE_PPG_SAMPLING_RATE_HZ);
-
-    while (true) {
-        vTaskDelayUntil(&last_wake, period);
-
-        if (g_system_state != SYNAPSE_STATE_T0_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T1_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T2_RUNNING) {
-            continue;
-        }
-
-        esp_err_t err = ppg_max30102_read_sample(&sample);
-        if (err == ESP_OK) {
-            xQueueSend(g_queue_ppg, &sample, 0);
-            triage_inference_feed_ppg(&sample);
-        } else if (err != ESP_ERR_TIMEOUT) {
-            ESP_LOGW(TAG, "PPG read error: %s", esp_err_to_name(err));
-        }
-    }
-}
-
-static void task_imu_acquisition(void* pvParameters) {
-    ESP_LOGI(TAG, "IMU acquisition task started (Core 0, Priority %d)", SYNAPSE_TASK_PRIO_IMU);
-    synapse_imu_sample_t sample;
-    TickType_t last_wake = xTaskGetTickCount();
-    const TickType_t period = pdMS_TO_TICKS(1000 / SYNAPSE_IMU_SAMPLING_RATE_HZ);
-
-    while (true) {
-        vTaskDelayUntil(&last_wake, period);
-
-        if (g_system_state != SYNAPSE_STATE_T0_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T1_RUNNING &&
-            g_system_state != SYNAPSE_STATE_T2_RUNNING) {
-            continue;
-        }
-
-        esp_err_t err = imu_icm20948_read_sample(&sample);
-        if (err == ESP_OK) {
-            xQueueSend(g_queue_imu, &sample, 0);
-            triage_inference_feed_imu(&sample);
-            sync_marker_handler_feed_accel(sample.accel_x, sample.accel_y, sample.accel_z, sample.timestamp_us);
-        } else if (err != ESP_ERR_TIMEOUT) {
-            ESP_LOGW(TAG, "IMU read error: %s", esp_err_to_name(err));
-        }
-    }
-}
-
-static void task_ble_tx(void* pvParameters) {
-    ESP_LOGI(TAG, "BLE TX task started (Core 1, Priority %d)", SYNAPSE_TASK_PRIO_BLE);
-
-    // Buffer for batching samples
-    static synapse_ecg_sample_t ecg_batch[SYNAPSE_ECG_QUEUE_SIZE];
-    static synapse_ppg_sample_t ppg_batch[SYNAPSE_PPG_QUEUE_SIZE];
-    static synapse_imu_sample_t imu_batch[SYNAPSE_IMU_QUEUE_SIZE];
-    size_t ecg_count = 0, ppg_count = 0, imu_count = 0;
-
-    while (true) {
-        // Collect ECG samples
-        while (ecg_count < SYNAPSE_ECG_QUEUE_SIZE &&
-               xQueueReceive(g_queue_ecg, &ecg_batch[ecg_count], 0) == pdTRUE) {
-            ecg_count++;
-        }
-
-        // Collect PPG samples
-        while (ppg_count < SYNAPSE_PPG_QUEUE_SIZE &&
-               xQueueReceive(g_queue_ppg, &ppg_batch[ppg_count], 0) == pdTRUE) {
-            ppg_count++;
-        }
-
-        // Collect IMU samples
-        while (imu_count < SYNAPSE_IMU_QUEUE_SIZE &&
-               xQueueReceive(g_queue_imu, &imu_batch[imu_count], 0) == pdTRUE) {
-            imu_count++;
-        }
-
-        // Send batches via BLE
-        if (ecg_count > 0) {
-            ble_lsl_bridge_send_ecg(ecg_batch, ecg_count);
-            ecg_count = 0;
-        }
-        if (ppg_count > 0) {
-            ble_lsl_bridge_send_ppg(ppg_batch, ppg_count);
-            ppg_count = 0;
-        }
-        if (imu_count > 0) {
-            ble_lsl_bridge_send_imu(imu_batch, imu_count);
-            imu_count = 0;
-        }
-
-        // Small delay to prevent busy-waiting
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-static void task_sync_markers(void* pvParameters) {
-    ESP_LOGI(TAG, "Sync marker task started (Core 1, Priority %d)", SYNAPSE_TASK_PRIO_SYNC);
-    TickType_t last_broadcast = xTaskGetTickCount();
-    const TickType_t interval = pdMS_TO_TICKS(SYNAPSE_SYNC_MARKER_INTERVAL_MS);
-
-    while (true) {
-        vTaskDelayUntil(&last_broadcast, interval);
-
-        if (g_system_state == SYNAPSE_STATE_T0_RUNNING ||
-            g_system_state == SYNAPSE_STATE_T1_RUNNING ||
-            g_system_state == SYNAPSE_STATE_T2_RUNNING) {
-            sync_marker_handler_broadcast();
-        }
-    }
-}
-
-static void task_triage_inference(void* pvParameters) {
-    ESP_LOGI(TAG, "Triage inference task started (Core 1, Priority %d)", SYNAPSE_TASK_PRIO_TRIAGE);
-    TickType_t last_run = xTaskGetTickCount();
-    const TickType_t interval = pdMS_TO_TICKS(1000); // Run inference every 1 second
-
-    while (true) {
-        vTaskDelayUntil(&last_run, interval);
-
-        if (g_system_state == SYNAPSE_STATE_T0_RUNNING) {
-            synapse_triage_result_t result;
-            if (triage_inference_run(&result)) {
-                ESP_LOGI(TAG, "Triage: class=%d, conf=%.2f, latency=%.1fms",
-                         result.classification, result.confidence, result.inference_ms);
-
-                // Check for Tier 1 promotion
-                if (result.classification == 1 && result.confidence > 0.8f) {
-                    synapse_power_status_t power_status;
-                    synapse_get_power_status(&power_status);
-                    if (power_status.can_afford_tier1) {
-                        ESP_LOGW(TAG, "Triage requests Tier 1 promotion (conf=%.2f)", result.confidence);
-                        // In production, this would trigger BLE command to hub
-                        // For now, log the event
-                        set_state(SYNAPSE_STATE_T1_RUNNING);
-                    }
-                }
-            }
-        }
-    }
-}
-
-static void task_power_monitor(void* pvParameters) {
-    ESP_LOGI(TAG, "Power monitor task started (Core 1, Priority %d)", SYNAPSE_TASK_PRIO_POWER);
-    TickType_t last_run = xTaskGetTickCount();
-    const TickType_t interval = pdMS_TO_TICKS(60000); // Every minute
-
-    while (true) {
-        vTaskDelayUntil(&last_run, interval);
-        power_monitor_update();
-    }
-}
-
-static void task_watchdog(void* pvParameters) {
-    ESP_LOGI(TAG, "System watchdog task started (Core 0, Priority %d)", SYNAPSE_TASK_PRIO_WATCHDOG);
-
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
-
-        if (!g_watchdog_fed) {
-            ESP_LOGE(TAG, "Watchdog timeout! System reset.");
-            esp_restart();
-        }
-        g_watchdog_fed = false;
-
-        // Check task health
-        // In production: check each task's last heartbeat
-    }
-}
-
-static void watchdog_timer_callback(TimerHandle_t xTimer) {
-    // Hardware watchdog backup
-    if (!g_watchdog_fed) {
-        esp_restart();
-    }
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-static esp_err_t init_hardware(void) {
-    // GPIO for status LED
-    gpio_config_t led_conf = {
-        .pin_bit_mask = (1ULL << SYNAPSE_STATUS_LED_PIN),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
-    };
-    gpio_config(&led_conf);
-    gpio_set_level(SYNAPSE_STATUS_LED_PIN, 1); // LED on = initializing
-
-    // ADC for ECG and battery
-    adc_oneshot_unit_init_cfg_t adc_cfg = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE
-    };
-    adc_oneshot_handle_t adc_handle;
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&adc_cfg, &adc_handle));
-
-    // ADC channel config for ECG
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, SYNAPSE_ECG_ADC_PIN, &chan_cfg));
-
-    // ADC channel config for battery
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, SYNAPSE_BATTERY_ADC_PIN, &chan_cfg));
-
-    // I2C for PPG and IMU (shared bus)
-    i2c_config_t i2c_conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = SYNAPSE_PPG_I2C_SDA_PIN,
-        .scl_io_num = SYNAPSE_PPG_I2C_SCL_PIN,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master = {
-            .clk_speed = 400000, // 400kHz fast mode
-        },
-        .clk_flags = 0
-    };
-    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &i2c_conf));
-    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
-
-    // BLE initialization
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-    return ESP_OK;
-}
-
-static esp_err_t init_rtos_objects(void) {
-    g_state_mutex = xSemaphoreCreateMutex();
-    if (!g_state_mutex) return ESP_FAIL;
-
-    g_queue_ecg = xQueueCreate(SYNAPSE_ECG_QUEUE_SIZE, sizeof(synapse_ecg_sample_t));
-    g_queue_ppg = xQueueCreate(SYNAPSE_PPG_QUEUE_SIZE, sizeof(synapse_ppg_sample_t));
-    g_queue_imu = xQueueCreate(SYNAPSE_IMU_QUEUE_SIZE, sizeof(synapse_imu_sample_t));
-    g_queue_ble_tx = xQueueCreate(SYNAPSE_BLE_TX_QUEUE_SIZE, 256); // Variable size
-    g_queue_sync = xQueueCreate(SYNAPSE_SYNC_QUEUE_SIZE, sizeof(synapse_sync_marker_t));
-
-    if (!g_queue_ecg || !g_queue_ppg || !g_queue_imu || !g_queue_ble_tx || !g_queue_sync) {
-        return ESP_FAIL;
-    }
-
-    return ESP_OK;
-}
-
-static void set_state(synapse_system_state_t new_state) {
-    if (xSemaphoreTake(g_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        synapse_system_state_t old_state = g_system_state;
-        g_system_state = new_state;
-        xSemaphoreGive(g_state_mutex);
-
-        if (old_state != new_state) {
-            ESP_LOGI(TAG, "State transition: %d -> %d", old_state, new_state);
-            power_monitor_on_tier_change(old_state, new_state);
-        }
-    }
-}
-
-static void print_memory_stats(void) {
-    ESP_LOGI(TAG, "Free heap: %lu bytes, Min free: %lu bytes",
-             esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
-    ESP_LOGI(TAG, "Free PSRAM: %lu bytes", esp_get_free_psram_size());
-
-    // Task stack watermarks
-    UBaseType_t watermark;
-    #define CHECK_WM(handle, name) \
-        if (handle) { \
-            watermark = uxTaskGetStackHighWaterMark(handle); \
-            ESP_LOGI(TAG, "  %s stack watermark: %u bytes", name, watermark * 4); \
-        }
-    CHECK_WM(g_task_ecg, "ECG");
-    CHECK_WM(g_task_ppg, "PPG");
-    CHECK_WM(g_task_imu, "IMU");
-    CHECK_WM(g_task_ble, "BLE");
-    CHECK_WM(g_task_sync, "SYNC");
-    CHECK_WM(g_task_triage, "TRIAGE");
-    CHECK_WM(g_task_power, "POWER");
-    CHECK_WM(g_task_watchdog, "WDT");
-    #undef CHECK_WM
-}
-
-// ============================================================================
-// PUBLIC API IMPLEMENTATIONS
-// ============================================================================
-
-esp_err_t synapse_tier0_init(void) {
-    // Already done in app_main
-    return ESP_OK;
-}
-
-esp_err_t synapse_tier0_start(void) {
-    set_state(SYNAPSE_STATE_T0_RUNNING);
-    return ESP_OK;
-}
-
-esp_err_t synapse_tier0_stop(void) {
-    set_state(SYNAPSE_STATE_INIT);
-    return ESP_OK;
-}
-
-synapse_system_state_t synapse_get_state(void) {
-    synapse_system_state_t state;
-    if (xSemaphoreTake(g_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        state = g_system_state;
-        xSemaphoreGive(g_state_mutex);
-    } else {
-        state = SYNAPSE_STATE_ERROR;
-    }
-    return state;
-}
-
-void synapse_get_power_status(synapse_power_status_t* status) {
-    power_monitor_get_status(status);
-}
-
-bool synapse_request_tier2(float duration_min) {
-    synapse_power_status_t status;
-    synapse_get_power_status(&status);
-    return status.can_afford_tier2;
-}
-
-void synapse_handle_sync_marker(const synapse_sync_marker_t* marker) {
-    xQueueSend(g_queue_sync, marker, 0);
-}
-
-bool synapse_get_triage_result(synapse_triage_result_t* result) {
-    return triage_inference_get_result(result);
+    ESP_LOGI(TAG, "SYNAPSE-24 ESP32-S3 Tier 0 Firmware v0.1.0");
+    ESP_LOGI(TAG, "Architecture.md: Decoupled sensor pod, Tier 0 continuous H24");
+    ESP_LOGI(TAG, "Roadmap.md: Live ECG+PPG+IMU streaming, synchronized in LSL");
+
+    xTaskCreate(main_task_fn, "main_task", 8192, NULL, 5, &g_main_task);
 }

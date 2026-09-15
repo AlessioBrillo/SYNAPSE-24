@@ -1,462 +1,332 @@
-/**
- * @file ble_lsl_bridge.cpp
- * @brief BLE LSL Bridge Implementation
- *
- * BLE Configuration:
- * - Service UUID: 0000ffe0-0000-1000-8000-00805f9b34fb (Nordic UART compatible)
- * - Characteristic UUID: 0000ffe1-0000-1000-8000-00805f9b34fb (TX notify)
- * - MTU: 512 bytes
- * - Connection interval: 15ms (fast for streaming)
- * - Peripheral role: Pod advertises, Hub connects
- */
-
 #include "ble_lsl_bridge.h"
 #include "esp_log.h"
-#include "esp_bt.h"
-#include "esp_gap_ble_api.h"
-#include "esp_gatts_api.h"
-#include "esp_bt_defs.h"
-#include "esp_bt_main.h"
-#include "esp_gatt_common_api.h"
+#include "esp_nimble_hci.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/ble_gatt.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include <cstring>
-#include <cstdint>
+#include <string.h>
 
-static const char* TAG = "BLE_LSL";
+static const char* TAG = "ble_lsl_bridge";
 
-// ============================================================================
-// GATT PROFILE DEFINITIONS
-// ============================================================================
+static ble_lsl_bridge_t* s_bridge = NULL;
+static uint16_t s_chr_handles[BLE_LSL_CHAR_MAX] = {0};
+static uint16_t s_ccc_handles[BLE_LSL_CHAR_MAX] = {0};
 
-#define SYNAPSE_GATTS_NUM_HANDLE     12
-#define SYNAPSE_GATTS_SERVICE_UUID   0xFFE0
-#define SYNAPSE_GATTS_CHAR_UUID      0xFFE1
-#define SYNAPSE_GATTS_SYNC_CHAR_UUID 0xFFE2  // Sync marker characteristic
+static const ble_uuid128_t gatt_svr_svc_uuid = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E);
+static const ble_uuid128_t gatt_svr_chr_uuid_ppg = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40, 0x6E);
+static const ble_uuid128_t gatt_svr_chr_uuid_ecg = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40, 0x6E);
+static const ble_uuid128_t gatt_svr_chr_uuid_imu = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x04, 0x00, 0x40, 0x6E);
+static const ble_uuid128_t gatt_svr_chr_uuid_sync = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x05, 0x00, 0x40, 0x6E);
 
-// GATT Attribute indices
-enum {
-    IDX_SVC = 0,
-    IDX_CHAR_TX,       // Data TX (notify)
-    IDX_CHAR_TX_VAL,
-    IDX_CHAR_TX_CFG,   // CCCD for notifications
-    IDX_CHAR_SYNC,     // Sync marker RX (write)
-    IDX_CHAR_SYNC_VAL,
-    IDX_CHAR_SYNC_CFG,
-    IDX_NB
+static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt* ctxt, void* arg);
+static void ble_lsl_notify_task_fn(void* arg);
+static void ble_lsl_on_sync(void);
+static void ble_lsl_on_reset(int reason);
+static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg);
+
+static const struct ble_gatt_chr_def gatt_svr_chrs[] = {
+    {
+        .uuid = &gatt_svr_chr_uuid_ppg.u,
+        .access_cb = gatt_svr_chr_access,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0
+    },
+    {
+        .uuid = &gatt_svr_chr_uuid_ecg.u,
+        .access_cb = gatt_svr_chr_access,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0
+    },
+    {
+        .uuid = &gatt_svr_chr_uuid_imu.u,
+        .access_cb = gatt_svr_chr_access,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0
+    },
+    {
+        .uuid = &gatt_svr_chr_uuid_sync.u,
+        .access_cb = gatt_svr_chr_access,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0
+    },
+    { 0 }
 };
 
-// Advertising data
-static uint8_t adv_service_uuid16[2] = {
-    (uint8_t)(SYNAPSE_GATTS_SERVICE_UUID & 0xFF),
-    (uint8_t)(SYNAPSE_GATTS_SERVICE_UUID >> 8)
+static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &gatt_svr_svc_uuid.u,
+        .characteristics = gatt_svr_chrs,
+    },
+    { 0 }
 };
 
-// ============================================================================
-// GLOBAL STATE
-// ============================================================================
+static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt* ctxt, void* arg) {
+    (void)arg;
+    ble_lsl_char_t chr_type = BLE_LSL_CHAR_MAX;
 
-static uint16_t s_gatts_if = 0;
-static uint16_t s_conn_id = 0;
-static uint16_t s_service_handle = 0;
-static uint16_t s_char_tx_handle = 0;
-static uint16_t s_char_sync_handle = 0;
-static bool s_connected = false;
-static bool s_notifications_enabled = false;
+    for (int i = 0; i < BLE_LSL_CHAR_MAX; i++) {
+        if (attr_handle == s_chr_handles[i] || attr_handle == s_ccc_handles[i]) {
+            chr_type = (ble_lsl_char_t)i;
+            break;
+        }
+    }
 
-static QueueHandle_t s_ble_tx_queue = NULL;
-static void (*s_sync_callback)(const synapse_sync_marker_t*) = NULL;
+    if (chr_type == BLE_LSL_CHAR_MAX) {
+        return BLE_ATT_ERR_INVALID_HANDLE;
+    }
 
-// GATT attribute table
-static const uint16_t s_primary_service_uuid = ESP_GATT_UUID_PRI_SERVICE;
-static const uint16_t s_character_declaration_uuid = ESP_GATT_UUID_CHAR_DECLARE;
-static const uint16_t s_character_client_config_uuid = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
-static const uint8_t s_char_prop_notify = ESP_GATT_CHAR_PROP_BIT_NOTIFY;
-static const uint8_t s_char_prop_write = ESP_GATT_CHAR_PROP_BIT_WRITE;
-static const uint8_t s_ccc_enable[2] = {0x00, 0x01}; // Notifications enabled
-static const uint8_t s_ccc_disable[2] = {0x00, 0x00};
+    switch (ctxt->op) {
+        case BLE_GATT_ACCESS_OP_READ_CHR: {
+            if (chr_type == BLE_LSL_CHAR_SYNC) {
+                uint32_t seq = 0;
+                os_mbuf_append(ctxt->om, &seq, sizeof(seq));
+            }
+            return 0;
+        }
+        case BLE_GATT_ACCESS_OP_WRITE_CHR: {
+            if (chr_type == BLE_LSL_CHAR_SYNC && ctxt->om->om_len == sizeof(uint32_t) + sizeof(int64_t)) {
+                uint32_t seq;
+                int64_t hub_ts;
+                os_mbuf_copydata(ctxt->om, 0, sizeof(seq), &seq);
+                os_mbuf_copydata(ctxt->om, sizeof(seq), sizeof(hub_ts), &hub_ts);
+                ESP_LOGD(TAG, "Sync marker received: seq=%" PRIu32 ", hub_ts=%" PRId64, seq, hub_ts);
+            }
+            return 0;
+        }
+        case BLE_GATT_ACCESS_OP_WRITE_DSC: {
+            if (attr_handle == s_ccc_handles[chr_type]) {
+                uint16_t value;
+                os_mbuf_copydata(ctxt->om, 0, sizeof(value), &value);
+                s_bridge->notifications_enabled[chr_type] = (value & 0x0001) != 0;
+                ESP_LOGI(TAG, "Notifications %s for char %d", s_bridge->notifications_enabled[chr_type] ? "enabled" : "disabled", chr_type);
+            }
+            return 0;
+        }
+        default:
+            return BLE_ATT_ERR_UNLIKELY;
+    }
+}
 
-static esp_gatts_attr_db_t s_gatt_db[IDX_NB] = {
-    // Service Declaration
-    [IDX_SVC] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&s_primary_service_uuid},
-                 ESP_GATT_PERM_READ, sizeof(uint16_t), sizeof(adv_service_uuid16), adv_service_uuid16},
+static void ble_lsl_notify_task_fn(void* arg) {
+    ble_lsl_bridge_t* bridge = (ble_lsl_bridge_t*)arg;
+    ble_lsl_notify_item_t item;
 
-    // TX Characteristic Declaration (Data Out)
-    [IDX_CHAR_TX] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&s_character_declaration_uuid},
-                     ESP_GATT_PERM_READ, sizeof(uint8_t), sizeof(uint8_t), (uint8_t*)&s_char_prop_notify},
+    while (1) {
+        if (xQueueReceive(bridge->notify_queue, &item, portMAX_DELAY) == pdTRUE) {
+            if (!bridge->running || !bridge->notifications_enabled[item.type]) continue;
 
-    // TX Characteristic Value
-    [IDX_CHAR_TX_VAL] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&SYNAPSE_GATTS_CHAR_UUID},
-                         ESP_GATT_PERM_READ, 512, 0, NULL},
+            struct os_mbuf* om = ble_hs_mbuf_from_flat(&item.sample, sizeof(sensor_sample_t));
+            if (!om) {
+                ESP_LOGW(TAG, "Failed to allocate mbuf for notification");
+                continue;
+            }
 
-    // TX CCCD
-    [IDX_CHAR_TX_CFG] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&s_character_client_config_uuid},
-                         ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, sizeof(uint16_t), sizeof(s_ccc_disable), (uint8_t*)s_ccc_disable},
+            int rc = ble_gatts_notify_custom(bridge->conn_handle, s_chr_handles[item.type], om);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "Notify failed for char %d: %d", item.type, rc);
+            }
+        }
+    }
+}
 
-    // Sync Characteristic Declaration (Sync Marker In)
-    [IDX_CHAR_SYNC] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&s_character_declaration_uuid},
-                       ESP_GATT_PERM_READ, sizeof(uint8_t), sizeof(uint8_t), (uint8_t*)&s_char_prop_write},
+static void ble_lsl_on_sync(void) {
+    int rc = ble_svc_gap_device_name_set("SYNAPSE-Tier0");
+    assert(rc == 0);
 
-    // Sync Characteristic Value
-    [IDX_CHAR_SYNC_VAL] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&SYNAPSE_GATTS_SYNC_CHAR_UUID},
-                           ESP_GATT_PERM_WRITE, sizeof(synapse_sync_marker_t), 0, NULL},
+    ble_hs_id_infer_auto(0, &ble_hs_cfg.smp_io_cap);
 
-    // Sync CCCD
-    [IDX_CHAR_SYNC_CFG] = {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t*)&s_character_client_config_uuid},
-                           ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, sizeof(uint16_t), sizeof(s_ccc_disable), (uint8_t*)s_ccc_disable},
-};
+    struct ble_gap_adv_params adv_params = {0};
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(100);
+    adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(200);
+    adv_params.channel_map = 0;
 
-// ============================================================================
-// TX QUEUE STRUCTURE
-// ============================================================================
+    rc = ble_gap_adv_start(BLE_HS_ID_APP, NULL, BLE_HS_FOREVER, &adv_params, ble_lsl_gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Advertising start failed: %d", rc);
+    } else {
+        ESP_LOGI(TAG, "Advertising started");
+    }
+}
 
-typedef struct {
-    uint8_t type; // 0=ECG, 1=PPG, 2=IMU, 3=SYNC
-    uint8_t data[512];
-    uint16_t len;
-} ble_tx_item_t;
+static void ble_lsl_on_reset(int reason) {
+    ESP_LOGE(TAG, "NimBLE reset: %d", reason);
+}
 
-// ============================================================================
-// FORWARD DECLARATIONS
-// ============================================================================
+static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
+    (void)arg;
 
-static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param);
-static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                                 esp_ble_gatts_cb_param_t* param);
-static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                                         esp_ble_gatts_cb_param_t* param);
-static void ble_tx_task(void* pvParameters);
-static esp_err_t send_notification(uint16_t handle, const uint8_t* data, uint16_t len);
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT: {
+            if (event->connect.status == 0) {
+                s_bridge->conn_handle = event->connect.conn_handle;
+                ESP_LOGI(TAG, "Connected, handle=%d", s_bridge->conn_handle);
+            } else {
+                ESP_LOGW(TAG, "Connection failed: %d", event->connect.status);
+            }
+            return 0;
+        }
+        case BLE_GAP_EVENT_DISCONNECT: {
+            ESP_LOGI(TAG, "Disconnected, reason=%d", event->disconnect.reason);
+            s_bridge->conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            memset(s_bridge->notifications_enabled, 0, sizeof(s_bridge->notifications_enabled));
+            ble_lsl_on_sync();
+            return 0;
+        }
+        case BLE_GAP_EVENT_MTU: {
+            ESP_LOGI(TAG, "MTU updated: %d", event->mtu.value);
+            return 0;
+        }
+        default:
+            return 0;
+    }
+}
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
+esp_err_t ble_lsl_bridge_init(ble_lsl_bridge_t* bridge, QueueHandle_t scheduler_queue) {
+    (void)scheduler_queue;
 
-esp_err_t ble_lsl_bridge_init(void) {
-    ESP_LOGI(TAG, "Initializing BLE LSL Bridge...");
+    if (!bridge) return ESP_ERR_INVALID_ARG;
 
-    // Create TX queue
-    s_ble_tx_queue = xQueueCreate(SYNAPSE_BLE_TX_QUEUE_SIZE, sizeof(ble_tx_item_t));
-    if (!s_ble_tx_queue) {
-        ESP_LOGE(TAG, "Failed to create BLE TX queue");
+    memset(bridge, 0, sizeof(ble_lsl_bridge_t));
+    bridge->conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    bridge->notify_queue = xQueueCreate(BLE_LSL_NOTIFY_QUEUE_SIZE, sizeof(ble_lsl_notify_item_t));
+    if (!bridge->notify_queue) {
+        ESP_LOGE(TAG, "Failed to create notify queue");
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_bridge = bridge;
+
+    esp_nimble_hci_init();
+    nimble_port_init();
+
+    ble_hs_cfg.sync_cb = ble_lsl_on_sync;
+    ble_hs_cfg.reset_cb = ble_lsl_on_reset;
+    ble_hs_cfg.gatts_register_cb = NULL;
+    ble_hs_cfg.store_status_cb = NULL;
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
+    int rc = ble_gatts_count_cfg(gatt_svr_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "GATT count cfg failed: %d", rc);
         return ESP_FAIL;
     }
 
-    // Initialize BLE controller (already done in main, but ensure)
-    esp_err_t err = esp_ble_gap_register_callback(gap_event_handler);
-    if (err != ESP_OK) return err;
+    rc = ble_gatts_add_svcs(gatt_svr_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "GATT add svcs failed: %d", rc);
+        return ESP_FAIL;
+    }
 
-    err = esp_ble_gatts_register_callback(gatts_event_handler);
-    if (err != ESP_OK) return err;
+    for (int i = 0; i < BLE_LSL_CHAR_MAX; i++) {
+        s_chr_handles[i] = ble_gatts_find_chr_handle(&gatt_svr_chrs[i].uuid);
+        s_ccc_handles[i] = s_chr_handles[i] + 1;
+    }
 
-    err = esp_ble_gatts_app_register(0);
-    if (err != ESP_OK) return err;
-
-    // Set MTU
-    err = esp_ble_gatt_set_local_mtu(SYNAPSE_BLE_MTU);
-    if (err != ESP_OK) return err;
-
-    // Start TX task
-    xTaskCreatePinnedToCore(ble_tx_task, "ble_tx", 8192, NULL, 3, NULL, 1);
-
-    ESP_LOGI(TAG, "BLE LSL Bridge initialized (MTU=%d)", SYNAPSE_BLE_MTU);
+    ESP_LOGI(TAG, "BLE LSL bridge initialized");
     return ESP_OK;
 }
 
-// ============================================================================
-// GAP EVENT HANDLER
-// ============================================================================
+esp_err_t ble_lsl_bridge_start(ble_lsl_bridge_t* bridge) {
+    if (!bridge || bridge->running) return ESP_ERR_INVALID_STATE;
 
-static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
-    switch (event) {
-        case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-            esp_ble_gap_start_advertising(nullptr);
-            break;
+    bridge->running = true;
 
-        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
-            if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-                ESP_LOGI(TAG, "Advertising started");
-            }
-            break;
+    xTaskCreate(ble_lsl_notify_task_fn, "ble_notify", 4096, bridge, 5, &bridge->notify_task);
+    nimble_port_freertos_init(ble_lsl_on_sync);
 
-        case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
-            ESP_LOGI(TAG, "Conn params updated: status=%d, min_int=%d, max_int=%d, latency=%d, timeout=%d",
-                     param->update_conn_params.status,
-                     param->update_conn_params.min_int,
-                     param->update_conn_params.max_int,
-                     param->update_conn_params.latency,
-                     param->update_conn_params.timeout);
-            break;
-
-        default:
-            break;
-    }
-}
-
-// ============================================================================
-// GATTS EVENT HANDLER
-// ============================================================================
-
-static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                                 esp_ble_gatts_cb_param_t* param) {
-    if (event == ESP_GATTS_REG_EVT) {
-        if (param->reg.status == ESP_GATT_OK) {
-            s_gatts_if = gatts_if;
-        } else {
-            ESP_LOGE(TAG, "GATTS register failed: %d", param->reg.status);
-        }
-    }
-    gatts_profile_event_handler(event, gatts_if, param);
-}
-
-static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                                         esp_ble_gatts_cb_param_t* param) {
-    switch (event) {
-        case ESP_GATTS_CREATE_EVT:
-            // Create service
-            esp_ble_gatts_create_service(gatts_if, &s_gatt_db[IDX_SVC], IDX_NB, 0);
-            break;
-
-        case ESP_GATTS_CREATE_SVC_EVT:
-            if (param->create.status == ESP_GATT_OK) {
-                s_service_handle = param->create.service_handle;
-                esp_ble_gatts_start_service(s_service_handle);
-
-                // Get characteristic handles
-                s_char_tx_handle = s_gatt_db[IDX_CHAR_TX_VAL].att_num;
-                s_char_sync_handle = s_gatt_db[IDX_CHAR_SYNC_VAL].att_num;
-            }
-            break;
-
-        case ESP_GATTS_START_EVT:
-            // Configure advertising
-            {
-                esp_ble_adv_data_t adv_data = {
-                    .set_scan_rsp = false,
-                    .include_name = true,
-                    .include_txpower = true,
-                    .min_interval = 0x0006, // 7.5ms
-                    .max_interval = 0x0010, // 20ms
-                    .appearance = 0x00,
-                    .manufacturer_len = 0,
-                    .p_manufacturer_data = NULL,
-                    .service_data_len = 0,
-                    .p_service_data = NULL,
-                    .service_uuid_len = 2,
-                    .p_service_uuid = adv_service_uuid16,
-                    .flag = ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT,
-                };
-                esp_ble_gap_config_adv_data(&adv_data);
-            }
-            break;
-
-        case ESP_GATTS_CONNECT_EVT:
-            s_conn_id = param->connect.conn_id;
-            s_connected = true;
-            s_notifications_enabled = false;
-            ESP_LOGI(TAG, "BLE connected: conn_id=%d", s_conn_id);
-
-            // Update connection parameters for low latency
-            esp_ble_conn_update_params_t conn_params = {
-                .bda = {0}, // Filled by stack
-                .min_int = 12,  // 15ms
-                .max_int = 16,  // 20ms
-                .latency = 0,
-                .timeout = 400  // 4 seconds
-            };
-            memcpy(conn_params.bda, param->connect.remote_bda, 6);
-            esp_ble_gap_update_conn_params(&conn_params);
-            break;
-
-        case ESP_GATTS_DISCONNECT_EVT:
-            s_connected = false;
-            s_notifications_enabled = false;
-            ESP_LOGI(TAG, "BLE disconnected, restarting advertising");
-            esp_ble_gap_start_advertising(nullptr);
-            break;
-
-        case ESP_GATTS_WRITE_EVT:
-            {
-                uint16_t handle = param->write.handle;
-                uint16_t len = param->write.len;
-                uint8_t* value = param->write.value;
-
-                // CCCD for TX notifications
-                if (handle == s_gatt_db[IDX_CHAR_TX_CFG].att_num) {
-                    if (len == 2) {
-                        uint16_t ccc = value[0] | (value[1] << 8);
-                        s_notifications_enabled = (ccc & 0x0001) != 0;
-                        ESP_LOGI(TAG, "TX notifications %s", s_notifications_enabled ? "ENABLED" : "DISABLED");
-                    }
-                }
-                // Sync marker characteristic write (from hub)
-                else if (handle == s_gatt_db[IDX_CHAR_SYNC_VAL].att_num) {
-                    if (len == sizeof(synapse_sync_marker_t) && s_sync_callback) {
-                        synapse_sync_marker_t marker;
-                        memcpy(&marker, value, sizeof(marker));
-                        s_sync_callback(&marker);
-                    }
-                }
-            }
-            break;
-
-        case ESP_GATTS_CONF_EVT:
-            // Notification confirmed
-            break;
-
-        default:
-            break;
-    }
-}
-
-// ============================================================================
-// TX TASK
-// ============================================================================
-
-static void ble_tx_task(void* pvParameters) {
-    ble_tx_item_t item;
-
-    while (true) {
-        if (xQueueReceive(s_ble_tx_queue, &item, pdMS_TO_TICKS(100)) == pdTRUE) {
-            if (s_connected && s_notifications_enabled) {
-                // Find correct handle based on type
-                uint16_t handle = s_char_tx_handle;
-                send_notification(handle, item.data, item.len);
-            }
-        }
-    }
-}
-
-// ============================================================================
-// SEND FUNCTIONS
-// ============================================================================
-
-static esp_err_t send_notification(uint16_t handle, const uint8_t* data, uint16_t len) {
-    esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, handle, len, (uint8_t*)data, false);
+    ESP_LOGI(TAG, "BLE LSL bridge started");
     return ESP_OK;
 }
 
-esp_err_t ble_lsl_bridge_send_ecg(const synapse_ecg_sample_t* samples, size_t count) {
-    if (!samples || count == 0 || !s_connected) return ESP_ERR_INVALID_STATE;
+esp_err_t ble_lsl_bridge_stop(ble_lsl_bridge_t* bridge) {
+    if (!bridge || !bridge->running) return ESP_ERR_INVALID_STATE;
 
-    // Pack samples into BLE payload (max 512 bytes / 6 bytes per sample = ~85 samples)
-    // Format: [type:1][count:2][samples...]
-    // Each ECG sample: timestamp(8) + value_mv(2) + lead_off(1) = 11 bytes (packed to 12)
-    size_t max_samples = 40;
-    size_t to_send = (count < max_samples) ? count : max_samples;
+    bridge->running = false;
+    ble_gap_adv_stop();
 
-    ble_tx_item_t item;
-    item.type = 0; // ECG
-    item.data[0] = 0; // Type
-    item.data[1] = (uint8_t)(to_send & 0xFF);
-    item.data[2] = (uint8_t)(to_send >> 8);
-
-    uint8_t* ptr = &item.data[3];
-    for (size_t i = 0; i < to_send; i++) {
-        // Pack timestamp (8 bytes)
-        memcpy(ptr, &samples[i].timestamp_us, 8);
-        ptr += 8;
-        // Pack value_mv (2 bytes)
-        memcpy(ptr, &samples[i].value_mv, 2);
-        ptr += 2;
-        // Pack lead_off (1 byte)
-        *ptr++ = samples[i].lead_off ? 1 : 0;
-        // Padding for alignment
-        *ptr++ = 0;
+    if (bridge->notify_task) {
+        vTaskDelete(bridge->notify_task);
+        bridge->notify_task = NULL;
     }
-    item.len = (uint16_t)(ptr - item.data);
 
-    xQueueSend(s_ble_tx_queue, &item, 0);
+    nimble_port_stop();
+
+    ESP_LOGI(TAG, "BLE LSL bridge stopped");
     return ESP_OK;
 }
 
-esp_err_t ble_lsl_bridge_send_ppg(const synapse_ppg_sample_t* samples, size_t count) {
-    if (!samples || count == 0 || !s_connected) return ESP_ERR_INVALID_STATE;
+esp_err_t ble_lsl_bridge_deinit(ble_lsl_bridge_t* bridge) {
+    if (!bridge) return ESP_ERR_INVALID_ARG;
 
-    size_t max_samples = 60;
-    size_t to_send = (count < max_samples) ? count : max_samples;
-
-    ble_tx_item_t item;
-    item.type = 1; // PPG
-    item.data[0] = 1;
-    item.data[1] = (uint8_t)(to_send & 0xFF);
-    item.data[2] = (uint8_t)(to_send >> 8);
-
-    uint8_t* ptr = &item.data[3];
-    for (size_t i = 0; i < to_send; i++) {
-        memcpy(ptr, &samples[i].timestamp_us, 8);
-        ptr += 8;
-        memcpy(ptr, &samples[i].red, 2);
-        ptr += 2;
-        memcpy(ptr, &samples[i].ir, 2);
-        ptr += 2;
+    if (bridge->running) {
+        ble_lsl_bridge_stop(bridge);
     }
-    item.len = (uint16_t)(ptr - item.data);
 
-    xQueueSend(s_ble_tx_queue, &item, 0);
+    if (bridge->notify_queue) {
+        vQueueDelete(bridge->notify_queue);
+        bridge->notify_queue = NULL;
+    }
+
+    nimble_port_deinit();
+    esp_nimble_hci_deinit();
+
+    if (s_bridge == bridge) {
+        s_bridge = NULL;
+    }
+
+    memset(bridge, 0, sizeof(ble_lsl_bridge_t));
+    ESP_LOGI(TAG, "BLE LSL bridge deinitialized");
     return ESP_OK;
 }
 
-esp_err_t ble_lsl_bridge_send_imu(const synapse_imu_sample_t* samples, size_t count) {
-    if (!samples || count == 0 || !s_connected) return ESP_ERR_INVALID_STATE;
+esp_err_t ble_lsl_bridge_send_sample(ble_lsl_bridge_t* bridge, const sensor_sample_t* sample) {
+    if (!bridge || !sample || !bridge->running) return ESP_ERR_INVALID_STATE;
 
-    size_t max_samples = 25;
-    size_t to_send = (count < max_samples) ? count : max_samples;
-
-    ble_tx_item_t item;
-    item.type = 2; // IMU
-    item.data[0] = 2;
-    item.data[1] = (uint8_t)(to_send & 0xFF);
-    item.data[2] = (uint8_t)(to_send >> 8);
-
-    uint8_t* ptr = &item.data[3];
-    for (size_t i = 0; i < to_send; i++) {
-        memcpy(ptr, &samples[i].timestamp_us, 8);
-        ptr += 8;
-        memcpy(ptr, &samples[i].accel_x, 2); ptr += 2;
-        memcpy(ptr, &samples[i].accel_y, 2); ptr += 2;
-        memcpy(ptr, &samples[i].accel_z, 2); ptr += 2;
-        memcpy(ptr, &samples[i].gyro_x, 2); ptr += 2;
-        memcpy(ptr, &samples[i].gyro_y, 2); ptr += 2;
-        memcpy(ptr, &samples[i].gyro_z, 2); ptr += 2;
-        memcpy(ptr, &samples[i].mag_x, 2); ptr += 2;
-        memcpy(ptr, &samples[i].mag_y, 2); ptr += 2;
-        memcpy(ptr, &samples[i].mag_z, 2); ptr += 2;
+    ble_lsl_char_t chr_type;
+    switch (sample->type) {
+        case SENSOR_TYPE_PPG: chr_type = BLE_LSL_CHAR_PPG; break;
+        case SENSOR_TYPE_ECG: chr_type = BLE_LSL_CHAR_ECG; break;
+        case SENSOR_TYPE_IMU: chr_type = BLE_LSL_CHAR_IMU; break;
+        default: return ESP_ERR_INVALID_ARG;
     }
-    item.len = (uint16_t)(ptr - item.data);
 
-    xQueueSend(s_ble_tx_queue, &item, 0);
+    if (!bridge->notifications_enabled[chr_type]) return ESP_OK;
+
+    ble_lsl_notify_item_t item = {.type = chr_type, .sample = *sample};
+    if (xQueueSend(bridge->notify_queue, &item, 0) != pdTRUE) {
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 
-esp_err_t ble_lsl_bridge_send_sync_marker(const synapse_sync_marker_t* marker) {
-    if (!marker || !s_connected) return ESP_ERR_INVALID_STATE;
+esp_err_t ble_lsl_bridge_send_sync_marker(ble_lsl_bridge_t* bridge, uint32_t sequence, int64_t hub_timestamp_us) {
+    if (!bridge || !bridge->running) return ESP_ERR_INVALID_STATE;
 
-    ble_tx_item_t item;
-    item.type = 3; // SYNC
-    item.len = sizeof(synapse_sync_marker_t) + 1;
-    item.data[0] = 3;
-    memcpy(&item.data[1], marker, sizeof(synapse_sync_marker_t));
+    if (!bridge->notifications_enabled[BLE_LSL_CHAR_SYNC]) return ESP_OK;
 
-    xQueueSend(s_ble_tx_queue, &item, 0);
+    sensor_sample_t sample = {0};
+    sample.type = SENSOR_TYPE_MAX;
+    sample.timestamp_us = hub_timestamp_us;
+    sample.sequence = sequence;
+
+    ble_lsl_notify_item_t item = {.type = BLE_LSL_CHAR_SYNC, .sample = sample};
+    if (xQueueSend(bridge->notify_queue, &item, 0) != pdTRUE) {
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 
-void ble_lsl_bridge_register_sync_callback(void (*callback)(const synapse_sync_marker_t*)) {
-    s_sync_callback = callback;
-}
-
-bool ble_lsl_bridge_is_connected(void) {
-    return s_connected && s_notifications_enabled;
-}
-
-void ble_lsl_bridge_deinit(void) {
-    if (s_ble_tx_queue) {
-        vQueueDelete(s_ble_tx_queue);
-        s_ble_tx_queue = NULL;
-    }
-    s_connected = false;
-    s_notifications_enabled = false;
-    ESP_LOGI(TAG, "BLE LSL Bridge deinitialized");
+bool ble_lsl_bridge_is_connected(const ble_lsl_bridge_t* bridge) {
+    return bridge && bridge->conn_handle != BLE_HS_CONN_HANDLE_NONE;
 }
