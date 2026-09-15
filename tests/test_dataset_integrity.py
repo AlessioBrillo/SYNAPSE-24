@@ -14,15 +14,9 @@ MITBIH_DIR = DATA_ROOT / "mitbih"
 SLEEP_EDF_DIR = DATA_ROOT / "sleep_edf"
 
 # Markers for conditional test execution
-requires_wesad = pytest.mark.skipif(
-    not WESAD_DIR.exists(), reason="WESAD not cached"
-)
-requires_mitbih = pytest.mark.skipif(
-    not MITBIH_DIR.exists(), reason="MIT-BIH not cached"
-)
-requires_sleep_edf = pytest.mark.skipif(
-    not SLEEP_EDF_DIR.exists(), reason="Sleep-EDF not cached"
-)
+requires_wesad = pytest.mark.skipif(not WESAD_DIR.exists(), reason="WESAD not cached")
+requires_mitbih = pytest.mark.skipif(not MITBIH_DIR.exists(), reason="MIT-BIH not cached")
+requires_sleep_edf = pytest.mark.skipif(not SLEEP_EDF_DIR.exists(), reason="Sleep-EDF not cached")
 
 
 class TestWesadIntegrity:
@@ -31,7 +25,9 @@ class TestWesadIntegrity:
     @requires_wesad
     def test_wesad_directory_structure(self):
         """WESAD extraction must have all 15 subject directories (S2-S17, no S12)."""
-        subjects = sorted([d.name for d in WESAD_DIR.iterdir() if d.is_dir() and d.name.startswith("S")])
+        subjects = sorted(
+            [d.name for d in WESAD_DIR.iterdir() if d.is_dir() and d.name.startswith("S")]
+        )
         expected = [f"S{i}" for i in range(2, 18) if i != 12]
         assert subjects == expected, f"Missing subjects: {set(expected) - set(subjects)}"
 
@@ -44,6 +40,7 @@ class TestWesadIntegrity:
             pkl_files = list(subj_dir.glob("*.pkl"))
             assert len(pkl_files) == 1, f"{subj_dir.name}: expected 1 .pkl, found {len(pkl_files)}"
             import pickle
+
             with open(pkl_files[0], "rb") as f:
                 data = pickle.load(f, encoding="latin1")
             # Required top-level keys
@@ -92,11 +89,31 @@ class TestMitbihIntegrity:
         """Record 100 must be clean sinus with ~2265 normal beats."""
         import numpy as np
         import wfdb
+
         record = wfdb.rdrecord(str(MITBIH_DIR / "100"))
         annotation = wfdb.rdann(str(MITBIH_DIR / "100"), "atr")
         symbols = np.array([str(s) for s in annotation.symbol])
         # Count QRS symbols
-        qrs_symbols = {"N", "L", "R", "B", "A", "a", "J", "S", "V", "r", "F", "e", "j", "n", "E", "/", "f", "Q"}
+        qrs_symbols = {
+            "N",
+            "L",
+            "R",
+            "B",
+            "A",
+            "a",
+            "J",
+            "S",
+            "V",
+            "r",
+            "F",
+            "e",
+            "j",
+            "n",
+            "E",
+            "/",
+            "f",
+            "Q",
+        }
         qrs_count = sum(1 for s in symbols if s in qrs_symbols)
         # Record 100: ~2265 beats in 30 min at 360 Hz
         assert 2200 <= qrs_count <= 2350, f"Record 100 unexpected QRS count: {qrs_count}"
@@ -109,6 +126,7 @@ class TestMitbihIntegrity:
         """Record 119 must have 444 V beats (PVC-heavy)."""
         import numpy as np
         import wfdb
+
         record = wfdb.rdrecord(str(MITBIH_DIR / "119"))
         annotation = wfdb.rdann(str(MITBIH_DIR / "119"), "atr")
         symbols = np.array([str(s) for s in annotation.symbol])
@@ -116,7 +134,31 @@ class TestMitbihIntegrity:
         assert v_count >= 400, f"Record 119 missing V beats: found {v_count}, expected ~444"
         n_count = sum(1 for s in symbols if s == "N")
         assert n_count >= 1500, f"Record 119 missing N beats: found {n_count}"
-        total_qrs = sum(1 for s in symbols if s in {"N", "L", "R", "B", "A", "a", "J", "S", "V", "r", "F", "e", "j", "n", "E", "/", "f", "Q"})
+        total_qrs = sum(
+            1
+            for s in symbols
+            if s
+            in {
+                "N",
+                "L",
+                "R",
+                "B",
+                "A",
+                "a",
+                "J",
+                "S",
+                "V",
+                "r",
+                "F",
+                "e",
+                "j",
+                "n",
+                "E",
+                "/",
+                "f",
+                "Q",
+            }
+        )
         assert total_qrs == 1987, f"Record 119 total QRS should be 1987, got {total_qrs}"
 
     @requires_mitbih
@@ -124,11 +166,14 @@ class TestMitbihIntegrity:
         """No record should be zero-filled (flatline corruption)."""
         import numpy as np
         import wfdb
+
         for dat_file in MITBIH_DIR.glob("*.dat"):
             rec_id = dat_file.stem
             try:
                 record = wfdb.rdrecord(str(MITBIH_DIR / rec_id))
-                ecg = record.p_signal[:, 0] if record.p_signal.ndim > 1 else record.p_signal.flatten()
+                ecg = (
+                    record.p_signal[:, 0] if record.p_signal.ndim > 1 else record.p_signal.flatten()
+                )
                 ptp = float(np.ptp(ecg))
                 assert ptp > 0.05, f"Record {rec_id}: flatline ptp={ptp:.4f} mV (corrupt .dat)"
             except Exception as e:
@@ -139,6 +184,7 @@ def _load_download_datasets_module():
     """Load download_datasets module from scripts directory."""
     import importlib.util
     import sys
+
     script_path = Path(__file__).parent.parent / "scripts" / "download_datasets.py"
     spec = importlib.util.spec_from_file_location("scripts.download_datasets", script_path)
     assert spec is not None

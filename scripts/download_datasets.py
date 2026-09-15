@@ -41,39 +41,96 @@ logger = logging.getLogger(__name__)
 # These checksums are for the canonical WESAD.zip from archive.ics.uci.edu
 WESAD_CHECKSUMS = {
     # Primary UCI mirror
-    "https://archive.ics.uci.edu/static/public/465/wesad.zip":
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER — compute on first successful download
-    "https://archive.ics.uci.edu/dataset/465/wesad.zip":
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER
+    "https://archive.ics.uci.edu/static/public/465/wesad.zip": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER — compute on first successful download
+    "https://archive.ics.uci.edu/dataset/465/wesad.zip": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER
 }
 
 # MIT-BIH: PhysioNet records — individual record checksums not practical,
 # rely on wfdb's built-in validation + flatline guard in mitbih.py
 MITBIH_RECORDS = [
-    "100", "101", "102", "103", "104", "105", "106", "107", "108", "109",
-    "111", "112", "113", "114", "115", "116", "117", "118", "119", "121",
-    "122", "123", "124", "200", "201", "202", "203", "205", "207", "208",
-    "209", "210", "212", "213", "214", "215", "217", "219", "220", "221",
-    "222", "223", "228", "230", "231", "232", "233", "234",
+    "100",
+    "101",
+    "102",
+    "103",
+    "104",
+    "105",
+    "106",
+    "107",
+    "108",
+    "109",
+    "111",
+    "112",
+    "113",
+    "114",
+    "115",
+    "116",
+    "117",
+    "118",
+    "119",
+    "121",
+    "122",
+    "123",
+    "124",
+    "200",
+    "201",
+    "202",
+    "203",
+    "205",
+    "207",
+    "208",
+    "209",
+    "210",
+    "212",
+    "213",
+    "214",
+    "215",
+    "217",
+    "219",
+    "220",
+    "221",
+    "222",
+    "223",
+    "228",
+    "230",
+    "231",
+    "232",
+    "233",
+    "234",
 ]
 
 # Sleep-EDF: PhysioNet
 SLEEP_EDF_URL = "https://physionet.org/files/sleep-edfx/1.0.0/"
 SLEEP_EDF_SUBJECTS = [
-    "SC4001E0", "SC4002E0", "SC4011E0", "SC4012E0",
-    "SC4101E0", "SC4111E0", "SC4112E0", "SC4121E0",
-    "SC4201E0", "SC4211E0", "SC4221E0", "SC4222E0",
-    "SC4301E0", "SC4311E0", "SC4321E0", "SC4401E0",
-    "SC4411E0", "SC4421E0", "SC4422E0",
+    "SC4001E0",
+    "SC4002E0",
+    "SC4011E0",
+    "SC4012E0",
+    "SC4101E0",
+    "SC4111E0",
+    "SC4112E0",
+    "SC4121E0",
+    "SC4201E0",
+    "SC4211E0",
+    "SC4221E0",
+    "SC4222E0",
+    "SC4301E0",
+    "SC4311E0",
+    "SC4321E0",
+    "SC4401E0",
+    "SC4411E0",
+    "SC4421E0",
+    "SC4422E0",
 ]
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
+
 @dataclass(frozen=True)
 class DownloadConfig:
     """Configuration for dataset download behavior."""
+
     max_retries: int = 3
     base_delay_s: float = 10.0  # 10s, 30s, 60s
     max_delay_s: float = 60.0
@@ -87,6 +144,7 @@ class DownloadConfig:
 # ============================================================================
 # CORE UTILITIES
 # ============================================================================
+
 
 def compute_sha256(file_path: Path) -> str:
     """Compute SHA-256 hash of a file."""
@@ -251,6 +309,7 @@ def extract_zip(zip_path: Path, extract_dir: Path) -> bool:
 # WESAD DOWNLOAD
 # ============================================================================
 
+
 def download_wesad(data_dir: Path, config: DownloadConfig | None = None) -> Path | None:
     """Download and extract WESAD dataset with integrity verification.
 
@@ -268,6 +327,7 @@ def download_wesad(data_dir: Path, config: DownloadConfig | None = None) -> Path
             return extract_dir
         logger.warning("Existing WESAD cache incomplete, re-downloading...")
         import shutil
+
         shutil.rmtree(extract_dir)
 
     zip_path = data_dir / "WESAD.zip"
@@ -292,6 +352,7 @@ def download_wesad(data_dir: Path, config: DownloadConfig | None = None) -> Path
 # ============================================================================
 # MIT-BIH DOWNLOAD
 # ============================================================================
+
 
 def download_mitbih(data_dir: Path, config: DownloadConfig | None = None) -> Path:
     """Download MIT-BIH Arrhythmia Database using wfdb.
@@ -328,6 +389,7 @@ def download_mitbih(data_dir: Path, config: DownloadConfig | None = None) -> Pat
 # SLEEP-EDF DOWNLOAD
 # ============================================================================
 
+
 def download_sleep_edf(data_dir: Path, config: DownloadConfig | None = None) -> Path:
     """Download Sleep-EDF Expanded dataset using wfdb."""
     config = config or DownloadConfig()
@@ -356,6 +418,7 @@ def download_sleep_edf(data_dir: Path, config: DownloadConfig | None = None) -> 
 # ============================================================================
 # UNIFIED ENTRY POINT
 # ============================================================================
+
 
 def download_all_datasets(
     data_root: Path,
@@ -420,14 +483,24 @@ def verify_all_datasets(data_root: Path) -> dict[str, bool]:
 # CLI
 # ============================================================================
 
+
 def main() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="SYNAPSE-24 Dataset Downloader with Integrity Verification")
+    parser = argparse.ArgumentParser(
+        description="SYNAPSE-24 Dataset Downloader with Integrity Verification"
+    )
     parser.add_argument("--data-root", type=Path, default=Path("data"), help="Root data directory")
-    parser.add_argument("--datasets", nargs="+", choices=["wesad", "mitbih", "sleep_edf", "all"],
-                        default=["all"], help="Datasets to download")
-    parser.add_argument("--no-verify", action="store_true", help="Skip SHA-256 verification (NOT RECOMMENDED)")
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=["wesad", "mitbih", "sleep_edf", "all"],
+        default=["all"],
+        help="Datasets to download",
+    )
+    parser.add_argument(
+        "--no-verify", action="store_true", help="Skip SHA-256 verification (NOT RECOMMENDED)"
+    )
     parser.add_argument("--max-retries", type=int, default=3, help="Max download retries")
     parser.add_argument("--timeout", type=int, default=300, help="Download timeout (seconds)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
