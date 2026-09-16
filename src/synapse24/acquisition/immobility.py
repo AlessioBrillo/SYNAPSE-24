@@ -42,6 +42,8 @@ class ImmobilityDetector:
         # Track consecutive immobile windows
         self._consecutive_immobile = 0
         self._total_samples = 0
+        # Track samples since last window completion
+        self._samples_since_window = 0
 
     def update(self, accel_magnitude: float, timestamp: float | None = None) -> bool:
         """Update detector with new accelerometer magnitude sample.
@@ -55,6 +57,7 @@ class ImmobilityDetector:
         """
         self._window_buffer.append(accel_magnitude)
         self._total_samples += 1
+        self._samples_since_window += 1
 
         # Only check when window is full
         if len(self._window_buffer) < self._window_samples:
@@ -65,22 +68,25 @@ class ImmobilityDetector:
         is_immobile = window_max < self.magnitude_threshold
 
         if is_immobile:
-            self._consecutive_immobile += 1
+            # Only count a new window completion every _window_samples samples
+            if self._samples_since_window >= self._window_samples:
+                self._consecutive_immobile += 1
+                self._samples_since_window = 0
         else:
+            # Movement detected - reset counter
             self._consecutive_immobile = 0
+            self._samples_since_window = 0
+            return False
 
         # Check if we've reached required consecutive immobile windows
-        if self._consecutive_immobile >= self._required_windows:
-            self._consecutive_immobile = 0  # Reset after trigger
-            return True
-
-        return False
+        return self._consecutive_immobile >= self._required_windows
 
     def reset(self) -> None:
         """Reset detector state."""
         self._window_buffer.clear()
         self._consecutive_immobile = 0
         self._total_samples = 0
+        self._samples_since_window = 0
 
     @property
     def current_window_immobile(self) -> bool:
