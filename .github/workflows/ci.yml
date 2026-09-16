@@ -153,14 +153,14 @@ jobs:
       - name: Verify dataset integrity
         run: |
           uv run python -c "
-from scripts.download_datasets import verify_all_datasets
-from pathlib import Path
-results = verify_all_datasets(Path('data'))
-for ds, ok in results.items():
-    status = 'VERIFIED' if ok else 'MISSING/CORRUPT'
-    print(f'{ds}: {status}')
-  exit(0 if all(results.values()) else 1)
-        "
+            from scripts.download_datasets import verify_all_datasets
+            from pathlib import Path
+            results = verify_all_datasets(Path('data'))
+            for ds, ok in results.items():
+                status = 'VERIFIED' if ok else 'MISSING/CORRUPT'
+                print(f'{ds}: {status}')
+            exit(0 if all(results.values()) else 1)
+          "
 
       - name: Run baseline validation (WESAD + MIT-BIH)
         run: |

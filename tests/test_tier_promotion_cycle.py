@@ -306,16 +306,27 @@ class TierPromotionTestHarness:
 
     def _process_ecg_data(self, sim_time: float, params: dict) -> None:
         """Process ECG data at 500 Hz."""
-        if params["ecg_idx"] < params["n_ecg"] and abs(sim_time - self.tier0_data["t_ecg"][params["ecg_idx"]]) < params["dt_ecg"] / 2:
-            self._push_stream("SYNAPSE_ECG_T0", [self.tier0_data["ecg"][params["ecg_idx"]]], sim_time)
+        if (
+            params["ecg_idx"] < params["n_ecg"]
+            and abs(sim_time - self.tier0_data["t_ecg"][params["ecg_idx"]]) < params["dt_ecg"] / 2
+        ):
+            self._push_stream(
+                "SYNAPSE_ECG_T0", [self.tier0_data["ecg"][params["ecg_idx"]]], sim_time
+            )
             params["ecg_idx"] += 1
 
     def _process_ppg_data(self, sim_time: float, params: dict) -> None:
         """Process PPG data at 64 Hz."""
-        if params["ppg_idx"] < params["n_ppg"] and abs(sim_time - self.tier0_data["t_ppg"][params["ppg_idx"]]) < params["dt_ppg"] / 2:
+        if (
+            params["ppg_idx"] < params["n_ppg"]
+            and abs(sim_time - self.tier0_data["t_ppg"][params["ppg_idx"]]) < params["dt_ppg"] / 2
+        ):
             self._push_stream(
                 "SYNAPSE_PPG_T0",
-                [self.tier0_data["ppg_red"][params["ppg_idx"]], self.tier0_data["ppg_ir"][params["ppg_idx"]]],
+                [
+                    self.tier0_data["ppg_red"][params["ppg_idx"]],
+                    self.tier0_data["ppg_ir"][params["ppg_idx"]],
+                ],
                 sim_time,
             )
             params["ppg_idx"] += 1
@@ -337,7 +348,9 @@ class TierPromotionTestHarness:
         ):
             if immobility_start is None:
                 return sim_time
-            if sim_time - immobility_start >= 12.0:  # 12 seconds immobility (matches min_immobility_min=0.2)
+            if (
+                sim_time - immobility_start >= 12.0
+            ):  # 12 seconds immobility (matches min_immobility_min=0.2)
                 if self.power_budget.can_afford_tier1(2.0) and self.controller._motion_gate_armed():
                     self.promotion_time = sim_time
                     self.promotion_latency_ms = (sim_time - immobility_start) * 1000
@@ -368,7 +381,9 @@ class TierPromotionTestHarness:
             fnirs_sample = np.random.normal(10000, 100, 8)
             self._push_stream("SYNAPSE_FNIRS_T1", fnirs_sample, sim_time)
 
-    def _check_demotion(self, sim_time: float, acc_mag: float | None, movement_detected: bool) -> bool:
+    def _check_demotion(
+        self, sim_time: float, acc_mag: float | None, movement_detected: bool
+    ) -> bool:
         """Check and execute T1 → T0 demotion on movement."""
         # Prevent demotion for at least 2 seconds after promotion
         if self.promotion_time is not None and sim_time - self.promotion_time < 2.0:
@@ -520,7 +535,8 @@ class TestTierPromotionCycle:
 
         # Must have at least one T0→T1 promotion
         promotion_transitions = [
-            t for t in results["transitions"]
+            t
+            for t in results["transitions"]
             if t["transition"] == TierTransition.T0_TO_T1_IMMOBILITY.value
         ]
         assert len(promotion_transitions) >= 1, (
@@ -548,7 +564,8 @@ class TestTierPromotionCycle:
         # With high motion, motion gate should block promotion entirely
         # (SQI will be low, MAP high)
         promotion_transitions = [
-            t for t in results["transitions"]
+            t
+            for t in results["transitions"]
             if t["transition"] == TierTransition.T0_TO_T1_IMMOBILITY.value
         ]
         assert len(promotion_transitions) == 0, (
@@ -678,7 +695,8 @@ class TestTierPromotionCycle:
 
         # Should NOT promote due to power budget
         promotion_transitions = [
-            t for t in results["transitions"]
+            t
+            for t in results["transitions"]
             if t["transition"] == TierTransition.T0_TO_T1_IMMOBILITY.value
         ]
         assert len(promotion_transitions) == 0, (
@@ -698,11 +716,13 @@ def test_phase1_entry_gate_report():
 
     # Check actual promotion/demotion via transitions
     promotion_transitions = [
-        t for t in results["transitions"]
+        t
+        for t in results["transitions"]
         if t["transition"] == TierTransition.T0_TO_T1_IMMOBILITY.value
     ]
     demotion_transitions = [
-        t for t in results["transitions"]
+        t
+        for t in results["transitions"]
         if t["transition"] == TierTransition.T1_TO_T0_MOVEMENT.value
     ]
 
@@ -732,7 +752,12 @@ def test_phase1_entry_gate_report():
         "tier0_sync_pass": tier0_sync_pass,
         "tier1_sync_pass": tier1_sync_pass,
         "power_budget_24h_pass": power_pass,
-        "overall_pass": promo_pass and final_tier_pass and xdf_pass and tier0_sync_pass and tier1_sync_pass and power_pass,
+        "overall_pass": promo_pass
+        and final_tier_pass
+        and xdf_pass
+        and tier0_sync_pass
+        and tier1_sync_pass
+        and power_pass,
         "details": results,
     }
 
