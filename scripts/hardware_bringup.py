@@ -66,17 +66,19 @@ except ImportError:
 @dataclass
 class SensorSample:
     """Single sensor sample with timestamp."""
+
     timestamp: float
-    ecg: np.ndarray | None = None      # shape (1,)
-    ppg: np.ndarray | None = None      # shape (2,) [red, ir]
-    acc: np.ndarray | None = None      # shape (3,)
-    gyro: np.ndarray | None = None     # shape (3,)
-    mag: np.ndarray | None = None      # shape (3,)
+    ecg: np.ndarray | None = None  # shape (1,)
+    ppg: np.ndarray | None = None  # shape (2,) [red, ir]
+    acc: np.ndarray | None = None  # shape (3,)
+    gyro: np.ndarray | None = None  # shape (3,)
+    mag: np.ndarray | None = None  # shape (3,)
 
 
 @dataclass
 class LSLStreamManager:
     """Manages LSL outlets for all sensor streams."""
+
     outlets: dict[str, Any] = field(default_factory=dict)
     stream_configs: dict[str, dict] = field(default_factory=dict)
 
@@ -124,8 +126,8 @@ class BLEDataParser:
     # IMU:  9 int16 = 18 bytes (ax, ay, az, gx, gy, gz, mx, my, mz)
     # All scaled by firmware to physical units
 
-    ECG_FMT = "<h"          # 1 int16
-    PPG_FMT = "<hh"         # 2 int16
+    ECG_FMT = "<h"  # 1 int16
+    PPG_FMT = "<hh"  # 2 int16
     IMU_FMT = "<hhhhhhhhh"  # 9 int16
 
     ECG_SIZE = struct.calcsize(ECG_FMT)
@@ -135,9 +137,9 @@ class BLEDataParser:
     # Scaling factors (must match firmware)
     ECG_SCALE = 1.0 / 1100.0 * 3300.0 / 4096.0  # V -> mV (AD8232 gain 1100, 12-bit ADC, 3.3V ref)
     PPG_SCALE = 1.0  # Already in nA from MAX30102
-    ACC_SCALE = 8.0 / 32768.0      # ±8g range
+    ACC_SCALE = 8.0 / 32768.0  # ±8g range
     GYRO_SCALE = 1000.0 / 32768.0  # ±1000 dps
-    MAG_SCALE = 4912.0 / 32768.0   # ±4912 uT (ICM-20948 mag)
+    MAG_SCALE = 4912.0 / 32768.0  # ±4912 uT (ICM-20948 mag)
 
     def parse_ecg(self, data: bytes) -> np.ndarray:
         """Parse ECG notification -> shape (1,) in mV."""
@@ -200,12 +202,14 @@ class HardwareBringup:
         if isinstance(obj, str):
             # Handle ${VAR:-default} syntax
             import re
+
             def replace_var(match):
                 var_expr = match.group(1)
                 if ":-" in var_expr:
                     var, default = var_expr.split(":-", 1)
                     return os.environ.get(var, default)
                 return os.environ.get(var_expr, match.group(0))
+
             return re.sub(r"\$\{([^}]+)\}", replace_var, obj)
         if isinstance(obj, dict):
             return {k: self._expand_env_vars(v) for k, v in obj.items()}
@@ -236,9 +240,11 @@ class HardwareBringup:
 
     def _setup_signal_handlers(self) -> None:
         """Handle graceful shutdown."""
+
         def signal_handler(signum, frame):
             self.logger.info(f"Received signal {signum}, shutting down...")
             self.running = False
+
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
@@ -257,16 +263,24 @@ class HardwareBringup:
 
         try:
             import subprocess
+
             cmd = [
                 "esptool.py",
-                "--port", fw_cfg["port"],
-                "--baud", str(fw_cfg["baud"]),
-                "--chip", "esp32s3",
+                "--port",
+                fw_cfg["port"],
+                "--baud",
+                str(fw_cfg["baud"]),
+                "--chip",
+                "esp32s3",
                 "write_flash",
-                "--flash_mode", fw_cfg["flash_mode"],
-                "--flash_freq", fw_cfg["flash_freq"],
-                "--flash_size", fw_cfg["flash_size"],
-                "0x0", str(firmware_path),
+                "--flash_mode",
+                fw_cfg["flash_mode"],
+                "--flash_freq",
+                fw_cfg["flash_freq"],
+                "--flash_size",
+                fw_cfg["flash_size"],
+                "0x0",
+                str(firmware_path),
             ]
             if fw_cfg["verify_after_flash"]:
                 cmd.extend(["--verify"])
@@ -291,7 +305,9 @@ class HardwareBringup:
 
         if address != "auto":
             self.logger.info(f"Connecting to known address: {address}")
-            device = await BleakScanner.find_device_by_address(address, timeout=ble_cfg["scan_timeout_s"])
+            device = await BleakScanner.find_device_by_address(
+                address, timeout=ble_cfg["scan_timeout_s"]
+            )
             return device
 
         self.logger.info("Scanning for SYNAPSE device...")
@@ -369,7 +385,9 @@ class HardwareBringup:
             accel_sampling_rate=100,
             window_duration_s=bringup_cfg["immobility"]["window_s"],
             magnitude_threshold=bringup_cfg["immobility"]["accel_threshold_g"],
-            min_immobility_min=bringup_cfg["immobility"]["required_windows"] * bringup_cfg["immobility"]["window_s"] / 60,
+            min_immobility_min=bringup_cfg["immobility"]["required_windows"]
+            * bringup_cfg["immobility"]["window_s"]
+            / 60,
         )
 
         night_scheduler = NightWindowScheduler(
@@ -394,7 +412,9 @@ class HardwareBringup:
             ),
         )
 
-    def _notification_handler(self, characteristic: BleakGATTCharacteristic, data: bytearray) -> None:
+    def _notification_handler(
+        self, characteristic: BleakGATTCharacteristic, data: bytearray
+    ) -> None:
         """Handle BLE notifications from ESP32-S3."""
         timestamp = time.time()
         uuid_str = str(characteristic.uuid).lower()
@@ -474,6 +494,7 @@ class HardwareBringup:
         triage_interpreter = None
         try:
             import tflite_runtime.interpreter as tflite
+
             model_path = Path(tier_model_cfg["path"])
             if model_path.exists():
                 triage_interpreter = tflite.Interpreter(model_path=str(model_path))
@@ -517,7 +538,9 @@ class HardwareBringup:
                 output = triage_interpreter.get_tensor(output_details[0]["index"])
                 pred_class = int(np.argmax(output))
                 class_names = tier_model_cfg["output_classes"]
-                self.logger.debug(f"Triage: {class_names[pred_class]} (conf={output[0][pred_class]:.3f})")
+                self.logger.debug(
+                    f"Triage: {class_names[pred_class]} (conf={output[0][pred_class]:.3f})"
+                )
 
             # Check promotion (T0 -> T1 on immobility)
             if (
@@ -529,7 +552,10 @@ class HardwareBringup:
                 if immobility_start is None:
                     immobility_start = elapsed
                 elif elapsed - immobility_start >= val_cfg["immobility_hold_s"]:
-                    if self.controller.power_budget.can_afford_tier1(2.0) and self.controller._motion_gate_armed():
+                    if (
+                        self.controller.power_budget.can_afford_tier1(2.0)
+                        and self.controller._motion_gate_armed()
+                    ):
                         self.logger.info(f"PROMOTION: T0 -> T1 at {elapsed:.1f}s (immobility held)")
                         promotion_occurred = True
                         immobility_start = None  # Reset
@@ -547,7 +573,9 @@ class HardwareBringup:
                     latest_acc = self.stream_buffers["SYNAPSE_ACC_T0"][-1]
                     acc_mag = float(np.linalg.norm(latest_acc))
                     if acc_mag > val_cfg["movement_threshold_g"]:
-                        self.logger.info(f"DEMOTION: T1 -> T0 at {elapsed:.1f}s (movement: {acc_mag:.2f}g)")
+                        self.logger.info(
+                            f"DEMOTION: T1 -> T0 at {elapsed:.1f}s (movement: {acc_mag:.2f}g)"
+                        )
                         demotion_occurred = True
                         movement_detected = True
 
@@ -560,7 +588,11 @@ class HardwareBringup:
 
             # Periodic status log
             if elapsed - last_log >= 10.0:
-                tier = self.controller.state_machine.current_tier.name if self.controller else "UNKNOWN"
+                tier = (
+                    self.controller.state_machine.current_tier.name
+                    if self.controller
+                    else "UNKNOWN"
+                )
                 self.logger.info(
                     f"Status: t={elapsed:.1f}s tier={tier} "
                     f"samples: ECG={self.sample_counts['ecg']} "
@@ -574,7 +606,9 @@ class HardwareBringup:
         return {
             "promotion_occurred": promotion_occurred,
             "demotion_occurred": demotion_occurred,
-            "final_tier": self.controller.state_machine.current_tier.name if self.controller else "T0",
+            "final_tier": self.controller.state_machine.current_tier.name
+            if self.controller
+            else "T0",
             "sample_counts": self.sample_counts.copy(),
         }
 
@@ -606,14 +640,16 @@ class HardwareBringup:
             sampling_rate = cfg.get("sampling_rate", 0)
             tier = cfg.get("tier", 0)
 
-            streams_for_xdf.append({
-                "name": name,
-                "type": stream_type,
-                "data": data_arr,
-                "timestamps": timestamps,
-                "sampling_rate": sampling_rate,
-                "tier": tier,
-            })
+            streams_for_xdf.append(
+                {
+                    "name": name,
+                    "type": stream_type,
+                    "data": data_arr,
+                    "timestamps": timestamps,
+                    "sampling_rate": sampling_rate,
+                    "tier": tier,
+                }
+            )
 
         # XDF round-trip verification
         try:
@@ -622,7 +658,12 @@ class HardwareBringup:
             return xdf_proof
         except Exception:
             self.logger.exception("XDF verification failed")
-            return {"all_streams_valid": False, "total_dropped": -1, "total_expected": 0, "total_recovered": 0}
+            return {
+                "all_streams_valid": False,
+                "total_dropped": -1,
+                "total_expected": 0,
+                "total_recovered": 0,
+            }
 
     def _collect_final_results(self, loop_results: dict, xdf_proof: dict) -> dict:
         """Collect all results for Phase 1 gate report."""
@@ -665,7 +706,9 @@ class HardwareBringup:
                 "tier1_h_used": power_status.tier1_h_used if power_status else 0,
                 "can_afford_tier1": power_status.can_afford_tier1 if power_status else False,
                 "power_draw_mw": power_status.power_draw_mw if power_status else 0,
-            } if power_status else {},
+            }
+            if power_status
+            else {},
         }
 
     async def run(self, flash: bool = False, duration_s: float | None = None) -> dict:
@@ -769,7 +812,8 @@ async def main():
         help="Validation duration in seconds (default: from config)",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Verbose logging",
     )

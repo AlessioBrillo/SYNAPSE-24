@@ -88,11 +88,13 @@ async def run_live_validation(
 def _evaluate_results(results: dict, output_dir: Path, verbose: bool, mode: str) -> dict:
     """Evaluate results against Phase 1 criteria and generate report."""
     promotion_transitions = [
-        t for t in results.get("transitions", [])
+        t
+        for t in results.get("transitions", [])
         if t["transition"] == TierTransition.T0_TO_T1_IMMOBILITY.value
     ]
     demotion_transitions = [
-        t for t in results.get("transitions", [])
+        t
+        for t in results.get("transitions", [])
         if t["transition"] == TierTransition.T1_TO_T0_MOVEMENT.value
     ]
 
@@ -148,9 +150,13 @@ def _evaluate_results(results: dict, output_dir: Path, verbose: bool, mode: str)
         },
         "power_budget_24h": {
             "passed": results.get("power_budget", {}).get("estimated_remaining_h", 0) >= 24.0,
-            "estimated_remaining_h": results.get("power_budget", {}).get("estimated_remaining_h", 0),
+            "estimated_remaining_h": results.get("power_budget", {}).get(
+                "estimated_remaining_h", 0
+            ),
             "threshold_h": 24.0,
-            "battery_remaining_mah": results.get("power_budget", {}).get("battery_remaining_mah", 0),
+            "battery_remaining_mah": results.get("power_budget", {}).get(
+                "battery_remaining_mah", 0
+            ),
             "details": "Projected battery life >= 24h on 3000 mAh",
         },
     }
@@ -189,12 +195,12 @@ def _evaluate_results(results: dict, output_dir: Path, verbose: bool, mode: str)
             details = criterion.get("details", "").replace("\u2192", "->")
             print(f"{name:<30} {status:<8} {details}")
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"OVERALL: {'PASS' if overall_pass else 'FAIL'}")
         print(f"Passed: {report['summary']['passed']}/{report['summary']['total_criteria']}")
         print(f"Mode: {mode}")
         print(f"Report: {report_path}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
     return report
 
@@ -245,13 +251,15 @@ def main():
 
     try:
         if args.live_hardware:
-            report = asyncio.run(run_live_validation(
-                args.output_dir,
-                args.config,
-                args.flash,
-                args.duration,
-                args.verbose,
-            ))
+            report = asyncio.run(
+                run_live_validation(
+                    args.output_dir,
+                    args.config,
+                    args.flash,
+                    args.duration,
+                    args.verbose,
+                )
+            )
         else:
             report = run_validation(args.output_dir, args.verbose)
 
@@ -264,6 +272,7 @@ def main():
         print(f"Validation failed with error: {e}", file=sys.stderr)
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         sys.exit(2)
 
