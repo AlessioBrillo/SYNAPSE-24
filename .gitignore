@@ -44,11 +44,13 @@ logs/
 # Test artifacts
 .coverage
 .coverage.*
+coverage.json
 coverage.xml
 htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+test_results.json
 
 # Jupyter
 .ipynb_checkpoints/
