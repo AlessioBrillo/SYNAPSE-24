@@ -160,6 +160,18 @@ bringup:
     output_classes: ["rest", "movement", "artifact"]
     inference_interval_s: 0.3  # Run inference every 300ms
 
+  # Immobility detection (for T0->T1 promotion)
+  immobility:
+    window_s: 30.0
+    accel_threshold_g: 0.02
+    required_windows: 10
+
+  # Night window scheduler (not used in single-pod Phase 1, but kept for compatibility)
+  night_window:
+    sleep_start_hour: 23
+    sleep_end_hour: 7
+    timezone: "UTC"
+
   # Logging
   logging:
     level: "INFO"
