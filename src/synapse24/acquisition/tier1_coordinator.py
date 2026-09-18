@@ -491,6 +491,7 @@ class Tier1Coordinator:
         """Acquire Tier 1 EEG data blocking with quality check and XDF export.
 
         Used for validation sessions and Tier 2 calibration.
+        Applies drift correction via MultiPodClockSync (Architecture.md §92: <1ms residual).
         """
         if not self._tier1_pods:
             raise RuntimeError("No Tier 1 pods registered")
@@ -505,16 +506,20 @@ class Tier1Coordinator:
         if not state.impedance_checked:
             state.cerelog_manager.check_impedance()
 
-        # Acquire blocking
+        # Acquire blocking with drift correction
         eeg_data, timestamps, quality_report = state.cerelog_manager.acquire_blocking(
             duration_s=duration_s,
             check_quality=True,
+            clock_sync=self.clock_sync,
+            pod_id=pod_id,
         )
 
-        # Export XDF
+        # Export XDF with drift correction
         session_name = session_name or f"tier1_{pod_id}_{int(time.time())}"
         xdf_path = output_dir / f"{session_name}.xdf"
-        xdf_report = state.cerelog_manager.export_xdf(xdf_path, eeg_data, timestamps)
+        xdf_report = state.cerelog_manager.export_xdf(
+            xdf_path, eeg_data, timestamps, clock_sync=self.clock_sync, pod_id=pod_id
+        )
 
         return {
             "pod_id": pod_id,

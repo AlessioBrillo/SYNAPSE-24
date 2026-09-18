@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from enum import Enum
 from typing import Optional
 
 from synapse24.signal_quality import Tier
+
+logger = logging.getLogger(__name__)
 
 
 def _default_clock() -> float:
@@ -56,11 +59,21 @@ class MotionGateConfig:
     immobility + power budget. Defaults match the Tier-0 literature
     thresholds (QualityThresholds.for_tier(T0): Karlen et al. 2013 wearable
     PPG SQI >= 0.5; MAP tolerance <= 0.5 for ambulatory context).
+
+    Fail-closed behavior (safety-critical default):
+    - sqi_staleness_max_s: Maximum age of SQI measurement before gate disarms.
+      If PPG sensor fails or SQI computation crashes, promotion is blocked
+      after this timeout. Default 30s (conservative for sleep onset detection).
+    - fail_open: If True, allows promotion without SQI measurement (legacy behavior).
+      Default False for safety-critical systems. Set True only for backward
+      compatibility with callers that don't provide motion quality.
     """
 
     sqi_min: float = 0.5
     map_max: float = 0.5
     required_consecutive_clean: int = 2
+    sqi_staleness_max_s: float = 30.0
+    fail_open: bool = False
 
 
 class TierStateMachine:
@@ -257,9 +270,10 @@ class AcquisitionController:
         self._last_night_check = 0.0
         self._night_check_interval = 60.0  # Check night window every minute
 
-        # Latest motion-quality assessment (None = unmeasured, fail-open).
+        # Latest motion-quality assessment (None = unmeasured, fail-closed after staleness timeout).
         self._latest_sqi: float | None = None
         self._latest_map: float | None = None
+        self._latest_sqi_timestamp: float | None = None
         self._consecutive_clean = 0
         self._consecutive_contaminated = 0
 
@@ -279,14 +293,18 @@ class AcquisitionController:
         Architecture.md §74: promotion requires measured-clean signal.
         A streak of required_consecutive_clean assessments arms promotion;
         a streak of contaminated assessments while in Tier 1 demotes back
-        to Tier 0 (movement-demotion path). Missing values are fail-open
-        (unmeasured, counters untouched).
+        to Tier 0 (movement-demotion path). Missing values are fail-closed
+        after sqi_staleness_max_s (unmeasured, counters untouched).
         """
         if ppg_sqi is None or motion_artifact_prob is None:
             return
 
+        if timestamp is None:
+            timestamp = self._clock()
+
         self._latest_sqi = ppg_sqi
         self._latest_map = motion_artifact_prob
+        self._latest_sqi_timestamp = timestamp
 
         if self._is_motion_clean(ppg_sqi, motion_artifact_prob):
             self._consecutive_clean += 1
@@ -314,9 +332,31 @@ class AcquisitionController:
         return sqi >= self.motion_gate.sqi_min and map_score <= self.motion_gate.map_max
 
     def _motion_gate_armed(self) -> bool:
-        """True when no quality measured yet (fail-open) or streak is clean."""
+        """True when quality measured and streak is clean, and SQI is fresh.
+
+        Fail-closed by default: if SQI measurement is older than sqi_staleness_max_s,
+        the gate disarms to prevent promotion on stale/uncertain quality.
+        Set motion_gate.fail_open=True for legacy fail-open behavior.
+        """
+        if self.motion_gate.fail_open:
+            # Legacy behavior: fail-open when no quality measured
+            if self._latest_sqi is None or self._latest_map is None:
+                return True
+
         if self._latest_sqi is None or self._latest_map is None:
-            return True
+            return False
+
+        # Check SQI staleness (fail-closed)
+        if self._latest_sqi_timestamp is not None:
+            now = self._clock()
+            if now - self._latest_sqi_timestamp > self.motion_gate.sqi_staleness_max_s:
+                logger.warning(
+                    "Motion gate disarmed: SQI stale by %.1fs (max %.1fs)",
+                    now - self._latest_sqi_timestamp,
+                    self.motion_gate.sqi_staleness_max_s,
+                )
+                return False
+
         return self._consecutive_clean >= self.motion_gate.required_consecutive_clean
 
     def update_imu(
@@ -434,8 +474,12 @@ class AcquisitionController:
                 "sqi_min": self.motion_gate.sqi_min,
                 "map_max": self.motion_gate.map_max,
                 "required_consecutive_clean": self.motion_gate.required_consecutive_clean,
+                "sqi_staleness_max_s": self.motion_gate.sqi_staleness_max_s,
                 "latest_sqi": self._latest_sqi,
                 "latest_map": self._latest_map,
+                "latest_sqi_age_s": (self._clock() - self._latest_sqi_timestamp)
+                if self._latest_sqi_timestamp
+                else None,
                 "consecutive_clean": self._consecutive_clean,
                 "armed": self._motion_gate_armed(),
             },

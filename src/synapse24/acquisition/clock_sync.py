@@ -262,14 +262,24 @@ class ClockDriftEstimator:
             hub_times = np.array(hub_times_list)
             pod_times = np.array(pod_times_list)
 
-            # Linear fit: pod_time = a * hub_time + b
+            # Center hub times at first marker to avoid numerical issues
+            # when extrapolating intercept to hub_time=0 (which may be far from data range).
+            hub_time_ref = hub_times[0]
+            hub_times_centered = hub_times - hub_time_ref
+
+            # Linear fit: pod_time = a * hub_time_centered + c
+            # where c = pod_time at hub_time_ref
             # drift_rate = (a - 1) * 1e6 ppm
-            # offset = b * 1000 ms
-            A = np.vstack([hub_times, np.ones_like(hub_times)]).T
-            a, b = np.linalg.lstsq(A, pod_times, rcond=None)[0]
+            # offset at hub_time_ref = c
+            # offset at hub_time=0 = c - a * hub_time_ref
+            A = np.vstack([hub_times_centered, np.ones_like(hub_times_centered)]).T
+            a, c = np.linalg.lstsq(A, pod_times, rcond=None)[0]
 
             drift_rate_ppm = (a - 1.0) * 1_000_000
-            offset_ms = b * 1000  # Use intercept as the clock offset at hub_time=0
+            # Offset at reference time (first marker)
+            offset_at_ref_ms = c * 1000
+            # Extrapolate to hub_time=0 for TimestampCorrector
+            offset_ms = (c - a * hub_time_ref) * 1000
 
             estimates[pod_id] = DriftEstimate(
                 pod_id=pod_id,

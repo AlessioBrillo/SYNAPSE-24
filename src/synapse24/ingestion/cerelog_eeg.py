@@ -20,6 +20,7 @@ from typing import Any, Literal
 import numpy as np
 import numpy.typing as npt
 
+from synapse24.acquisition.clock_sync import MultiPodClockSync
 from synapse24.hardware import BOARD_ADAPTERS, BoardConfig, BoardManager
 from synapse24.signal_quality import (
     QualityThresholds,
@@ -421,17 +422,21 @@ class CerelogEEGManager:
         self,
         duration_s: float,
         check_quality: bool = True,
+        clock_sync: MultiPodClockSync | None = None,
+        pod_id: str | None = None,
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], dict[str, Any]]:
         """Acquire a blocking EEG segment for offline processing/validation.
 
         Args:
             duration_s: Duration to acquire in seconds
             check_quality: Run Tier 1 signal quality assessment
+            clock_sync: Optional MultiPodClockSync for drift correction (Architecture.md §92)
+            pod_id: Pod identifier for clock_sync (required if clock_sync provided)
 
         Returns:
             Tuple of (eeg_data, timestamps, quality_report)
             eeg_data: (n_channels, n_samples)
-            timestamps: (n_samples,) in LSL clock domain
+            timestamps: (n_samples,) in hub LSL clock domain (drift-corrected if clock_sync provided)
         """
         if self._manager is None:
             raise RuntimeError("Board not prepared. Call prepare() first.")
@@ -453,6 +458,10 @@ class CerelogEEGManager:
                 timestamps = np.linspace(time.time(), time.time() + duration_s, data.shape[1])
 
             eeg_data = data[: self.config.n_channels, :]
+
+            # Apply clock drift correction if clock_sync provided (Architecture.md §92: <1ms residual)
+            if clock_sync is not None and pod_id is not None:
+                timestamps = clock_sync.correct_pod_timestamps(pod_id, timestamps)
 
             # Quality assessment
             quality_report = {}
@@ -559,6 +568,8 @@ class CerelogEEGManager:
         timestamps: npt.NDArray[np.float64] | None = None,
         include_quality: bool = True,
         include_markers: bool = True,
+        clock_sync: MultiPodClockSync | None = None,
+        pod_id: str | None = None,
     ) -> dict[str, Any]:
         """Export acquired data to XDF with zero-drop guarantee.
 
@@ -570,6 +581,8 @@ class CerelogEEGManager:
             timestamps: Timestamps (n_samples,), if None generates synthetic
             include_quality: Include quality metadata stream
             include_markers: Include marker stream
+            clock_sync: Optional MultiPodClockSync for drift correction (Architecture.md §92)
+            pod_id: Pod identifier for clock_sync (required if clock_sync provided)
 
         Returns:
             Verification report from verify_xdf_roundtrip
@@ -582,6 +595,10 @@ class CerelogEEGManager:
             timestamps = np.linspace(
                 0, eeg_data.shape[1] / self.config.sampling_rate, eeg_data.shape[1]
             )
+
+        # Apply clock drift correction if clock_sync provided (Architecture.md §92: <1ms residual)
+        if clock_sync is not None and pod_id is not None:
+            timestamps = clock_sync.correct_pod_timestamps(pod_id, timestamps)
 
         n_samples, n_channels = eeg_data.shape[1], eeg_data.shape[0]
 
@@ -715,6 +732,8 @@ def ingest_cerelog_eeg(
     duration_s: float,
     output_dir: Path,
     session_name: str | None = None,
+    clock_sync: MultiPodClockSync | None = None,
+    pod_id: str | None = None,
 ) -> dict[str, Any]:
     """Full Cerelog EEG ingestion pipeline: acquire -> quality -> XDF.
 
@@ -723,6 +742,8 @@ def ingest_cerelog_eeg(
         duration_s: Acquisition duration in seconds
         output_dir: Output directory for XDF and reports
         session_name: Optional session identifier
+        clock_sync: Optional MultiPodClockSync for drift correction (Architecture.md §92)
+        pod_id: Pod identifier for clock_sync (required if clock_sync provided)
 
     Returns:
         Dictionary with acquisition report, quality metrics, and XDF verification.
@@ -742,14 +763,18 @@ def ingest_cerelog_eeg(
         impedance_results = manager.check_impedance()
         impedance_report = manager.get_impedance_report()
 
-        # Acquire data
+        # Acquire data with drift correction if clock_sync provided
         eeg_data, timestamps, quality_report = manager.acquire_blocking(
             duration_s=duration_s,
             check_quality=True,
+            clock_sync=clock_sync,
+            pod_id=pod_id,
         )
 
-        # Export XDF
-        xdf_report = manager.export_xdf(xdf_path, eeg_data, timestamps)
+        # Export XDF with drift correction if clock_sync provided
+        xdf_report = manager.export_xdf(
+            xdf_path, eeg_data, timestamps, clock_sync=clock_sync, pod_id=pod_id
+        )
 
         # Compile full report
         full_report = {

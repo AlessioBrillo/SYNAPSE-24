@@ -150,6 +150,7 @@ class TestLegacyPathUnchanged:
         controller = AcquisitionController(
             immobility_detector=_fast_detector(),
             power_budget=_rich_budget(),
+            motion_gate=MotionGateConfig(fail_open=True),  # Explicit opt-in to legacy behavior
         )
         _drive_immobility(controller)
 
