@@ -1,7 +1,19 @@
-"""Ingestion pipelines for public datasets."""
+"""Ingestion pipelines for public datasets and hardware."""
 
 from synapse24.signal_quality import Tier
 
+from .cerelog_eeg import (
+    CERELOG_8CH_10_20,
+    CERELOG_16CH_10_20,
+    CerelogEEGConfig,
+    CerelogEEGManager,
+    ImpedanceResult,
+    alpha_band_power_ratio,
+    band_power,
+    create_cerelog_eeg_config,
+    ingest_cerelog_eeg,
+    spectral_flatness,
+)
 from .deap import (
     download_deap,
     ingest_deap,
@@ -49,6 +61,16 @@ from .wesad_surrogate import (
 )
 
 __all__ = [
+    "CERELOG_8CH_10_20",
+    "CERELOG_16CH_10_20",
+    "CerelogEEGConfig",
+    "ImpedanceResult",
+    "CerelogEEGManager",
+    "create_cerelog_eeg_config",
+    "ingest_cerelog_eeg",
+    "spectral_flatness",
+    "alpha_band_power_ratio",
+    "band_power",
     "FUSION_WINDOW_CONFIG",
     "FUSION_WINDOW_FEATURE_NAMES",
     "FUSION_WINDOW_LABEL_TO_ID",

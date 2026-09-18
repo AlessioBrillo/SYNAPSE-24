@@ -1,15 +1,17 @@
 # SYNAPSE-24 Phase 1 Hardware Bringup Configuration
 # Single-pod Tier 0 validation (forearm_hub with ESP32-S3)
+# Multi-pod Tier 1 validation (head_pod Cerelog ESP-EEG + forearm_hub)
 # Extends config/hardware.yaml — overrides for live hardware validation
 #
 # Usage:
 #   uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml
+#   uv run python scripts/validate_phase1_entry.py --tier1 --config config/hardware_bringup.yaml
 
 bringup:
-  mode: "single_pod"  # "single_pod" | "multi_pod" — Phase 1 validates forearm_hub only
+  mode: "multi_pod"  # "single_pod" | "multi_pod" — Phase 1 validates forearm_hub, Phase 2 adds head_pod
   target_pod: "forearm_hub"
 
-  # Firmware flashing (ESP32-S3 with triage INT8 model)
+  # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub)
   firmware:
     path: "firmware/synapse_tier0.bin"  # Built by CI triage-model job
     port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"  # User can override via env
@@ -19,7 +21,7 @@ bringup:
     flash_size: "4MB"
     verify_after_flash: true
 
-  # BLE connection
+  # BLE connection for forearm_hub
   ble:
     address: "${SYNAPSE_FOREARM_BLE:-auto}"  # "auto" = scan for SYNAPSE device
     scan_timeout_s: 10
@@ -31,7 +33,7 @@ bringup:
       ppg: "0000ffe2-0000-1000-8000-00805f9b34fb"  # PPG notifications (red + IR)
       imu: "0000ffe3-0000-1000-8000-00805f9b34fb"  # IMU notifications (9-axis)
 
-  # Sensor specifications (must match firmware sensor config)
+  # Sensor specifications for forearm_hub (must match firmware sensor config)
   sensors:
     ecg:
       type: "AD8232"
@@ -59,6 +61,21 @@ bringup:
       mag_enabled: true
       dmp_enabled: false  # Raw data only; fusion on host
 
+  # Cerelog ESP-EEG head pod (Tier 1) - Architecture.md §67
+  cerelog_eeg:
+    enabled: true
+    connection: "usb"  # "usb" | "ble" — Cerelog uses USB-C or BLE
+    port: "${SYNAPSE_HEAD_SERIAL:-/dev/ttyUSB0}"  # USB serial port
+    mac_address: "${SYNAPSE_HEAD_BLE:-auto}"  # BLE MAC if using BLE
+    fs: 500  # 500 Hz per Architecture.md §92 (Tier 1 requires 500Hz for EEG)
+    n_channels: 8  # 8-ch ADS1299
+    channel_names: ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4"]  # 10-20 standard
+    electrode_type: "dry"
+    impedance_check: true
+    impedance_threshold_kohm: 50.0  # kΩ — Architecture.md §77: dry electrode impedance 10-100x gel
+    impedance_test_duration_s: 5.0
+    tier: 1
+
   # LSL stream configuration
   lsl:
     clock_domain: "local_clock"  # pylsl.local_clock()
@@ -66,6 +83,7 @@ bringup:
     chunk_size: 16  # Samples per push_sample() call
     max_buffered: 1000  # Max samples buffered before drop
     streams:
+      # Tier 0 streams (forearm_hub)
       - name: "SYNAPSE_ECG_T0"
         type: "ECG"
         channel_count: 1
@@ -101,10 +119,47 @@ bringup:
         channel_format: "float32"
         source_id: "synapse_mag_t0_001"
         tier: 0
+      # Tier 1 streams (head_pod Cerelog)
+      - name: "SYNAPSE_EEG_T1"
+        type: "EEG"
+        channel_count: 8
+        sampling_rate: 500
+        channel_format: "float32"
+        source_id: "synapse_eeg_t1_001"
+        tier: 1
+      - name: "SYNAPSE_ACC_T1"
+        type: "ACC"
+        channel_count: 3
+        sampling_rate: 100
+        channel_format: "float32"
+        source_id: "synapse_acc_t1_001"
+        tier: 1
+      - name: "SYNAPSE_GYRO_T1"
+        type: "GYRO"
+        channel_count: 3
+        sampling_rate: 100
+        channel_format: "float32"
+        source_id: "synapse_gyro_t1_001"
+        tier: 1
+      - name: "SYNAPSE_MAG_T1"
+        type: "MAG"
+        channel_count: 3
+        sampling_rate: 100
+        channel_format: "float32"
+        source_id: "synapse_mag_t1_001"
+        tier: 1
+      # Sync markers (highest tier)
+      - name: "SYNAPSE_Markers"
+        type: "Markers"
+        channel_count: 1
+        sampling_rate: 0  # Irregular
+        channel_format: "string"
+        source_id: "synapse_markers_001"
+        tier: 1
 
   # Clock synchronization (Architecture.md §92)
   sync:
-    mode: "markers_only"  # "markers_only" | "markers_plus_acc" — Phase 1 single-pod uses markers only
+    mode: "markers_plus_acc"  # "markers_only" | "markers_plus_acc" — multi-pod uses both
     tier_budgets:
       T0:
         max_residual_drift_ms: 10.0
@@ -114,7 +169,7 @@ bringup:
         sync_interval_s: 10.0
     acc_correlation_window_s: 30.0
     min_acc_correlation: 0.7
-    # Wired sync GPIO for future multi-pod (head_pod ↔ forearm_hub)
+    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub)
     wired_sync_gpio: 21
 
   # Power budget (Architecture.md §55-62)
@@ -166,7 +221,7 @@ bringup:
     accel_threshold_g: 0.02
     required_windows: 10
 
-  # Night window scheduler (not used in single-pod Phase 1, but kept for compatibility)
+  # Night window scheduler
   night_window:
     sleep_start_hour: 23
     sleep_end_hour: 7

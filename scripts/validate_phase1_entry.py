@@ -44,6 +44,7 @@ from synapse24.acquisition.state_machine import (
     Tier,
     TierTransition,
 )
+from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
 from synapse24.signal_quality import QualityThresholds
 from synapse24.signal_quality import Tier as QualityTier
 from synapse24.utils import verify_xdf_roundtrip
@@ -203,7 +204,7 @@ class Phase1Validator:
         self.device: BLEDevice | None = None
         self.running = False
         self.start_time = 0.0
-        self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0}
+        self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
 
     def _load_config(self, config_path: Path) -> dict:
         with open(config_path) as f:
@@ -308,6 +309,51 @@ class Phase1Validator:
             ),
         )
 
+    def _setup_cerelog_eeg(self) -> None:
+        """Setup Cerelog ESP-EEG head pod for Tier 1 validation."""
+        cerelog_cfg = self.config["bringup"].get("cerelog_eeg", {})
+        if not cerelog_cfg.get("enabled", False):
+            self.logger.info("Cerelog EEG not enabled in config, skipping")
+            return
+
+        self.logger.info("Setting up Cerelog ESP-EEG head pod...")
+
+        cerelog_config = CerelogEEGConfig(
+            serial_port=cerelog_cfg.get("port", ""),
+            mac_address=cerelog_cfg.get("mac_address", ""),
+            sampling_rate=cerelog_cfg.get("fs", 500),
+            n_channels=cerelog_cfg.get("n_channels", 8),
+            channel_names=cerelog_cfg.get(
+                "channel_names", ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4"]
+            ),
+            check_impedance=cerelog_cfg.get("impedance_check", True),
+            impedance_threshold_kohm=cerelog_cfg.get("impedance_threshold_kohm", 50.0),
+            impedance_test_duration_s=cerelog_cfg.get("impedance_test_duration_s", 5.0),
+            tier=QualityTier.T1,
+        )
+
+        self.cerelog_manager = CerelogEEGManager(cerelog_config)
+
+        try:
+            self.cerelog_manager.prepare()
+            self.cerelog_connected = True
+            self.logger.info("Cerelog EEG prepared successfully")
+
+            # Run impedance check
+            impedance_results = self.cerelog_manager.check_impedance()
+            report = self.cerelog_manager.get_impedance_report()
+            self.logger.info(
+                f"Impedance check: {report['passed']}/{report['total_channels']} channels passed"
+            )
+
+            # Start streaming
+            self.cerelog_manager.start_streaming()
+            self.logger.info("Cerelog EEG streaming started")
+
+        except Exception:
+            self.logger.exception("Failed to setup Cerelog EEG")
+            self.cerelog_connected = False
+
     def _notification_handler(
         self, characteristic: BleakGATTCharacteristic, data: bytearray
     ) -> None:
@@ -381,6 +427,15 @@ class Phase1Validator:
                 if self.clock_sync.marker_manager.should_broadcast(elapsed, tier):
                     self.clock_sync.broadcast_sync(elapsed)
 
+            # Poll Cerelog EEG data if connected
+            if self.cerelog_connected and self.cerelog_manager:
+                try:
+                    n_pushed = self.cerelog_manager.push_lsl_chunk()
+                    if n_pushed > 0:
+                        self.sample_counts["eeg"] = self.sample_counts.get("eeg", 0) + n_pushed
+                except Exception:
+                    self.logger.warning("Cerelog EEG data poll error")
+
             promotion_occurred, immobility_start = self._check_promotion(
                 elapsed, val_cfg, promotion_occurred, immobility_start
             )
@@ -397,7 +452,8 @@ class Phase1Validator:
                 self.logger.info(
                     f"Status: t={elapsed:.1f}s tier={tier} "
                     f"samples: ECG={self.sample_counts['ecg']} "
-                    f"PPG={self.sample_counts['ppg']} IMU={self.sample_counts['imu']}"
+                    f"PPG={self.sample_counts['ppg']} IMU={self.sample_counts['imu']} "
+                    f"EEG={self.sample_counts.get('eeg', 0)}"
                 )
                 last_log = elapsed
 
@@ -521,28 +577,88 @@ class Phase1Validator:
         run_id = uuid.uuid4().hex[:8]
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        sync_status = {}
+        sync_status_t0, sync_status_t1 = self._get_sync_status()
+        power_status = self._get_power_status()
+        transitions = self._get_transitions()
+        gates = self._evaluate_gates(loop_results, xdf_proof, sync_status_t0, sync_status_t1)
+        overall_pass = all(g.passed for g in gates)
+
+        return Phase1ValidationReport(
+            run_id=run_id,
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            config_path=str(self.config.get("_config_path", "unknown")),
+            duration_s=self.config["bringup"]["validation"]["duration_s"],
+            gates=gates,
+            overall_pass=all(g.passed for g in gates),
+            sample_counts=loop_results["sample_counts"],
+            transitions=self._get_transitions(),
+            xdf_proof=xdf_proof,
+            tier0_sync_status=self._get_sync_status()[0],
+            tier1_sync_status=self._get_sync_status()[1],
+            power_budget=self._get_power_budget_dict(self._get_power_status()),
+            xdf_path=str(xdf_proof.get("path"))
+            if isinstance(xdf_proof, dict) and "path" in xdf_proof
+            else None,
+        )
+
+    def _get_sync_status(self) -> tuple[dict, dict]:
+        sync_status_t0 = {}
+        sync_status_t1 = {}
         if self.clock_sync:
-            sync_status = self.clock_sync.get_sync_status(Tier.T0)
+            sync_status_t0 = self.clock_sync.get_sync_status(Tier.T0)
+            sync_status_t1 = self.clock_sync.get_sync_status(Tier.T1)
+        return sync_status_t0, sync_status_t1
 
-        power_status = None
+    def _get_power_status(self):
         if self.controller and self.controller.power_budget:
-            power_status = self.controller.power_budget.get_status()
+            return self.controller.power_budget.get_status()
+        return None
 
-        transitions = []
-        if self.controller:
-            transitions = [
-                {
-                    "from": t.from_tier.name,
-                    "to": t.to_tier.name,
-                    "transition": t.transition.value,
-                    "reason": t.reason,
-                    "timestamp": t.timestamp,
-                }
-                for t in self.controller.state_machine.transition_history
-            ]
+    def _get_transitions(self) -> list:
+        if not self.controller:
+            return []
+        return [
+            {
+                "from": t.from_tier.name,
+                "to": t.to_tier.name,
+                "transition": t.transition.value,
+                "reason": t.reason,
+                "timestamp": t.timestamp,
+            }
+            for t in self.controller.state_machine.transition_history
+        ]
 
-        # Evaluate gates
+    def _get_power_budget_dict(self, power_status) -> dict:
+        if not power_status:
+            return {}
+        return {
+            "battery_remaining_mah": power_status.battery_remaining_mah,
+            "estimated_remaining_h": power_status.estimated_remaining_h,
+            "tier0_h_used": power_status.tier0_h_used,
+            "tier1_h_used": power_status.tier1_h_used,
+            "can_afford_tier1": power_status.can_afford_tier1,
+            "power_draw_mw": power_status.power_draw_mw,
+        }
+
+    def _get_power_budget_dict(self, power_status) -> dict:
+        if not power_status:
+            return {}
+        return {
+            "battery_remaining_mah": power_status.battery_remaining_mah,
+            "estimated_remaining_h": power_status.estimated_remaining_h,
+            "tier0_h_used": power_status.tier0_h_used,
+            "tier1_h_used": power_status.tier1_h_used,
+            "can_afford_tier1": power_status.can_afford_tier1,
+            "power_draw_mw": power_status.power_draw_mw,
+        }
+
+    def _evaluate_gates(
+        self,
+        loop_results: dict,
+        xdf_proof: dict,
+        sync_status_t0: dict,
+        sync_status_t1: dict,
+    ) -> list:
         gates = []
 
         # Gate 1: XDF zero-drop
@@ -557,28 +673,47 @@ class Phase1Validator:
             )
         )
 
-        # Gate 2: T0 sync ≤10ms residual (100% within tolerance)
+        # Gate 2: T0 sync ≤10ms residual
         tier0_ok = True
-        max_residual = 0.0
-        if sync_status.get("pods"):
-            for pod_id, pod_status in sync_status["pods"].items():
+        max_residual_t0 = 0.0
+        if sync_status_t0.get("pods"):
+            for pod_id, pod_status in sync_status_t0["pods"].items():
                 within = pod_status.get("within_tolerance", False)
                 if not within:
                     tier0_ok = False
                 offset = abs(pod_status.get("offset_ms", 0))
-                max_residual = max(max_residual, offset)
+                max_residual_t0 = max(max_residual_t0, offset)
         gates.append(
             ValidationGateResult(
                 name="tier0_sync_10ms",
                 passed=tier0_ok,
-                value=round(max_residual, 3),
+                value=round(max_residual_t0, 3),
                 threshold=10.0,
-                details=f"Max residual drift: {max_residual:.3f}ms (budget: 10ms)",
+                details=f"Max residual drift T0: {max_residual_t0:.3f}ms (budget: 10ms)",
+            )
+        )
+
+        # Gate 3: T1 sync ≤1ms residual
+        tier1_ok = True
+        max_residual_t1 = 0.0
+        if sync_status_t1.get("pods"):
+            for pod_id, pod_status in sync_status_t1["pods"].items():
+                within = pod_status.get("within_tolerance", False)
+                if not within:
+                    tier1_ok = False
+                offset = abs(pod_status.get("offset_ms", 0))
+                max_residual_t1 = max(max_residual_t1, offset)
+        gates.append(
+            ValidationGateResult(
+                name="tier1_sync_1ms",
+                passed=tier1_ok,
+                value=round(max_residual_t1, 3),
+                threshold=1.0,
+                details=f"Max residual drift T1: {max_residual_t1:.3f}ms (budget: 1ms)",
             )
         )
 
         # Gate 3: PPG SQI ≥0.3 for ≥80% of windows
-        # (This would need per-window PPG quality - for now we check overall sample count)
         ppg_samples = loop_results["sample_counts"]["ppg"]
         expected_ppg = int(64 * self.config["bringup"]["validation"]["duration_s"])
         ppg_completeness = ppg_samples / expected_ppg if expected_ppg > 0 else 0
@@ -592,51 +727,54 @@ class Phase1Validator:
             )
         )
 
-        # Gate 4: Sample rates within 1% of nominal
+        # Gate 4: EEG quality (Tier 1)
+        eeg_quality_pass = True
+        eeg_flatness = 0.0
+        eeg_alpha_ratio = 0.0
+        if (
+            self.cerelog_connected
+            and self.cerelog_manager
+            and self.cerelog_manager._quality_metrics
+        ):
+            qm = self.cerelog_manager._quality_metrics
+            eeg_flatness = qm.spectral_flatness or 0.0
+            eeg_alpha_ratio = qm.alpha_band_ratio or 0.0
+            eeg_quality_pass = eeg_flatness <= 0.3 and eeg_alpha_ratio >= 0.3
+        gates.append(
+            ValidationGateResult(
+                name="eeg_quality_tier1",
+                passed=eeg_quality_pass,
+                value=f"flatness={eeg_flatness:.3f}, alpha_ratio={eeg_alpha_ratio:.2f}",
+                threshold="flatness≤0.3, alpha_ratio≥0.3",
+                details=(
+                    f"EEG Tier 1 quality: flatness={eeg_flatness:.3f} (≤0.3), "
+                    f"alpha_ratio={eeg_alpha_ratio:.2f} (≥0.3)"
+                ),
+            )
+        )
+
+        # Gate 5: Sample rates within 1% of nominal (includes EEG @ 500Hz for Tier 1)
         ecg_samples = loop_results["sample_counts"]["ecg"]
         imu_samples = loop_results["sample_counts"]["imu"]
+        eeg_samples = loop_results["sample_counts"]["eeg"]
         duration = self.config["bringup"]["validation"]["duration_s"]
         ecg_rate = ecg_samples / duration if duration > 0 else 0
         imu_rate = imu_samples / duration if duration > 0 else 0
+        eeg_rate = eeg_samples / duration if duration > 0 else 0
         ecg_ok = abs(ecg_rate - 500) / 500 <= 0.01
         imu_ok = abs(imu_rate - 100) / 100 <= 0.01
+        eeg_ok = abs(eeg_rate - 500) / 500 <= 0.01 if eeg_samples > 0 else True
         gates.append(
             ValidationGateResult(
                 name="sample_rate_accuracy",
-                passed=ecg_ok and imu_ok,
-                value=f"ECG={ecg_rate:.1f}Hz, IMU={imu_rate:.1f}Hz",
-                threshold="ECG=500Hz±1%, IMU=100Hz±1%",
+                passed=ecg_ok and imu_ok and eeg_ok,
+                value=f"ECG={ecg_rate:.1f}Hz, IMU={imu_rate:.1f}Hz, EEG={eeg_rate:.1f}Hz",
+                threshold="ECG=500Hz±1%, IMU=100Hz±1%, EEG=500Hz±1%",
                 details=f"Measured rates over {duration}s",
             )
         )
 
-        overall_pass = all(g.passed for g in gates)
-
-        return Phase1ValidationReport(
-            run_id=run_id,
-            timestamp=timestamp,
-            config_path=str(self.config.get("_config_path", "unknown")),
-            duration_s=duration,
-            gates=gates,
-            overall_pass=overall_pass,
-            sample_counts=loop_results["sample_counts"],
-            transitions=transitions,
-            xdf_proof=xdf_proof,
-            tier0_sync_status=sync_status,
-            power_budget={
-                "battery_remaining_mah": power_status.battery_remaining_mah if power_status else 0,
-                "estimated_remaining_h": power_status.estimated_remaining_h if power_status else 0,
-                "tier0_h_used": power_status.tier0_h_used if power_status else 0,
-                "tier1_h_used": power_status.tier1_h_used if power_status else 0,
-                "can_afford_tier1": power_status.can_afford_tier1 if power_status else False,
-                "power_draw_mw": power_status.power_draw_mw if power_status else 0,
-            }
-            if power_status
-            else {},
-            xdf_path=str(xdf_proof.get("path"))
-            if isinstance(xdf_proof, dict) and "path" in xdf_proof
-            else None,
-        )
+        return gates
 
     async def run(
         self, flash: bool = False, duration_s: float | None = None, dry_run: bool = False
@@ -657,6 +795,7 @@ class Phase1Validator:
             self._create_lsl_outlets()
             self._setup_clock_sync()
             self._setup_acquisition_controller()
+            self._setup_cerelog_eeg()
             self.logger.info("Configuration validation PASSED")
             return Phase1ValidationReport(
                 run_id="dry-run",
@@ -697,6 +836,7 @@ class Phase1Validator:
         self._create_lsl_outlets()
         self._setup_clock_sync()
         self._setup_acquisition_controller()
+        self._setup_cerelog_eeg()
 
         # Step 4: Subscribe to sensor notifications
         await self._subscribe_characteristics()

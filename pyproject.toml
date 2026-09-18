@@ -209,6 +209,7 @@ omit = [
     "src/synapse24/hardware/*",
     "src/synapse24/ingestion/sleep_edf.py",
     "src/synapse24/ingestion/deap.py",
+    "src/synapse24/ingestion/cerelog_eeg.py",
     "src/synapse24/signal_quality/fnirs.py",
 ]
 branch = true

@@ -51,7 +51,7 @@ class TestPhase1DryRun:
         assert report.transitions == []
 
     def test_lsl_outlets_created(self):
-        """Dry-run should create 5 LSL outlets (ECG, PPG, ACC, GYRO, MAG)."""
+        """Dry-run should create 10 LSL outlets (5 T0 + 5 T1)."""
         config_path = Path("config/hardware_bringup.yaml")
         import logging
 
@@ -61,14 +61,19 @@ class TestPhase1DryRun:
         validator = Phase1Validator(config_path, logger)
         validator._create_lsl_outlets()
 
-        # Check 5 outlets created
-        assert len(validator.lsl_manager.outlets) == 5
+        # Check 10 outlets created (5 Tier 0 + 5 Tier 1)
+        assert len(validator.lsl_manager.outlets) == 10
         expected_streams = {
             "SYNAPSE_ECG_T0",
             "SYNAPSE_PPG_T0",
             "SYNAPSE_ACC_T0",
             "SYNAPSE_GYRO_T0",
             "SYNAPSE_MAG_T0",
+            "SYNAPSE_EEG_T1",
+            "SYNAPSE_ACC_T1",
+            "SYNAPSE_GYRO_T1",
+            "SYNAPSE_MAG_T1",
+            "SYNAPSE_Markers",
         }
         assert set(validator.lsl_manager.outlets.keys()) == expected_streams
 

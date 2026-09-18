@@ -130,7 +130,7 @@ class QualityThresholds:
                 map_max=0.3,  # WESAD benchmark
                 # EEG: High-density sleep/rest (Sleep-EDF, YASA standards)
                 spectral_flatness_max=0.3,
-                alpha_ratio_min=1.5,  # Eyes-closed alpha dominance
+                alpha_ratio_min=0.3,  # Alpha/total power ratio (eyes-closed alpha dominance ~30-50%)
                 # fNIRS: Research-grade (OpenNIRScap Kim 2025; Brigadoi 2014)
                 fnirs_cv_dc_max=0.05,
                 fnirs_snr_min_db=10.0,
