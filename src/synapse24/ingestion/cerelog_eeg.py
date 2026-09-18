@@ -145,7 +145,7 @@ class CerelogEEGManager:
     def __init__(self, config: CerelogEEGConfig | None = None) -> None:
         self.config = config or CerelogEEGConfig()
         self._manager: BoardManager | None = None
-        self._board_adapter = None
+        self._board_adapter: Any | None = None
         self._lsl_outlets: dict[str, Any] = {}
         self._stream_configs: dict[str, StreamConfig] = {}
         self._impedance_results: list[ImpedanceResult] = []
@@ -193,6 +193,8 @@ class CerelogEEGManager:
         from pylsl import StreamInfo, StreamOutlet
 
         # Get stream mapping from adapter
+        if self._board_adapter is None:
+            raise RuntimeError("Board adapter not initialized. Call prepare() first.")
         stream_mapping = self._board_adapter.get_stream_mapping()
 
         for stream_key, mapping in stream_mapping.items():
@@ -248,9 +250,9 @@ class CerelogEEGManager:
 
         # BrainFlow impedance check (if supported by board)
         try:
-            if hasattr(self._manager._board, "get_impedance"):
+            if self._manager is not None and self._manager._board is not None and hasattr(self._manager._board, "get_impedance"):
                 # Some boards support get_impedance()
-                impedances = self._manager._board.get_impedance()
+                impedances = self._manager._board.get_impedance()  # type: ignore[attr-defined]
                 for ch_idx, ch_name in enumerate(self.config.channel_names):
                     if ch_idx < len(impedances):
                         z_kohm = float(impedances[ch_idx])
@@ -393,14 +395,17 @@ class CerelogEEGManager:
 
         if len(timestamps) != n_samples:
             # Fallback: generate timestamps
+            base_time = self._start_time if self._start_time is not None else time.time()
             timestamps = np.linspace(
-                self._start_time or time.time(),
-                self._start_time + n_samples / self.config.sampling_rate,
+                base_time,
+                base_time + n_samples / self.config.sampling_rate,
                 n_samples,
             )
 
         # Get stream mapping from adapter
-        stream_mapping = self._board_adapter.get_stream_mapping()
+        if self._board_adapter is None:
+            raise RuntimeError("Board adapter not initialized")
+        stream_mapping: dict[str, dict[str, Any]] = self._board_adapter.get_stream_mapping()
 
         for stream_key, mapping in stream_mapping.items():
             if stream_key not in self._lsl_outlets:
@@ -494,6 +499,7 @@ class CerelogEEGManager:
         """
         n_channels, n_samples = eeg_data.shape
         fs = self.config.sampling_rate
+        duration_s = timestamps[-1] - timestamps[0] if timestamps is not None and len(timestamps) > 1 else n_samples / fs
 
         per_channel = {}
         all_flatness = []
@@ -532,7 +538,7 @@ class CerelogEEGManager:
             modality="eeg",
             tier=Tier.T1,
             sampling_rate_hz=fs,
-            duration_s=duration_s if timestamps is not None else n_samples / fs,
+            duration_s=duration_s,
             spectral_flatness=median_flatness,
             alpha_band_ratio=median_alpha_ratio,
         )

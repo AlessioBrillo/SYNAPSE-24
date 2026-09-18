@@ -17,7 +17,8 @@ import time
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -205,9 +206,14 @@ class Tier1Coordinator:
         """Connect all registered pods."""
         results = {}
 
+        def _raise_not_registered(pod_id: str) -> None:
+            raise RuntimeError(f"Tier 1 pod {pod_id} not properly registered")
+
         # Connect Tier 1 pods (Cerelog)
         for pod_id, state in self._tier1_pods.items():
             try:
+                if state.cerelog_manager is None:
+                    _raise_not_registered(pod_id)
                 state.cerelog_manager.prepare()
                 state.impedance_checked = False
                 state.quality_passed = False
@@ -216,13 +222,13 @@ class Tier1Coordinator:
                 logger.exception("Failed to connect Tier 1 pod %s", pod_id)
 
         # Connect Tier 0 pods (forearm hubs)
-        for pod_id, state in self._tier0_pods.items():
+        for pod_id, state_t0 in self._tier0_pods.items():
             try:
-                board_config = state.config.to_board_config()
+                board_config = state_t0.config.to_board_config()
                 manager = BoardManager(board_config)
                 manager.prepare()
-                state.manager = manager
-                state.error_count = 0
+                state_t0.manager = manager
+                state_t0.error_count = 0
                 results[pod_id] = True
             except Exception:
                 logger.exception("Failed to connect Tier 0 pod %s", pod_id)
@@ -257,15 +263,15 @@ class Tier1Coordinator:
                     logger.exception("Failed to start Tier 1 pod %s", pod_id)
 
         # Start Tier 0 pods
-        for pod_id, state in self._tier0_pods.items():
-            if state.manager and state.manager.state.name == "CONNECTED":
+        for pod_id, state_t0 in self._tier0_pods.items():
+            if state_t0.manager and state_t0.manager.state.name == "CONNECTED":
                 try:
-                    state.manager.start_stream()
-                    state.is_streaming = True
-                    state.last_data_time = time.time()
+                    state_t0.manager.start_stream()
+                    state_t0.is_streaming = True
+                    state_t0.last_data_time = time.time()
                     results[pod_id] = True
                 except Exception as e:
-                    state.error_count += 1
+                    state_t0.error_count += 1
                     results[pod_id] = False
 
         # Reset sync timers
@@ -276,30 +282,30 @@ class Tier1Coordinator:
 
     def stop_streaming_all(self) -> None:
         """Stop streaming on all pods."""
-        for state in self._tier1_pods.values():
-            if state.cerelog_manager and state.is_streaming:
-                state.cerelog_manager.stop_streaming()
-                state.is_streaming = False
+        for state_t1 in self._tier1_pods.values():
+            if state_t1.cerelog_manager and state_t1.is_streaming:
+                state_t1.cerelog_manager.stop_streaming()
+                state_t1.is_streaming = False
 
-        for state in self._tier0_pods.values():
-            if state.manager and state.is_streaming:
-                state.manager.stop_stream()
-                state.is_streaming = False
+        for state_t0 in self._tier0_pods.values():
+            if state_t0.manager and state_t0.is_streaming:
+                state_t0.manager.stop_stream()
+                state_t0.is_streaming = False
 
     def disconnect_all(self) -> None:
         """Disconnect all pods."""
         self.stop_streaming_all()
 
-        for state in self._tier1_pods.values():
-            if state.cerelog_manager:
-                state.cerelog_manager.release()
-                state.cerelog_manager = None
+        for state_t1 in self._tier1_pods.values():
+            if state_t1.cerelog_manager:
+                state_t1.cerelog_manager.release()
+                state_t1.cerelog_manager = None
 
-        for state in self._tier0_pods.values():
-            if state.manager:
-                state.manager.release()
-                state.manager = None
-            state.is_streaming = False
+        for state_t0 in self._tier0_pods.values():
+            if state_t0.manager:
+                state_t0.manager.release()
+                state_t0.manager = None
+            state_t0.is_streaming = False
 
     # ==================== Real-time Data & Sync ====================
 
@@ -326,13 +332,13 @@ class Tier1Coordinator:
                     logger.exception("Error pushing Tier 1 pod %s data", pod_id)
 
         # Push Tier 0 (forearm) data
-        for pod_id, state in self._tier0_pods.items():
-            if state.manager and state.is_streaming:
+        for pod_id, state_t0 in self._tier0_pods.items():
+            if state_t0.manager and state_t0.is_streaming:
                 try:
-                    data = state.manager.get_board_data()
+                    data = state_t0.manager.get_board_data()
                     if data.size > 0:
                         n_samples = data.shape[1]
-                        timestamps = state.manager.get_board_timestamp()
+                        timestamps = state_t0.manager.get_board_timestamp()
                         if len(timestamps) != n_samples:
                             timestamps = np.linspace(
                                 current_time, current_time + n_samples / 100, n_samples
@@ -340,13 +346,17 @@ class Tier1Coordinator:
 
                         # Push to LSL outlets (would need LSLStreamManager integration)
                         # For now, just track that data was received
-                        state.last_data_time = current_time
+                        state_t0.last_data_time = current_time
                         results[pod_id] = n_samples
 
                         # Update clock sync with hub ACC (reference)
-                        if "acc" in state.config.modalities:
+                        if "acc" in state_t0.config.modalities:
                             # Extract ACC magnitude for cross-correlation
-                            acc_channels = state.config.channels.get("acc", 3)
+                            acc_channels: int = 3
+                            if isinstance(state_t0.config.channels, dict):
+                                acc_channels = state_t0.config.channels.get("acc", 3)
+                            elif isinstance(state_t0.config.channels, int):
+                                acc_channels = min(3, state_t0.config.channels)
                             if data.shape[0] >= acc_channels:
                                 acc_data = data[-acc_channels:, :]
                                 acc_mag = np.linalg.norm(acc_data, axis=0)
@@ -359,7 +369,7 @@ class Tier1Coordinator:
 
         return results
 
-    def broadcast_sync_marker(self) -> SyncMarker:
+    def broadcast_sync_marker(self) -> SyncMarker | None:
         """Broadcast synchronization marker to all pods.
 
         Uses Tier 1 interval (10s) when in Tier 1, Tier 0 interval (60s) otherwise.

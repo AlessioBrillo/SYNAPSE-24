@@ -331,7 +331,7 @@ class LSLGateway:
                         continue
 
                     # Convert to numpy
-                    data = np.array(chunk, dtype=np.float32)  # (n_samples, n_channels)
+                    data = np.array(chunk, dtype=np.float64)  # (n_samples, n_channels)
                     ts = np.array(timestamps, dtype=np.float64)
 
                     # Apply clock correction
@@ -450,7 +450,7 @@ class LSLGateway:
         if pod_id not in self._buffers:
             return None
 
-        data = np.array(self._buffers[pod_id], dtype=np.float32)
+        data = np.array(self._buffers[pod_id], dtype=np.float64)
         timestamps = np.array(self._timestamps[pod_id], dtype=np.float64)
 
         if duration_s is not None and len(timestamps) > 0:
