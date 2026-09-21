@@ -413,7 +413,7 @@ class Tier1Coordinator:
         Returns:
             Dict of pod_id -> samples_pushed
         """
-        results = {}
+        results: dict[str, int] = {}
         current_time = self.clock_fn() if self.clock_fn else time.time()
 
         self._push_tier1_data(results, current_time)
