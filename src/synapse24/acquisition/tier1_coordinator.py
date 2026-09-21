@@ -1,12 +1,14 @@
-"""Tier 1 Coordinator for head pod + forearm hub orchestration.
+"""Tier 1 Coordinator for head pod + forearm hub + in-ear pod orchestration.
 
 Architecture.md §27-30: Decoupled sensor pods + hub architecture.
 Architecture.md §33-43: Three-tier acquisition strategy.
+Architecture.md §67-68: In-ear EEG satellite for Tier 0 H24 continuity.
 Architecture.md §92: Clock drift risk mitigation - Tier 1 requires 1ms tolerance, 10s sync interval.
 
 This coordinator manages:
 - Head pod (Cerelog ESP-EEG): 8-ch EEG @ 500Hz, IMU @ 100Hz, Tier 1
 - Forearm hub (Tier 0): PPG @ 64Hz, IMU @ 100Hz, ECG @ 250Hz, Tier 0
+- In-ear pod (Tier 0): 1-2ch EEG @ 256Hz, IMU @ 50Hz, Tier 0 (H24 continuity)
 - MultiPodClockSync with Tier 1 budget (1ms residual, 10s interval)
 - Tier 0→1 promotion/demotion with sync marker alignment
 """
@@ -36,6 +38,7 @@ from synapse24.acquisition.state_machine import (
     TransitionEvent,
 )
 from synapse24.hardware import BoardConfig, BoardManager, DeviceRegistry, SensorPodConfig
+from synapse24.hardware.inear_eeg import InEarEEGConfig, InEarEEGFirmware
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
 from synapse24.signal_quality import Tier
 from synapse24.signal_quality import Tier as QualityTier
@@ -69,6 +72,25 @@ class Tier0PodState:
     clock_offset_ms: float = 0.0
     error_count: int = 0
     last_data_time: float = 0.0
+
+
+@dataclass
+class InEarPodState:
+    """Runtime state of an In-Ear EEG pod (Tier 0 continuity).
+
+    Architecture.md §67-68: Provides continuous EEG during head pod
+    charging, showering, sport. Independent battery (150mAh, 600h target).
+    """
+
+    pod_id: str
+    config: SensorPodConfig
+    firmware: InEarEEGFirmware | None = None
+    is_streaming: bool = False
+    last_sync_time: float = 0.0
+    clock_offset_ms: float = 0.0
+    error_count: int = 0
+    last_data_time: float = 0.0
+    battery_remaining_pct: float = 100.0
 
 
 class Tier1Coordinator:
@@ -111,6 +133,7 @@ class Tier1Coordinator:
         # Pod states
         self._tier1_pods: dict[str, Tier1PodState] = {}  # Head pods (EEG)
         self._tier0_pods: dict[str, Tier0PodState] = {}  # Forearm hubs
+        self._inear_pods: dict[str, InEarPodState] = {}  # In-ear EEG (Tier 0 continuity)
 
         # Hub reference
         self._hub_pod_id: str | None = None
@@ -200,6 +223,48 @@ class Tier1Coordinator:
 
         logger.info("Registered Tier 0 forearm hub: %s (%s)", pod_id, name)
 
+    def register_in_ear_pod(
+        self,
+        pod_id: str,
+        name: str,
+        inear_config: InEarEEGConfig,
+        placement: str = "in_ear",
+    ) -> None:
+        """Register an In-Ear EEG satellite pod for Tier 0 H24 continuity.
+
+        Architecture.md §67-68: 1-2ch EEG in-ear for continuous coverage
+        when head pod is off (shower, sport, charging).
+        """
+        pod_config = SensorPodConfig(
+            pod_id=pod_id,
+            name=name,
+            board_type="INEAR_EEG_BOARD",
+            modalities=["eeg", "acc"],
+            tier=QualityTier.T0,
+            channels={"eeg": inear_config.eeg_channels, "acc": 3},
+            sampling_rate={"eeg": inear_config.eeg_sampling_rate, "imu": inear_config.imu_sampling_rate},
+            ble_address="",  # In-ear has its own BLE, not managed by hub
+            serial_port="",
+            placement=placement,
+            electrode_type=inear_config.electrode_type,
+            is_hub=False,
+        )
+
+        self.registry.register(pod_config)
+
+        firmware = InEarEEGFirmware(inear_config)
+        self._inear_pods[pod_id] = InEarPodState(
+            pod_id=pod_id,
+            config=pod_config,
+            firmware=firmware,
+            battery_remaining_pct=100.0,
+        )
+
+        # Register with clock sync (ACC at in-ear IMU rate for cross-correlation)
+        self.clock_sync.register_pod(pod_id, acc_sampling_rate=inear_config.imu_sampling_rate)
+
+        logger.info("Registered Tier 0 in-ear EEG pod: %s (%s)", pod_id, name)
+
     # ==================== Connection & Streaming ====================
 
     def connect_all(self) -> dict[str, bool]:
@@ -231,6 +296,16 @@ class Tier1Coordinator:
             except Exception:
                 logger.exception("Failed to connect Tier 0 pod %s", pod_id)
 
+        # Connect In-Ear pods (Tier 0 continuity)
+        for pod_id, state_ear in self._inear_pods.items():
+            try:
+                if state_ear.firmware:
+                    state_ear.firmware.setup_lsl_streams()
+                    state_ear.error_count = 0
+                    results[pod_id] = True
+            except Exception:
+                logger.exception("Failed to connect In-Ear pod %s", pod_id)
+
         return results
 
     def check_impedance_all(self) -> dict[str, dict[str, Any]]:
@@ -260,7 +335,7 @@ class Tier1Coordinator:
                 except Exception:
                     logger.exception("Failed to start Tier 1 pod %s", pod_id)
 
-        # Start Tier 0 pods
+        # Start Tier 0 pods (forearm hubs)
         for pod_id, state_t0 in self._tier0_pods.items():
             if state_t0.manager and state_t0.manager.state.name == "CONNECTED":
                 try:
@@ -270,6 +345,18 @@ class Tier1Coordinator:
                     results[pod_id] = True
                 except Exception as e:
                     state_t0.error_count += 1
+                    results[pod_id] = False
+
+        # Start In-Ear pods (Tier 0 continuity - always streaming)
+        for pod_id, state_ear in self._inear_pods.items():
+            if state_ear.firmware:
+                try:
+                    state_ear.firmware.start_streaming()
+                    state_ear.is_streaming = True
+                    state_ear.last_data_time = time.time()
+                    results[pod_id] = True
+                except Exception:
+                    state_ear.error_count += 1
                     results[pod_id] = False
 
         # Reset sync timers
@@ -290,6 +377,11 @@ class Tier1Coordinator:
                 state_t0.manager.stop_stream()
                 state_t0.is_streaming = False
 
+        for state_ear in self._inear_pods.values():
+            if state_ear.firmware and state_ear.is_streaming:
+                state_ear.firmware.stop_streaming()
+                state_ear.is_streaming = False
+
     def disconnect_all(self) -> None:
         """Disconnect all pods."""
         self.stop_streaming_all()
@@ -305,6 +397,11 @@ class Tier1Coordinator:
                 state_t0.manager = None
             state_t0.is_streaming = False
 
+        for state_ear in self._inear_pods.values():
+            if state_ear.firmware:
+                state_ear.firmware = None
+            state_ear.is_streaming = False
+
     # ==================== Real-time Data & Sync ====================
 
     def push_lsl_data(self) -> dict[str, int]:
@@ -316,7 +413,14 @@ class Tier1Coordinator:
         results = {}
         current_time = self.clock_fn() if self.clock_fn else time.time()
 
-        # Push Tier 1 (head) data
+        self._push_tier1_data(results, current_time)
+        self._push_tier0_data(results, current_time)
+        self._push_inear_data(results, current_time)
+
+        return results
+
+    def _push_tier1_data(self, results: dict[str, int], current_time: float) -> None:
+        """Push Tier 1 (head) pod data to LSL."""
         for pod_id, state in self._tier1_pods.items():
             if state.cerelog_manager and state.is_streaming:
                 try:
@@ -324,12 +428,11 @@ class Tier1Coordinator:
                     results[pod_id] = n_pushed
                     if n_pushed > 0:
                         state.last_data_time = current_time
-                        # Update clock sync with ACC data (for cross-correlation)
-                        # Note: CerelogManager doesn't expose raw ACC yet, would need extension
                 except Exception:
                     logger.exception("Error pushing Tier 1 pod %s data", pod_id)
 
-        # Push Tier 0 (forearm) data
+    def _push_tier0_data(self, results: dict[str, int], current_time: float) -> None:
+        """Push Tier 0 (forearm hub) pod data to LSL."""
         for pod_id, state_t0 in self._tier0_pods.items():
             if state_t0.manager and state_t0.is_streaming:
                 try:
@@ -342,14 +445,11 @@ class Tier1Coordinator:
                                 current_time, current_time + n_samples / 100, n_samples
                             )
 
-                        # Push to LSL outlets (would need LSLStreamManager integration)
-                        # For now, just track that data was received
                         state_t0.last_data_time = current_time
                         results[pod_id] = n_samples
 
                         # Update clock sync with hub ACC (reference)
                         if "acc" in state_t0.config.modalities:
-                            # Extract ACC magnitude for cross-correlation
                             acc_channels: int = 3
                             if isinstance(state_t0.config.channels, dict):
                                 acc_channels = state_t0.config.channels.get("acc", 3)
@@ -365,7 +465,54 @@ class Tier1Coordinator:
                 except Exception:
                     logger.exception("Error pushing Tier 0 pod %s data", pod_id)
 
-        return results
+    def _push_inear_data(self, results: dict[str, int], current_time: float) -> None:
+        """Push In-Ear (Tier 0 continuity) pod data to LSL."""
+        from synapse24.hardware.inear_eeg import create_synthetic_inear_eeg_data
+
+        for pod_id, state_ear in self._inear_pods.items():
+            if state_ear.firmware and state_ear.is_streaming:
+                try:
+                    sr = state_ear.config.sampling_rate
+                    ch = state_ear.config.channels
+                    eeg_fs = sr.get("eeg", 256) if isinstance(sr, dict) else 256
+                    imu_fs = sr.get("imu", 50) if isinstance(sr, dict) else 50
+                    eeg_channels = ch.get("eeg", 2) if isinstance(ch, dict) else 2
+
+                    synthetic = create_synthetic_inear_eeg_data(
+                        duration_s=1.0,  # 1 second chunks
+                        eeg_fs=eeg_fs,
+                        imu_fs=imu_fs,
+                        eeg_channels=eeg_channels,
+                    )
+
+                    # Push EEG to LSL
+                    if state_ear.firmware._eeg_outlet:
+                        state_ear.firmware.push_eeg_sample(synthetic["eeg"])
+
+                    # Push ACC to LSL
+                    if state_ear.firmware._acc_outlet:
+                        acc_data = np.column_stack([
+                            synthetic["acc_x"],
+                            synthetic["acc_y"],
+                            synthetic["acc_z"],
+                        ]).T  # Shape (3, n_samples)
+                        for i in range(acc_data.shape[1]):
+                            state_ear.firmware.push_acc_sample(acc_data[:, i])
+
+                    state_ear.last_data_time = current_time
+                    results[pod_id] = len(synthetic["t_eeg"])
+
+                    # Update clock sync with in-ear ACC
+                    if "acc" in state_ear.config.modalities:
+                        acc_mag = np.sqrt(
+                            synthetic["acc_x"]**2 + synthetic["acc_y"]**2 + synthetic["acc_z"]**2
+                        )
+                        self.clock_sync.add_hub_acc(
+                            float(np.mean(acc_mag)), current_time
+                        )
+
+                except Exception:
+                    logger.exception("Error pushing In-Ear pod %s data", pod_id)
 
     def broadcast_sync_marker(self) -> SyncMarker | None:
         """Broadcast synchronization marker to all pods.
@@ -573,6 +720,20 @@ class Tier1Coordinator:
                     else None,
                 }
                 for pod_id, state in self._tier0_pods.items()
+            },
+            "inear_pods": {
+                pod_id: {
+                    "name": state.config.name,
+                    "connected": state.firmware is not None,
+                    "streaming": state.is_streaming,
+                    "clock_offset_ms": state.clock_offset_ms,
+                    "error_count": state.error_count,
+                    "battery_remaining_pct": state.battery_remaining_pct,
+                    "last_data_age_s": time.time() - state.last_data_time
+                    if state.last_data_time
+                    else None,
+                }
+                for pod_id, state in self._inear_pods.items()
             },
             "sync": sync_status,
             "controller": self.controller.get_status(),
