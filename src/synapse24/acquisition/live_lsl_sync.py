@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 
 if TYPE_CHECKING:
     from pylsl import StreamOutlet
@@ -59,7 +60,7 @@ def _jsonable(mapping: dict[str, Any]) -> dict[str, Any]:
     return {k: float(v) if isinstance(v, (int, float)) else v for k, v in mapping.items()}
 
 
-def _build_specs(config: LiveTwoPodConfig, run_id: str) -> tuple[list, list[dict[str, Any]]]:
+def _build_specs(config: LiveTwoPodConfig, run_id: str) -> tuple[list[Any], list[dict[str, Any]]]:
     """Create live outlets and normative Tier-0 payload specs."""
     from pylsl import StreamInfo, StreamOutlet, local_clock
 
@@ -138,7 +139,11 @@ def _pull_live_stream(
 
 
 def _wire_residual(
-    pushed_ts: np.ndarray, pulled_ts: list[float], recovered: int, expected: int, tier: Tier
+    pushed_ts: npt.NDArray[np.float64],
+    pulled_ts: list[float],
+    recovered: int,
+    expected: int,
+    tier: Tier,
 ) -> dict[str, Any]:
     """Quantify pulled-vs-pushed residual; empty pull fails against +1s offset."""
     from synapse24.acquisition.clock_sync import SyncConfig, quantify_residual_drift

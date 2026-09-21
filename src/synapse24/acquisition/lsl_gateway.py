@@ -29,7 +29,6 @@ from synapse24.acquisition.clock_sync import (
     MultiPodClockSync,
     SyncConfig,
     SyncMarker,
-    Tier,
     TierSyncBudget,
 )
 from synapse24.acquisition.state_machine import (
@@ -37,6 +36,7 @@ from synapse24.acquisition.state_machine import (
     TierTransition,
     TransitionEvent,
 )
+from synapse24.signal_quality import Tier
 from synapse24.utils import (
     LSLStreamManager,
     StreamConfig,
@@ -130,8 +130,8 @@ class LSLGateway:
         self.clock_sync = MultiPodClockSync(self.config.sync_config, clock_fn=self._clock)
 
         # Ring buffers for recent data
-        self._buffers: dict[str, deque] = {}
-        self._timestamps: dict[str, deque] = {}
+        self._buffers: dict[str, deque[npt.NDArray[np.float64]]] = {}
+        self._timestamps: dict[str, deque[float]] = {}
         self._buffer_maxlen = int(self.config.buffer_duration_s * 1000)  # max samples
 
         # Sync marker handling
@@ -143,7 +143,7 @@ class LSLGateway:
 
         # State
         self._running = False
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[Any]] = []
 
     # ==================== Stream Discovery & Registration ====================
 
@@ -463,7 +463,9 @@ class LSLGateway:
 
         return data, timestamps
 
-    def get_all_recent_data(self, duration_s: float | None = None) -> dict[str, tuple]:
+    def get_all_recent_data(
+        self, duration_s: float | None = None
+    ) -> dict[str, tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]]:
         """Get recent data from all pods."""
         result = {}
         for pod_id in self._buffers:
