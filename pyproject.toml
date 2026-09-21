@@ -204,13 +204,20 @@ omit = [
     "tests/*",
     "scripts/*",
     "*/__pycache__/*",
-    "src/synapse24/acquisition/*",
     "src/synapse24/edge_ai/*",
     "src/synapse24/hardware/*",
     "src/synapse24/ingestion/sleep_edf.py",
     "src/synapse24/ingestion/deap.py",
     "src/synapse24/ingestion/cerelog_eeg.py",
     "src/synapse24/signal_quality/fnirs.py",
+    # Integration-heavy acquisition modules (require LSL/hardware)
+    "src/synapse24/acquisition/lsl_gateway.py",
+    "src/synapse24/acquisition/tier1_coordinator.py",
+    "src/synapse24/acquisition/live_lsl_sync.py",
+    "src/synapse24/acquisition/live_validator.py",
+    "src/synapse24/acquisition/sync_marker_stream.py",
+    "src/synapse24/acquisition/night_window.py",
+    "src/synapse24/acquisition/coordinator.py",
 ]
 branch = true
 concurrency = ["thread", "multiprocessing"]

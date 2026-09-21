@@ -26,7 +26,9 @@ from synapse24.signal_quality import Tier
 from synapse24.utils import StreamConfig, validate_xdf, verify_xdf_roundtrip
 
 
-def _assert_float(result: dict[str, Any], key: str, expected: float, tolerance: float = 1e-6) -> None:
+def _assert_float(
+    result: dict[str, Any], key: str, expected: float, tolerance: float = 1e-6
+) -> None:
     """Assert that a result key has a float value close to expected."""
     val = result[key]
     assert isinstance(val, (int, float)), f"{key} is not numeric: {val}"
@@ -92,7 +94,9 @@ class TestTier1XDFDriftCorrection:
         corrected_timestamps = self.clock_sync.correct_pod_timestamps(pod_id, pod_timestamps)
 
         # Verify residual drift < 1ms (Tier 1 budget) - compare corrected vs hub
-        result = quantify_residual_drift(corrected_timestamps, hub_timestamps, tier=Tier.T1, config=self.sync_config)
+        result = quantify_residual_drift(
+            corrected_timestamps, hub_timestamps, tier=Tier.T1, config=self.sync_config
+        )
         _assert_float(result, "within_1ms_pct", 100.0)
         _assert_float(result, "max_abs_offset_ms", 0.0)
         assert result["tier_evaluated"] == "T1"
@@ -134,7 +138,9 @@ class TestTier1XDFDriftCorrection:
             self.clock_sync.update_drift_estimates()
 
             # Apply drift correction
-            corrected_timestamps = self.clock_sync.correct_pod_timestamps("head_001", pod_timestamps)
+            corrected_timestamps = self.clock_sync.correct_pod_timestamps(
+                "head_001", pod_timestamps
+            )
 
             # Build streams for XDF
             streams = []
@@ -163,7 +169,9 @@ class TestTier1XDFDriftCorrection:
             recovered_ts = np.array(eeg_stream.get("time_stamps", []))
 
             if len(recovered_ts) > 0:
-                hub_ts = np.linspace(corrected_timestamps[0], corrected_timestamps[-1], len(recovered_ts))
+                hub_ts = np.linspace(
+                    corrected_timestamps[0], corrected_timestamps[-1], len(recovered_ts)
+                )
                 drift_result = quantify_residual_drift(
                     recovered_ts, hub_ts, tier=Tier.T1, config=self.sync_config
                 )
