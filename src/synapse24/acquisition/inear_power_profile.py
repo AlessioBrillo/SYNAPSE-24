@@ -124,7 +124,9 @@ class InEarPowerProfile:
                 "current_ma": current,
                 "duty_pct": getattr(self.duty_cycles, domain.value),
                 "avg_contrib_ma": contrib,
-                "pct_of_total": (contrib / self.avg_current_ma * 100) if self.avg_current_ma > 0 else 0,
+                "pct_of_total": (contrib / self.avg_current_ma * 100)
+                if self.avg_current_ma > 0
+                else 0,
             }
         return breakdown
 
@@ -207,7 +209,9 @@ def create_aggressive_optimization_profile() -> InEarPowerProfile:
     )
 
 
-def validate_power_profile(profile: InEarPowerProfile, measured_lifetime_h: float | None = None) -> dict[str, Any]:
+def validate_power_profile(
+    profile: InEarPowerProfile, measured_lifetime_h: float | None = None
+) -> dict[str, Any]:
     """Validate a power profile against target and optional measurement.
 
     Args:

@@ -111,7 +111,9 @@ class InEarEEGFirmware:
         eeg_info.desc().append_child_value("placement", "in_ear")
         eeg_info.desc().append_child_value("electrode_type", self.config.electrode_type)
         eeg_info.desc().append_child_value("channels", str(self.config.eeg_channels))
-        eeg_info.desc().append_child_value("driven_right_leg", str(self.config.driven_right_leg).lower())
+        eeg_info.desc().append_child_value(
+            "driven_right_leg", str(self.config.driven_right_leg).lower()
+        )
         self._eeg_outlet = StreamOutlet(eeg_info, chunk_size=32, max_buffered=360)
 
         # IMU stream (optional, Tier 0)

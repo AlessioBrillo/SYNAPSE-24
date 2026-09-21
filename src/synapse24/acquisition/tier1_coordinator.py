@@ -242,7 +242,10 @@ class Tier1Coordinator:
             modalities=["eeg", "acc"],
             tier=QualityTier.T0,
             channels={"eeg": inear_config.eeg_channels, "acc": 3},
-            sampling_rate={"eeg": inear_config.eeg_sampling_rate, "imu": inear_config.imu_sampling_rate},
+            sampling_rate={
+                "eeg": inear_config.eeg_sampling_rate,
+                "imu": inear_config.imu_sampling_rate,
+            },
             ble_address="",  # In-ear has its own BLE, not managed by hub
             serial_port="",
             placement=placement,
@@ -491,11 +494,13 @@ class Tier1Coordinator:
 
                     # Push ACC to LSL
                     if state_ear.firmware._acc_outlet:
-                        acc_data = np.column_stack([
-                            synthetic["acc_x"],
-                            synthetic["acc_y"],
-                            synthetic["acc_z"],
-                        ]).T  # Shape (3, n_samples)
+                        acc_data = np.column_stack(
+                            [
+                                synthetic["acc_x"],
+                                synthetic["acc_y"],
+                                synthetic["acc_z"],
+                            ]
+                        ).T  # Shape (3, n_samples)
                         for i in range(acc_data.shape[1]):
                             state_ear.firmware.push_acc_sample(acc_data[:, i])
 
@@ -505,11 +510,11 @@ class Tier1Coordinator:
                     # Update clock sync with in-ear ACC
                     if "acc" in state_ear.config.modalities:
                         acc_mag = np.sqrt(
-                            synthetic["acc_x"]**2 + synthetic["acc_y"]**2 + synthetic["acc_z"]**2
+                            synthetic["acc_x"] ** 2
+                            + synthetic["acc_y"] ** 2
+                            + synthetic["acc_z"] ** 2
                         )
-                        self.clock_sync.add_hub_acc(
-                            float(np.mean(acc_mag)), current_time
-                        )
+                        self.clock_sync.add_hub_acc(float(np.mean(acc_mag)), current_time)
 
                 except Exception:
                     logger.exception("Error pushing In-Ear pod %s data", pod_id)

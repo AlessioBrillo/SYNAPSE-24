@@ -157,10 +157,10 @@ class TestSyntheticInEarEEGData:
 
         # FFT to check alpha peak
         fft = np.fft.rfft(eeg_ch0)
-        freqs = np.fft.rfftfreq(len(eeg_ch0), 1/256)
+        freqs = np.fft.rfftfreq(len(eeg_ch0), 1 / 256)
         alpha_mask = (freqs >= 8) & (freqs <= 12)
-        alpha_power = np.sum(np.abs(fft[alpha_mask])**2)
-        total_power = np.sum(np.abs(fft)**2)
+        alpha_power = np.sum(np.abs(fft[alpha_mask]) ** 2)
+        total_power = np.sum(np.abs(fft) ** 2)
         alpha_ratio = alpha_power / total_power
 
         # Alpha should be dominant in eyes-closed in-ear EEG
@@ -171,8 +171,8 @@ class TestSyntheticInEarEEGData:
         clean = create_synthetic_inear_eeg_data(duration_s=10.0, motion_level=0.0)
         noisy = create_synthetic_inear_eeg_data(duration_s=10.0, motion_level=1.0)
 
-        clean_rms = np.sqrt(np.mean(clean["eeg"]**2))
-        noisy_rms = np.sqrt(np.mean(noisy["eeg"]**2))
+        clean_rms = np.sqrt(np.mean(clean["eeg"] ** 2))
+        noisy_rms = np.sqrt(np.mean(noisy["eeg"] ** 2))
 
         assert noisy_rms > clean_rms * 2, "Motion artifact should significantly increase RMS"
 
@@ -329,6 +329,7 @@ class TestInEarRegistryIntegration:
 
     def test_inear_adapter_in_registry(self) -> None:
         from synapse24.hardware.registry import BOARD_ADAPTERS
+
         assert "INEAR_EEG_BOARD" in BOARD_ADAPTERS
         adapter_class = BOARD_ADAPTERS["INEAR_EEG_BOARD"]
         adapter = adapter_class()
