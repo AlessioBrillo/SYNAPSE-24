@@ -1,5 +1,7 @@
 """Tiered acquisition state machine for SYNAPSE-24."""
 
+from synapse24.signal_quality import Tier
+
 from .clock_sync import (
     ClockDriftEstimator,
     DriftEstimate,
@@ -7,6 +9,7 @@ from .clock_sync import (
     SyncConfig,
     SyncMarker,
     SyncMarkerManager,
+    TierSyncBudget,
     TimestampCorrector,
     quantify_residual_drift,
 )
@@ -15,7 +18,14 @@ from .immobility import ImmobilityDetector
 from .live_lsl_sync import LiveTwoPodConfig, LSLUnavailableError, run_live_2pod_sync
 from .lsl_gateway import GatewayConfig, LSLGateway, PodStreamConfig, create_pod_stream_config
 from .night_window import NightWindowScheduler
-from .power_budget import NOMINAL_VOLTAGE_V, PowerBudgetManager, hours_for_charge, mah_for_power
+from .power_budget import (
+    NOMINAL_VOLTAGE_V,
+    EnergyBudgetStatus,
+    PowerBudgetManager,
+    PowerProfile,
+    hours_for_charge,
+    mah_for_power,
+)
 from .state_machine import (
     AcquisitionController,
     MotionGateConfig,
@@ -27,6 +37,7 @@ from .sync_marker_stream import SyncMarkerRecorder, SyncMarkerStream, SyncStream
 from .tier1_coordinator import Tier0PodState, Tier1Coordinator, Tier1PodState
 
 __all__ = [
+    "Tier",
     "TierStateMachine",
     "TierTransition",
     "AcquisitionController",
@@ -34,6 +45,8 @@ __all__ = [
     "ImmobilityDetector",
     "NOMINAL_VOLTAGE_V",
     "PowerBudgetManager",
+    "EnergyBudgetStatus",
+    "PowerProfile",
     "hours_for_charge",
     "mah_for_power",
     "NightWindowScheduler",
@@ -45,6 +58,7 @@ __all__ = [
     "TimestampCorrector",
     "MultiPodClockSync",
     "DriftEstimate",
+    "TierSyncBudget",
     "quantify_residual_drift",
     "SyncMarkerStream",
     "SyncMarkerRecorder",

@@ -250,9 +250,13 @@ class CerelogEEGManager:
 
         # BrainFlow impedance check (if supported by board)
         try:
-            if self._manager is not None and self._manager._board is not None and hasattr(self._manager._board, "get_impedance"):
+            if (
+                self._manager is not None
+                and self._manager._board is not None
+                and hasattr(self._manager._board, "get_impedance")
+            ):
                 # Some boards support get_impedance()
-                impedances = self._manager._board.get_impedance()  # type: ignore[attr-defined]
+                impedances = self._manager._board.get_impedance()
                 for ch_idx, ch_name in enumerate(self.config.channel_names):
                     if ch_idx < len(impedances):
                         z_kohm = float(impedances[ch_idx])
@@ -499,7 +503,11 @@ class CerelogEEGManager:
         """
         n_channels, n_samples = eeg_data.shape
         fs = self.config.sampling_rate
-        duration_s = timestamps[-1] - timestamps[0] if timestamps is not None and len(timestamps) > 1 else n_samples / fs
+        duration_s = (
+            timestamps[-1] - timestamps[0]
+            if timestamps is not None and len(timestamps) > 1
+            else n_samples / fs
+        )
 
         per_channel = {}
         all_flatness = []
