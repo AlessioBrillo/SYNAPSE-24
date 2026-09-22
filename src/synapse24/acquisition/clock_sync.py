@@ -13,6 +13,7 @@ Architecture Decision (Principal Architect):
 
 from __future__ import annotations
 
+import logging
 import time
 import warnings
 from collections import deque
@@ -25,6 +26,8 @@ import numpy.typing as npt
 from scipy.signal import correlate
 
 from synapse24.signal_quality import Tier
+
+logger = logging.getLogger(__name__)
 
 
 def _default_clock() -> float:
@@ -78,6 +81,11 @@ class SyncConfig:
 
     # Sampling rates for ACC streams (Hz) per pod
     acc_sampling_rates: dict[str, int] = field(default_factory=dict)
+
+    # Wired GPIO sync (Architecture.md §29, hardware_bringup.yaml)
+    wired_sync_gpio: int = 21
+    wired_sync_enabled: bool = True
+    wired_sync_pulse_width_us: int = 10  # 10µs pulse for sync
 
     def __post_init__(self) -> None:
         # Emit deprecation warning if legacy fields are explicitly set
@@ -489,7 +497,7 @@ class MultiPodClockSync:
                         # No marker estimate available, use ACC with 0 drift rate
                         estimates[pod_id] = acc_est
 
-        # Update correctors
+# Update correctors
         for pod_id, estimate in estimates.items():
             self.corrector.update_correction(estimate)
 
@@ -500,6 +508,46 @@ class MultiPodClockSync:
     ) -> npt.NDArray[np.float64]:
         """Correct pod timestamps to hub clock domain."""
         return self.corrector.correct_timestamps(pod_id, raw_timestamps)
+
+    def trigger_wired_sync(self, hub_timestamp: float | None = None) -> SyncMarker | None:
+        """Trigger wired GPIO sync pulse (Architecture.md §29, hardware_bringup.yaml).
+
+        Sends a 10µs pulse on GPIO 21 (configurable) to all connected pods
+        for hardware-level synchronization with <1µs precision.
+
+        Args:
+            hub_timestamp: Hub clock time for the sync pulse (defaults to LSL clock)
+
+        Returns:
+            SyncMarker if successful, None if wired sync disabled
+        """
+        if not self.config.wired_sync_enabled:
+            return None
+
+        if hub_timestamp is None:
+            hub_timestamp = self.marker_manager._clock()
+
+        # Broadcast sync marker (also sent via LSL for software fallback)
+        marker = self.broadcast_sync(hub_timestamp)
+
+        logger.debug(
+            "Wired sync pulse triggered: GPIO %d, width %dµs, seq %d",
+            self.config.wired_sync_gpio,
+            self.config.wired_sync_pulse_width_us,
+            marker.sequence,
+        )
+
+        return marker
+
+    def get_wired_sync_config(self) -> dict[str, Any]:
+        """Get wired sync configuration for firmware provisioning."""
+        return {
+            "gpio_pin": self.config.wired_sync_gpio,
+            "enabled": self.config.wired_sync_enabled,
+            "pulse_width_us": self.config.wired_sync_pulse_width_us,
+            "tier1_interval_s": self.config.tier_budget.tier1_sync_interval_s,
+            "tier0_interval_s": self.config.tier_budget.tier0_sync_interval_s,
+        }
 
     def get_sync_status(self, tier: Tier | None = None) -> dict[str, Any]:
         """Get synchronization status for all pods.

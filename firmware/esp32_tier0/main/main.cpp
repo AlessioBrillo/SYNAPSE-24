@@ -12,8 +12,9 @@
 #include "ppg_max30102.h"
 #include "imu_icm20948.h"
 #include "ble_lsl_bridge.h"
-#include "sync_marker_handler.h"
-#include "triage_inference.h"
+#include "sync/sync_marker_handler.h"
+#include "sync/wired_sync_handler.h"
+#include "triage/triage_inference.h"
 
 static const char* TAG = "synapse_tier0";
 
@@ -23,6 +24,7 @@ static sensor_scheduler_t g_scheduler;
 static ble_lsl_bridge_t g_ble_bridge;
 static sync_marker_handler_t g_sync_handler;
 static triage_inference_t g_triage;
+static synapse_wired_sync_t g_wired_sync;
 static QueueHandle_t g_scheduler_queue = NULL;
 
 static TaskHandle_t g_main_task = NULL;
@@ -148,6 +150,11 @@ static void sync_marker_callback(uint32_t sequence, int64_t hub_timestamp_us, in
     ble_lsl_bridge_send_sync_marker(&g_ble_bridge, sequence, pod_timestamp_us);
 }
 
+static void wired_sync_pulse_callback(int64_t timestamp_us, void* user_ctx) {
+    (void)user_ctx;
+    ESP_LOGD(TAG, "Wired sync pulse received at %" PRId64 " us", timestamp_us);
+}
+
 static void main_task_fn(void* arg) {
     (void)arg;
     sensor_sample_t sample;
@@ -212,6 +219,11 @@ static void main_task_fn(void* arg) {
 
     ESP_ERROR_CHECK(sync_marker_handler_init(&g_sync_handler));
 
+    // Initialize wired GPIO sync (Architecture.md §29, hardware_bringup.yaml GPIO 21)
+    ESP_ERROR_CHECK(synapse_wired_sync_init(&g_wired_sync, SYNAPSE_SYNC_ROLE_HUB));
+    g_wired_sync.on_sync_pulse = wired_sync_pulse_callback;
+    ESP_LOGI(TAG, "Wired sync initialized on GPIO %d (hub role)", SYNAPSE_WIRED_SYNC_GPIO);
+
     // Initialize triage inference with embedded model
     ESP_ERROR_CHECK(triage_inference_init(&g_triage));
 
@@ -228,6 +240,13 @@ static void main_task_fn(void* arg) {
     while (1) {
         if (xQueueReceive(g_scheduler_queue, &sample, pdMS_TO_TICKS(100)) == pdTRUE) {
             ble_lsl_bridge_send_sample(&g_ble_bridge, &sample);
+        }
+
+        // Periodic wired sync pulse (Tier 0: 60s interval per Architecture.md §92)
+        static TickType_t last_sync_pulse = 0;
+        if (xTaskGetTickCount() - last_sync_pulse >= pdMS_TO_TICKS(60000)) {
+            synapse_wired_sync_send_pulse(&g_wired_sync);
+            last_sync_pulse = xTaskGetTickCount();
         }
 
         if (xTaskGetTickCount() - last_wake >= pdMS_TO_TICKS(10000)) {

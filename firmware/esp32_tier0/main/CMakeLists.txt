@@ -6,6 +6,7 @@ idf_component_register(
         "sensors/imu_icm20948.cpp"
         "ble/ble_lsl_bridge.cpp"
         "sync/sync_marker_handler.cpp"
+        "sync/wired_sync_handler.cpp"
         "triage/triage_inference.cpp"
         "scheduler/sensor_scheduler.cpp"
     INCLUDE_DIRS
