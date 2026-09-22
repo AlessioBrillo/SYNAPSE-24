@@ -497,7 +497,7 @@ class MultiPodClockSync:
                         # No marker estimate available, use ACC with 0 drift rate
                         estimates[pod_id] = acc_est
 
-# Update correctors
+        # Update correctors
         for pod_id, estimate in estimates.items():
             self.corrector.update_correction(estimate)
 
