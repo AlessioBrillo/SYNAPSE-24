@@ -631,22 +631,39 @@ class TestFullSyntheticPipeline:
     This test validates the entire Phase 0 software stack without hardware.
     """
 
-    def test_full_synthetic_pipeline_t0_t1_t0(self):
+    def test_full_synthetic_pipeline_t0_t1_t0(self):  # noqa: PLR0915
         """Complete pipeline: synthetic 3-pod → XDF → fusion windows → quality → train → quantize → gate."""
-        from synapse24.utils import write_xdf, verify_xdf_roundtrip, validate_xdf
-        from synapse24.ingestion import extract_native_rate_fusion_windows
-        from synapse24.signal_quality import compute_ecg_quality, compute_ppg_quality, QualityThresholds, Tier
-        from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, TierSyncBudget, Tier
-        from synapse24.edge_ai.model import ModelConfig, ModelType, TargetPlatform
-        from synapse24.edge_ai.quantization import quantize_model, QuantizationConfig, RepresentativeDatasetGenerator
-        from synapse24.edge_ai.deployment import check_phase0_exit_gate
         import tempfile
+
         import tensorflow as tf
         from tensorflow import keras
         from tensorflow.keras import layers
 
+        from synapse24.acquisition.clock_sync import (
+            MultiPodClockSync,
+            SyncConfig,
+            TierSyncBudget,
+        )
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+        from synapse24.edge_ai.model import ModelConfig, ModelType, TargetPlatform
+        from synapse24.edge_ai.quantization import (
+            QuantizationConfig,
+            RepresentativeDatasetGenerator,
+            quantize_model,
+        )
+        from synapse24.ingestion import extract_native_rate_fusion_windows
+        from synapse24.signal_quality import (
+            QualityThresholds,
+            compute_ecg_quality,
+            compute_ppg_quality,
+        )
+        from synapse24.utils import verify_xdf_roundtrip, write_xdf
+
         # 1. Generate synthetic 3-pod recording (60s for speed)
-        from tests.fixtures.synthetic_pods import generate_synthetic_recording, create_lsl_streams_from_synthetic
+        from tests.fixtures.synthetic_pods import (
+            create_lsl_streams_from_synthetic,
+            generate_synthetic_recording,
+        )
 
         synthetic = generate_synthetic_recording(seed=42, duration_s=60.0)
         streams = create_lsl_streams_from_synthetic(synthetic)
@@ -697,7 +714,6 @@ class TestFullSyntheticPipeline:
         labels[120*fs_chest:180*fs_chest] = 3  # amusement
 
         # Resample forearm signals from 500Hz to 700Hz for chest
-        from scipy.signal import resample
         ecg_700 = resample(forearm["ecg"].flatten(), n_chest)
         acc_x_700 = resample(forearm["acc_x"], n_chest)
         acc_y_700 = resample(forearm["acc_y"], n_chest)
@@ -752,7 +768,6 @@ class TestFullSyntheticPipeline:
         assert "mean_rr_ms" in ecg_quality.hrv_metrics
 
         # PPG quality (resample ACC to BVP rate)
-        from scipy.signal import resample
         wrist_acc_mag = np.sqrt(w.wrist_signals["acc_x"]**2 + w.wrist_signals["acc_y"]**2 + w.wrist_signals["acc_z"]**2)
         if len(wrist_acc_mag) != len(w.wrist_signals["bvp"]):
             wrist_acc_mag = resample(wrist_acc_mag, len(w.wrist_signals["bvp"]))
@@ -770,7 +785,6 @@ class TestFullSyntheticPipeline:
         model_config.architecture = "mlp"
 
         # Extract features from window (matching FUSION_WINDOW_FEATURE_NAMES)
-        from synapse24.ingestion.wesad import fusion_window_quality_to_features
         w.quality_metadata = {
             "window_idx": 0,
             "start_time_s": 0,
@@ -800,7 +814,7 @@ class TestFullSyntheticPipeline:
         model.fit(X_train, y_train, epochs=3, verbose=0, batch_size=8)
 
         # 6. Quantize to int8
-        edge_model = type('EdgeModel', (), {'config': model_config, 'model': model})()
+        edge_model = type("EdgeModel", (), {"config": model_config, "model": model})()
         quant_config = QuantizationConfig(
             quantization_type="int8",
             representative_dataset_size=30,

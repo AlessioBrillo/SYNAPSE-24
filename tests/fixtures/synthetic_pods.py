@@ -11,10 +11,11 @@ All signals share a common LSL clock domain with configurable per-pod clock drif
 
 from __future__ import annotations
 
-import numpy as np
-import numpy.typing as npt
 from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
+import numpy.typing as npt
 
 
 @dataclass(frozen=True)

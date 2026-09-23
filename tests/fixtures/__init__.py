@@ -1,1 +1,1 @@
-# Tests fixtures package
+"""Tests fixtures package for SYNAPSE-24."""
