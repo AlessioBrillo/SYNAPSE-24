@@ -3,6 +3,7 @@ idf_component_register(
         "main.cpp"
         "sensors/ecg_ad8232.cpp"
         "sensors/ppg_max30102.cpp"
+        "sensors/ppg_sqi.cpp"
         "sensors/imu_icm20948.cpp"
         "ble/ble_lsl_bridge.cpp"
         "sync/sync_marker_handler.cpp"
