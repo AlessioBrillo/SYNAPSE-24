@@ -260,6 +260,7 @@ static void sensor_task_fn(void* arg) {
         if (!scheduler || !scheduler->running) continue;
 
         sample.timestamp_us = get_time_us();
+        sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
         sample.sequence = scheduler->sample_counts[config->type]++;
 
         if (config->read) {

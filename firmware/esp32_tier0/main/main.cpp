@@ -10,6 +10,7 @@
 #include "sensor_scheduler.h"
 #include "ecg_ad8232.h"
 #include "ppg_max30102.h"
+#include "ppg_sqi.h"
 #include "imu_icm20948.h"
 #include "ble_lsl_bridge.h"
 #include "sync/sync_marker_handler.h"
@@ -29,6 +30,7 @@ static QueueHandle_t g_scheduler_queue = NULL;
 
 static TaskHandle_t g_main_task = NULL;
 static TaskHandle_t g_triage_task = NULL;
+static TaskHandle_t g_quality_task = NULL;
 
 static ecg_ad8232_config_t g_ecg_config = {
     .adc_channel = ADC1_CHANNEL_0,
@@ -58,6 +60,11 @@ static imu_icm20948_config_t g_imu_config = {
     .accel_odr_hz = 100,
     .gyro_odr_hz = 100
 };
+
+// Motion gate state (Architecture.md §74)
+static ppg_sqi_result_t g_latest_sqi = {0};
+static int g_consecutive_clean = 0;
+static bool g_motion_gate_armed = false;
 
 static void triage_task_fn(void* arg) {
     (void)arg;
@@ -143,6 +150,43 @@ static void triage_task_fn(void* arg) {
     }
 }
 
+// Quality assessment task - outputs PPG SQI at 100Hz for motion gate (Architecture.md §74)
+static void quality_task_fn(void* arg) {
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period_ticks = pdMS_TO_TICKS(10);  // 100Hz
+
+    ESP_LOGI(TAG, "Quality task started (100Hz PPG SQI for motion gate)");
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, period_ticks);
+
+        // Get latest SQI from PPG driver
+        ppg_sqi_result_t sqi_result;
+        if (ppg_max30102_get_sqi(&sqi_result) == ESP_OK) {
+            g_latest_sqi = sqi_result;
+
+            // Motion gate logic (Architecture.md §74: 2 consecutive clean assessments)
+            bool clean = (sqi_result.sqi >= SYNAPSE_T0_PPG_SQI_MIN) && 
+                         (sqi_result.motion_artifact_prob <= SYNAPSE_T0_PPG_MAP_MAX);
+            
+            if (clean) {
+                g_consecutive_clean++;
+                if (g_consecutive_clean >= 2) {
+                    g_motion_gate_armed = true;
+                }
+            } else {
+                g_consecutive_clean = 0;
+                g_motion_gate_armed = false;
+            }
+
+            ESP_LOGD(TAG, "PPG SQI: sqi=%.3f, pi=%.3f, map=%.3f, clean=%d, gate_armed=%d",
+                     sqi_result.sqi, sqi_result.perfusion_index, sqi_result.motion_artifact_prob,
+                     clean, g_motion_gate_armed);
+        }
+    }
+}
+
 static void sync_marker_callback(uint32_t sequence, int64_t hub_timestamp_us, int64_t pod_timestamp_us, void* user_ctx) {
     (void)user_ctx;
     ESP_LOGD(TAG, "Sync marker callback: seq=%" PRIu32 ", hub=%" PRId64 ", pod=%" PRId64, sequence, hub_timestamp_us, pod_timestamp_us);
@@ -176,7 +220,7 @@ static void main_task_fn(void* arg) {
     sensor_config_t ecg_sensor = {
         .type = SENSOR_TYPE_ECG,
         .name = "ECG_AD8232",
-        .sampling_rate_hz = 250,
+        .sampling_rate_hz = 500,  // Fixed: Architecture.md §34 requires 500Hz for Tier 0
         .init = (sensor_init_fn_t)ecg_ad8232_init,
         .read = (sensor_read_fn_t)ecg_ad8232_read,
         .deinit = (sensor_deinit_fn_t)ecg_ad8232_deinit,
@@ -224,8 +268,14 @@ static void main_task_fn(void* arg) {
     g_wired_sync.on_sync_pulse = wired_sync_pulse_callback;
     ESP_LOGI(TAG, "Wired sync initialized on GPIO %d (hub role)", SYNAPSE_WIRED_SYNC_GPIO);
 
+    // Initialize PPG SQI for motion gate (Architecture.md §74)
+    ESP_ERROR_CHECK(ppg_sqi_init());
+
     // Initialize triage inference with embedded model
     ESP_ERROR_CHECK(triage_inference_init(&g_triage));
+
+    // Start quality assessment task (100Hz PPG SQI output for motion gate)
+    xTaskCreate(quality_task_fn, "quality_task", 4096, NULL, 5, &g_quality_task);
 
     xTaskCreate(triage_task_fn, "triage_task", 8192, NULL, 5, &g_triage_task);
 
@@ -236,6 +286,7 @@ static void main_task_fn(void* arg) {
     uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
     uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
     TickType_t last_stats = xTaskGetTickCount();
+    TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
         if (xQueueReceive(g_scheduler_queue, &sample, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -254,6 +305,10 @@ static void main_task_fn(void* arg) {
             ESP_LOGI(TAG, "Stats: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32 " | Dropped: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32,
                      sample_counts[0], sample_counts[1], sample_counts[2],
                      dropped_samples[0], dropped_samples[1], dropped_samples[2]);
+
+            ESP_LOGI(TAG, "PPG SQI: sqi=%.3f, pi=%.3f%%, map=%.3f, gate_armed=%d, consecutive_clean=%d",
+                     g_latest_sqi.sqi, g_latest_sqi.perfusion_index, g_latest_sqi.motion_artifact_prob,
+                     g_motion_gate_armed, g_consecutive_clean);
 
             uint32_t markers;
             float drift;
