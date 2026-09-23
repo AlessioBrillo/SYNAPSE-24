@@ -158,7 +158,15 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
     sample->data.ppg.ir = (float)ir;
     sample->data.ppg.green = 0.0f;
 
+    // Process PPG SQI for motion gate (Architecture.md §74)
+    ppg_sqi_result_t sqi_result;
+    ppg_sqi_process_sample((float)red, (float)ir, sample->timestamp_us, &sqi_result);
+
     return ESP_OK;
+}
+
+esp_err_t ppg_max30102_get_sqi(ppg_sqi_result_t* result) {
+    return ppg_sqi_get_latest(result);
 }
 
 esp_err_t ppg_max30102_deinit(void* user_ctx) {
