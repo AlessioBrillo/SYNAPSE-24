@@ -683,13 +683,15 @@ class TestFullSyntheticPipeline:
             roundtrip_streams = []
             for s in streams:
                 info = s["info"]
-                roundtrip_streams.append({
-                    "name": info.name(),
-                    "type": info.type(),
-                    "data": s["data"],
-                    "timestamps": s["timestamps"],
-                    "sampling_rate": info.nominal_srate(),
-                })
+                roundtrip_streams.append(
+                    {
+                        "name": info.name(),
+                        "type": info.type(),
+                        "data": s["data"],
+                        "timestamps": s["timestamps"],
+                        "sampling_rate": info.nominal_srate(),
+                    }
+                )
             roundtrip = verify_xdf_roundtrip(roundtrip_streams, xdf_path)
             assert roundtrip["all_streams_valid"]
             assert roundtrip["total_dropped"] == 0
@@ -709,9 +711,9 @@ class TestFullSyntheticPipeline:
         # Labels: 1=baseline (60s), 2=stress (60s), 3=amusement (60s)
         n_chest = int(duration_s * fs_chest)
         labels = np.zeros(n_chest, dtype=np.int64)
-        labels[0:60*fs_chest] = 1   # baseline
-        labels[60*fs_chest:120*fs_chest] = 2  # stress
-        labels[120*fs_chest:180*fs_chest] = 3  # amusement
+        labels[0 : 60 * fs_chest] = 1  # baseline
+        labels[60 * fs_chest : 120 * fs_chest] = 2  # stress
+        labels[120 * fs_chest : 180 * fs_chest] = 3  # amusement
 
         # Resample forearm signals from 500Hz to 700Hz for chest
         ecg_700 = resample(forearm["ecg"].flatten(), n_chest)
@@ -762,17 +764,25 @@ class TestFullSyntheticPipeline:
         thresholds = QualityThresholds.for_tier(Tier.T1)
 
         # ECG quality - synthetic ECG may not have perfect R-peaks, check that computation runs
-        ecg_quality = compute_ecg_quality(w.chest_signals["ecg"].astype(np.float64), fs_chest, thresholds=thresholds)
+        ecg_quality = compute_ecg_quality(
+            w.chest_signals["ecg"].astype(np.float64), fs_chest, thresholds=thresholds
+        )
         # HRV metrics should be computed even if R-peak detection is imperfect
         assert ecg_quality.hrv_metrics is not None
         assert "mean_rr_ms" in ecg_quality.hrv_metrics
 
         # PPG quality (resample ACC to BVP rate)
-        wrist_acc_mag = np.sqrt(w.wrist_signals["acc_x"]**2 + w.wrist_signals["acc_y"]**2 + w.wrist_signals["acc_z"]**2)
+        wrist_acc_mag = np.sqrt(
+            w.wrist_signals["acc_x"] ** 2
+            + w.wrist_signals["acc_y"] ** 2
+            + w.wrist_signals["acc_z"] ** 2
+        )
         if len(wrist_acc_mag) != len(w.wrist_signals["bvp"]):
             wrist_acc_mag = resample(wrist_acc_mag, len(w.wrist_signals["bvp"]))
 
-        ppg_quality = compute_ppg_quality(w.wrist_signals["bvp"], fs_wrist_bvp, wrist_acc_mag, thresholds=thresholds)
+        ppg_quality = compute_ppg_quality(
+            w.wrist_signals["bvp"], fs_wrist_bvp, wrist_acc_mag, thresholds=thresholds
+        )
         assert ppg_quality["ppg_sqi"] is not None
         assert ppg_quality["perfusion_index"] is not None
         assert ppg_quality["motion_artifact_prob"] is not None
@@ -799,12 +809,16 @@ class TestFullSyntheticPipeline:
         assert len(features) == 11  # FUSION_WINDOW_FEATURE_NAMES minus label
 
         # Build and train tiny MLP model
-        model = keras.Sequential([
-            layers.Input(shape=(11,)),
-            layers.Dense(16, activation="relu"),
-            layers.Dense(3, activation="softmax"),
-        ])
-        model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+        model = keras.Sequential(
+            [
+                layers.Input(shape=(11,)),
+                layers.Dense(16, activation="relu"),
+                layers.Dense(3, activation="softmax"),
+            ]
+        )
+        model.compile(
+            optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"]
+        )
 
         # Training data: repeat window with noise
         X_train = np.tile(np.array(features).reshape(1, 11), (30, 1))

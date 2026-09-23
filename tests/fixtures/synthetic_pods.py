@@ -113,15 +113,23 @@ class SyntheticPodGenerator:
             elif modality == "ppg":
                 signals["ppg_red"], signals["ppg_ir"] = self._generate_ppg_dual(t, spec.pod_id)
             elif modality == "imu":
-                signals["acc_x"], signals["acc_y"], signals["acc_z"] = self._generate_imu_acc(t, spec.pod_id)
-                signals["gyro_x"], signals["gyro_y"], signals["gyro_z"] = self._generate_imu_gyro(t, spec.pod_id)
-                signals["mag_x"], signals["mag_y"], signals["mag_z"] = self._generate_imu_mag(t, spec.pod_id)
+                signals["acc_x"], signals["acc_y"], signals["acc_z"] = self._generate_imu_acc(
+                    t, spec.pod_id
+                )
+                signals["gyro_x"], signals["gyro_y"], signals["gyro_z"] = self._generate_imu_gyro(
+                    t, spec.pod_id
+                )
+                signals["mag_x"], signals["mag_y"], signals["mag_z"] = self._generate_imu_mag(
+                    t, spec.pod_id
+                )
             elif modality == "eeg":
                 signals["eeg"] = self._generate_eeg(t, n_channels, spec.pod_id, spec.tier)
             elif modality == "fnirs":
                 signals["hbo"], signals["hbr"] = self._generate_fnirs(t, spec.pod_id)
             elif modality == "acc":
-                signals["acc_x"], signals["acc_y"], signals["acc_z"] = self._generate_imu_acc(t, spec.pod_id)
+                signals["acc_x"], signals["acc_y"], signals["acc_z"] = self._generate_imu_acc(
+                    t, spec.pod_id
+                )
 
         return signals
 
@@ -133,7 +141,9 @@ class SyntheticPodGenerator:
         drift_factor = 1.0 + spec.clock_drift_ppm * 1e-6
         return t * drift_factor
 
-    def _generate_ecg(self, t: npt.NDArray[np.float64], n_channels: int, pod_id: str) -> npt.NDArray[np.float64]:
+    def _generate_ecg(
+        self, t: npt.NDArray[np.float64], n_channels: int, pod_id: str
+    ) -> npt.NDArray[np.float64]:
         """Generate realistic ECG with HRV."""
         # Base heart rate ~70 BPM with RSA (respiratory sinus arrhythmia)
         hr_base = 70.0
@@ -154,12 +164,12 @@ class SyntheticPodGenerator:
             idx = np.argmin(np.abs(t - rp))
             if 0 < idx < len(t) - 30:
                 # P wave
-                ecg[idx - 15:idx - 5] += 0.15 * np.sin(np.linspace(0, np.pi, 10))
+                ecg[idx - 15 : idx - 5] += 0.15 * np.sin(np.linspace(0, np.pi, 10))
                 # QRS complex
                 qrs_template = np.array([0, -0.3, 1.5, -0.5, 0.2, 0, 0])
-                ecg[idx - 3:idx + 4] += qrs_template
+                ecg[idx - 3 : idx + 4] += qrs_template
                 # T wave
-                ecg[idx + 10:idx + 30] += 0.3 * np.sin(np.linspace(0, np.pi, 20))
+                ecg[idx + 10 : idx + 30] += 0.3 * np.sin(np.linspace(0, np.pi, 20))
 
         # Add baseline wander and noise
         ecg += 0.05 * np.sin(2 * np.pi * 0.05 * t)  # 0.05 Hz wander
@@ -187,7 +197,7 @@ class SyntheticPodGenerator:
                 ppg_clean[i] = 0.3 * np.exp(-(phase - 0.3) * 8)
 
         # Add respiratory modulation
-        ppg_clean *= (1 + 0.05 * np.sin(2 * np.pi * 0.25 * t))
+        ppg_clean *= 1 + 0.05 * np.sin(2 * np.pi * 0.25 * t)
 
         # Motion artifact (correlated with IMU)
         motion_artifact = 0.15 * self._rng.normal(0, 1, size=len(t))
@@ -274,7 +284,9 @@ class SyntheticPodGenerator:
         for ch in range(n_channels):
             # Spatial variation in alpha power
             alpha_power = 20.0 + ch * 2.0 + self._rng.normal(0, 3.0)
-            eeg[:, ch] += alpha_power * np.sin(2 * np.pi * alpha_freq * t + self._rng.uniform(0, 2*np.pi))
+            eeg[:, ch] += alpha_power * np.sin(
+                2 * np.pi * alpha_freq * t + self._rng.uniform(0, 2 * np.pi)
+            )
 
             # Add sleep spindles (Tier 1: 12-16 Hz, 0.5-1.5s bursts)
             if tier == 1:
@@ -289,7 +301,7 @@ class SyntheticPodGenerator:
 
             # Add slow waves (delta, 0.5-4 Hz) for sleep
             if tier == 1:
-                eeg[:, ch] += 15.0 * np.sin(2 * np.pi * 1.5 * t + self._rng.uniform(0, 2*np.pi))
+                eeg[:, ch] += 15.0 * np.sin(2 * np.pi * 1.5 * t + self._rng.uniform(0, 2 * np.pi))
 
             # Beta/gamma background
             eeg[:, ch] += self._rng.normal(0, 3.0, size=len(t))
@@ -328,9 +340,11 @@ class SyntheticPodGenerator:
 
     def _hrf(self, t: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Canonical hemodynamic response function."""
-        return (t ** 5 * np.exp(-t / 1.5)) / (1.5 ** 6 * 120)
+        return (t**5 * np.exp(-t / 1.5)) / (1.5**6 * 120)
 
-    def _lowpass(self, signal: npt.NDArray[np.float64], fc: float, fs: float) -> npt.NDArray[np.float64]:
+    def _lowpass(
+        self, signal: npt.NDArray[np.float64], fc: float, fs: float
+    ) -> npt.NDArray[np.float64]:
         """Simple first-order lowpass filter."""
         rc = 1.0 / (2 * np.pi * fc)
         dt = 1.0 / fs
@@ -338,7 +352,7 @@ class SyntheticPodGenerator:
         filtered = np.zeros_like(signal)
         filtered[0] = signal[0]
         for i in range(1, len(signal)):
-            filtered[i] = filtered[i-1] + alpha * (signal[i] - filtered[i-1])
+            filtered[i] = filtered[i - 1] + alpha * (signal[i] - filtered[i - 1])
         return filtered
 
 
@@ -399,7 +413,7 @@ def create_lsl_streams_from_synthetic(
             "imu": ("SYNAPSE_ACC_T0", "ACC", ["ACC_X", "ACC_Y", "ACC_Z"], ["g", "g", "g"]),
         },
         "head_pod": {
-            "eeg": ("SYNAPSE_EEG_T1", "EEG", [f"EEG_{i+1}" for i in range(8)], ["µV"] * 8),
+            "eeg": ("SYNAPSE_EEG_T1", "EEG", [f"EEG_{i + 1}" for i in range(8)], ["µV"] * 8),
             "fnirs": ("SYNAPSE_FNIRS_T1", "fNIRS", ["HbO", "HbR"], ["µM", "µM"]),
             "acc": ("SYNAPSE_ACC_T1", "ACC", ["ACC_X", "ACC_Y", "ACC_Z"], ["g", "g", "g"]),
         },
@@ -419,171 +433,224 @@ def create_lsl_streams_from_synthetic(
             # ECG
             ecg_data = pod_data["ecg"]
             ecg_ts = pod_timestamps["ecg"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["ecg"][0],
-                    "type": name_map["ecg"][1],
-                    "channel_count": 1,
-                    "sampling_rate": spec.sampling_rates["ecg"],
-                    "channel_names": name_map["ecg"][2],
-                    "channel_units": name_map["ecg"][3],
-                    "tier": spec.tier,
-                }),
-                "data": ecg_data.astype(np.float32),
-                "timestamps": ecg_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["ecg"][0],
+                            "type": name_map["ecg"][1],
+                            "channel_count": 1,
+                            "sampling_rate": spec.sampling_rates["ecg"],
+                            "channel_names": name_map["ecg"][2],
+                            "channel_units": name_map["ecg"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": ecg_data.astype(np.float32),
+                    "timestamps": ecg_ts.astype(np.float64),
+                }
+            )
 
             # PPG (red + IR combined)
             ppg_data = np.column_stack([pod_data["ppg_red"], pod_data["ppg_ir"]])
             ppg_ts = pod_timestamps["ppg"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["ppg_red"][0],
-                    "type": name_map["ppg_red"][1],
-                    "channel_count": 2,
-                    "sampling_rate": spec.sampling_rates["ppg"],
-                    "channel_names": name_map["ppg_red"][2],
-                    "channel_units": name_map["ppg_red"][3],
-                    "tier": spec.tier,
-                }),
-                "data": ppg_data.astype(np.float32),
-                "timestamps": ppg_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["ppg_red"][0],
+                            "type": name_map["ppg_red"][1],
+                            "channel_count": 2,
+                            "sampling_rate": spec.sampling_rates["ppg"],
+                            "channel_names": name_map["ppg_red"][2],
+                            "channel_units": name_map["ppg_red"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": ppg_data.astype(np.float32),
+                    "timestamps": ppg_ts.astype(np.float64),
+                }
+            )
 
             # IMU (9-axis: acc + gyro + mag)
-            imu_data = np.column_stack([
-                pod_data["acc_x"], pod_data["acc_y"], pod_data["acc_z"],
-                pod_data["gyro_x"], pod_data["gyro_y"], pod_data["gyro_z"],
-                pod_data["mag_x"], pod_data["mag_y"], pod_data["mag_z"],
-            ])
+            imu_data = np.column_stack(
+                [
+                    pod_data["acc_x"],
+                    pod_data["acc_y"],
+                    pod_data["acc_z"],
+                    pod_data["gyro_x"],
+                    pod_data["gyro_y"],
+                    pod_data["gyro_z"],
+                    pod_data["mag_x"],
+                    pod_data["mag_y"],
+                    pod_data["mag_z"],
+                ]
+            )
             imu_ts = pod_timestamps["imu"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["imu"][0],
-                    "type": name_map["imu"][1],
-                    "channel_count": 9,
-                    "sampling_rate": spec.sampling_rates["imu"],
-                    "channel_names": [
-                        "ACC_X", "ACC_Y", "ACC_Z",
-                        "GYRO_X", "GYRO_Y", "GYRO_Z",
-                        "MAG_X", "MAG_Y", "MAG_Z"
-                    ],
-                    "channel_units": ["g"]*3 + ["deg/s"]*3 + ["µT"]*3,
-                    "tier": spec.tier,
-                }),
-                "data": imu_data.astype(np.float32),
-                "timestamps": imu_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["imu"][0],
+                            "type": name_map["imu"][1],
+                            "channel_count": 9,
+                            "sampling_rate": spec.sampling_rates["imu"],
+                            "channel_names": [
+                                "ACC_X",
+                                "ACC_Y",
+                                "ACC_Z",
+                                "GYRO_X",
+                                "GYRO_Y",
+                                "GYRO_Z",
+                                "MAG_X",
+                                "MAG_Y",
+                                "MAG_Z",
+                            ],
+                            "channel_units": ["g"] * 3 + ["deg/s"] * 3 + ["µT"] * 3,
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": imu_data.astype(np.float32),
+                    "timestamps": imu_ts.astype(np.float64),
+                }
+            )
 
         elif pod_id == "head_pod":
             # EEG
             eeg_data = pod_data["eeg"]
             eeg_ts = pod_timestamps["eeg"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["eeg"][0],
-                    "type": name_map["eeg"][1],
-                    "channel_count": 8,
-                    "sampling_rate": spec.sampling_rates["eeg"],
-                    "channel_names": name_map["eeg"][2],
-                    "channel_units": name_map["eeg"][3],
-                    "tier": spec.tier,
-                }),
-                "data": eeg_data.astype(np.float32),
-                "timestamps": eeg_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["eeg"][0],
+                            "type": name_map["eeg"][1],
+                            "channel_count": 8,
+                            "sampling_rate": spec.sampling_rates["eeg"],
+                            "channel_names": name_map["eeg"][2],
+                            "channel_units": name_map["eeg"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": eeg_data.astype(np.float32),
+                    "timestamps": eeg_ts.astype(np.float64),
+                }
+            )
 
             # fNIRS
             fnirs_data = np.column_stack([pod_data["hbo"], pod_data["hbr"]])
             fnirs_ts = pod_timestamps["fnirs"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["fnirs"][0],
-                    "type": name_map["fnirs"][1],
-                    "channel_count": 2,
-                    "sampling_rate": spec.sampling_rates["fnirs"],
-                    "channel_names": name_map["fnirs"][2],
-                    "channel_units": name_map["fnirs"][3],
-                    "tier": spec.tier,
-                }),
-                "data": fnirs_data.astype(np.float32),
-                "timestamps": fnirs_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["fnirs"][0],
+                            "type": name_map["fnirs"][1],
+                            "channel_count": 2,
+                            "sampling_rate": spec.sampling_rates["fnirs"],
+                            "channel_names": name_map["fnirs"][2],
+                            "channel_units": name_map["fnirs"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": fnirs_data.astype(np.float32),
+                    "timestamps": fnirs_ts.astype(np.float64),
+                }
+            )
 
             # ACC
             acc_data = np.column_stack([pod_data["acc_x"], pod_data["acc_y"], pod_data["acc_z"]])
             acc_ts = pod_timestamps["acc"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["acc"][0],
-                    "type": name_map["acc"][1],
-                    "channel_count": 3,
-                    "sampling_rate": spec.sampling_rates["acc"],
-                    "channel_names": name_map["acc"][2],
-                    "channel_units": name_map["acc"][3],
-                    "tier": spec.tier,
-                }),
-                "data": acc_data.astype(np.float32),
-                "timestamps": acc_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["acc"][0],
+                            "type": name_map["acc"][1],
+                            "channel_count": 3,
+                            "sampling_rate": spec.sampling_rates["acc"],
+                            "channel_names": name_map["acc"][2],
+                            "channel_units": name_map["acc"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": acc_data.astype(np.float32),
+                    "timestamps": acc_ts.astype(np.float64),
+                }
+            )
 
         elif pod_id == "in_ear_satellite":
             # EEG
             eeg_data = pod_data["eeg"]
             eeg_ts = pod_timestamps["eeg"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["eeg"][0],
-                    "type": name_map["eeg"][1],
-                    "channel_count": 2,
-                    "sampling_rate": spec.sampling_rates["eeg"],
-                    "channel_names": name_map["eeg"][2],
-                    "channel_units": name_map["eeg"][3],
-                    "tier": spec.tier,
-                }),
-                "data": eeg_data.astype(np.float32),
-                "timestamps": eeg_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["eeg"][0],
+                            "type": name_map["eeg"][1],
+                            "channel_count": 2,
+                            "sampling_rate": spec.sampling_rates["eeg"],
+                            "channel_names": name_map["eeg"][2],
+                            "channel_units": name_map["eeg"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": eeg_data.astype(np.float32),
+                    "timestamps": eeg_ts.astype(np.float64),
+                }
+            )
 
             # IMU (3-axis acc only for in-ear)
             imu_data = np.column_stack([pod_data["acc_x"], pod_data["acc_y"], pod_data["acc_z"]])
             imu_ts = pod_timestamps["imu"]
-            streams.append({
-                "info": create_stream_info_from_dict({
-                    "name": name_map["imu"][0],
-                    "type": name_map["imu"][1],
-                    "channel_count": 3,
-                    "sampling_rate": spec.sampling_rates["imu"],
-                    "channel_names": name_map["imu"][2],
-                    "channel_units": name_map["imu"][3],
-                    "tier": spec.tier,
-                }),
-                "data": imu_data.astype(np.float32),
-                "timestamps": imu_ts.astype(np.float64),
-            })
+            streams.append(
+                {
+                    "info": create_stream_info_from_dict(
+                        {
+                            "name": name_map["imu"][0],
+                            "type": name_map["imu"][1],
+                            "channel_count": 3,
+                            "sampling_rate": spec.sampling_rates["imu"],
+                            "channel_names": name_map["imu"][2],
+                            "channel_units": name_map["imu"][3],
+                            "tier": spec.tier,
+                        }
+                    ),
+                    "data": imu_data.astype(np.float32),
+                    "timestamps": imu_ts.astype(np.float64),
+                }
+            )
 
     # Add marker stream for tier transitions and sync
     marker_timestamps = np.array([0.0, 60.0, 180.0, 300.0], dtype=np.float64)
-    marker_labels = np.array([
-        ["recording_start"],
-        ["t0_to_t1_night_window"],
-        ["t1_to_t0_window_end"],
-        ["recording_end"],
-    ], dtype=object)
-    streams.append({
-        "info": create_stream_info_from_dict({
-            "name": "SYNAPSE_Markers",
-            "type": "Markers",
-            "channel_count": 1,
-            "sampling_rate": 0,
-            "channel_format": "string",
-            "channel_names": ["marker"],
-            "channel_units": [""],
-            "tier": 1,
-        }),
-        "data": marker_labels,
-        "timestamps": marker_timestamps,
-    })
+    marker_labels = np.array(
+        [
+            ["recording_start"],
+            ["t0_to_t1_night_window"],
+            ["t1_to_t0_window_end"],
+            ["recording_end"],
+        ],
+        dtype=object,
+    )
+    streams.append(
+        {
+            "info": create_stream_info_from_dict(
+                {
+                    "name": "SYNAPSE_Markers",
+                    "type": "Markers",
+                    "channel_count": 1,
+                    "sampling_rate": 0,
+                    "channel_format": "string",
+                    "channel_names": ["marker"],
+                    "channel_units": [""],
+                    "tier": 1,
+                }
+            ),
+            "data": marker_labels,
+            "timestamps": marker_timestamps,
+        }
+    )
 
     return streams
 
@@ -603,4 +670,6 @@ if __name__ == "__main__":
     print(f"\nGenerated {len(streams)} LSL streams:")
     for s in streams:
         info = s["info"]
-        print(f"  {info.name()}: {info.channel_count()}ch @ {info.nominal_srate()}Hz, {s['data'].shape[0]} samples")
+        print(
+            f"  {info.name()}: {info.channel_count()}ch @ {info.nominal_srate()}Hz, {s['data'].shape[0]} samples"
+        )
