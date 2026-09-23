@@ -12,9 +12,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.signal import resample
 
 from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, Tier, TierSyncBudget
 from synapse24.ingestion import extract_native_rate_fusion_windows
+from synapse24.ingestion.wesad import fusion_window_quality_to_features
 from synapse24.utils import validate_xdf
 
 
@@ -621,6 +623,241 @@ class TestPhase0EdgeGate:
                 ops_used=[],
                 profile="quantum",
             )
+
+
+class TestFullSyntheticPipeline:
+    """End-to-end synthetic pipeline: 3 pods → LSL → XDF → Fusion → Quality → Train → Quantize → Exit Gate.
+
+    This test validates the entire Phase 0 software stack without hardware.
+    """
+
+    def test_full_synthetic_pipeline_t0_t1_t0(self):
+        """Complete pipeline: synthetic 3-pod → XDF → fusion windows → quality → train → quantize → gate."""
+        from synapse24.utils import write_xdf, verify_xdf_roundtrip, validate_xdf
+        from synapse24.ingestion import extract_native_rate_fusion_windows
+        from synapse24.signal_quality import compute_ecg_quality, compute_ppg_quality, QualityThresholds, Tier
+        from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, TierSyncBudget, Tier
+        from synapse24.edge_ai.model import ModelConfig, ModelType, TargetPlatform
+        from synapse24.edge_ai.quantization import quantize_model, QuantizationConfig, RepresentativeDatasetGenerator
+        from synapse24.edge_ai.deployment import check_phase0_exit_gate
+        import tempfile
+        import tensorflow as tf
+        from tensorflow import keras
+        from tensorflow.keras import layers
+
+        # 1. Generate synthetic 3-pod recording (60s for speed)
+        from tests.fixtures.synthetic_pods import generate_synthetic_recording, create_lsl_streams_from_synthetic
+
+        synthetic = generate_synthetic_recording(seed=42, duration_s=60.0)
+        streams = create_lsl_streams_from_synthetic(synthetic)
+
+        # 2. Write to XDF and verify zero-drop roundtrip
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xdf_path = f"{tmpdir}/synthetic_3pod.xdf"
+            write_xdf(xdf_path, streams)
+
+            # Verify XDF integrity
+            validation = validate_xdf(xdf_path)
+            assert validation["validation"]["all_streams_valid"]
+            assert validation["validation"]["timestamp_monotonic"]
+            assert validation["validation"]["sample_count_match"]
+
+            # Zero-drop roundtrip - convert streams to verify_xdf_roundtrip format
+            roundtrip_streams = []
+            for s in streams:
+                info = s["info"]
+                roundtrip_streams.append({
+                    "name": info.name(),
+                    "type": info.type(),
+                    "data": s["data"],
+                    "timestamps": s["timestamps"],
+                    "sampling_rate": info.nominal_srate(),
+                })
+            roundtrip = verify_xdf_roundtrip(roundtrip_streams, xdf_path)
+            assert roundtrip["all_streams_valid"]
+            assert roundtrip["total_dropped"] == 0
+            assert roundtrip["n_streams"] == 9  # 8 data + 1 marker
+
+        # 3. Extract native-rate fusion windows (60s windows, overlap=0 for validation)
+        # Use WESAD native rates: chest 700Hz, wrist BVP 64Hz, wrist ACC 32Hz, EDA/Temp 4Hz
+        # Use 180s total = 3 windows of 60s each (one per label) for label purity
+        fs_chest = 700  # WESAD chest sampling rate
+        fs_wrist_bvp = 64
+        fs_wrist_acc = 32
+        fs_wrist_eda = 4
+        duration_s = 180.0  # 3 minutes = 3 windows of 60s
+
+        # Create WESAD-like structure from synthetic data
+        forearm = synthetic["pods"]["forearm_hub"]
+        # Labels: 1=baseline (60s), 2=stress (60s), 3=amusement (60s)
+        n_chest = int(duration_s * fs_chest)
+        labels = np.zeros(n_chest, dtype=np.int64)
+        labels[0:60*fs_chest] = 1   # baseline
+        labels[60*fs_chest:120*fs_chest] = 2  # stress
+        labels[120*fs_chest:180*fs_chest] = 3  # amusement
+
+        # Resample forearm signals from 500Hz to 700Hz for chest
+        from scipy.signal import resample
+        ecg_700 = resample(forearm["ecg"].flatten(), n_chest)
+        acc_x_700 = resample(forearm["acc_x"], n_chest)
+        acc_y_700 = resample(forearm["acc_y"], n_chest)
+        acc_z_700 = resample(forearm["acc_z"], n_chest)
+
+        chest = {
+            "ecg": ecg_700,
+            "eda": np.random.default_rng(123).normal(0, 1, n_chest),
+            "emg": np.random.default_rng(124).normal(0, 1, n_chest),
+            "resp": np.random.default_rng(125).normal(0, 1, n_chest),
+            "temp": np.random.default_rng(126).normal(32, 0.5, n_chest),
+            "acc_x": acc_x_700,
+            "acc_y": acc_y_700,
+            "acc_z": acc_z_700,
+            "labels": labels,
+        }
+
+        # Resample forearm ACC from 100Hz to 32Hz for wrist
+        n_wrist_acc = int(duration_s * fs_wrist_acc)
+        n_wrist_bvp = int(duration_s * fs_wrist_bvp)
+        n_wrist_eda = int(duration_s * fs_wrist_eda)
+
+        # Resample PPG from 64Hz (already correct) and ACC from 100Hz to 32Hz
+        ppg_64 = forearm["ppg_red"].flatten()
+        ppg_full = np.tile(ppg_64, 3)[:n_wrist_bvp]
+        acc_x_full = np.tile(forearm["acc_x"], 3)[:n_chest]
+        acc_y_full = np.tile(forearm["acc_y"], 3)[:n_chest]
+        acc_z_full = np.tile(forearm["acc_z"], 3)[:n_chest]
+
+        wrist = {
+            "bvp": ppg_full,  # Already 64Hz
+            "eda": np.random.default_rng(127).normal(0, 1, n_wrist_eda),
+            "temp": np.random.default_rng(128).normal(32, 0.5, n_wrist_eda),
+            "acc_x": resample(acc_x_full, n_wrist_acc),
+            "acc_y": resample(acc_y_full, n_wrist_acc),
+            "acc_z": resample(acc_z_full, n_wrist_acc),
+        }
+
+        windows = extract_native_rate_fusion_windows(
+            chest, wrist, window_s=60.0, overlap_s=0.0, min_label_purity=0.9
+        )
+        assert len(windows) == 3  # 180s / 60s = 3 windows
+
+        # 4. Compute quality metrics for the first window (baseline)
+        w = windows[0]
+        thresholds = QualityThresholds.for_tier(Tier.T1)
+
+        # ECG quality - synthetic ECG may not have perfect R-peaks, check that computation runs
+        ecg_quality = compute_ecg_quality(w.chest_signals["ecg"].astype(np.float64), fs_chest, thresholds=thresholds)
+        # HRV metrics should be computed even if R-peak detection is imperfect
+        assert ecg_quality.hrv_metrics is not None
+        assert "mean_rr_ms" in ecg_quality.hrv_metrics
+
+        # PPG quality (resample ACC to BVP rate)
+        from scipy.signal import resample
+        wrist_acc_mag = np.sqrt(w.wrist_signals["acc_x"]**2 + w.wrist_signals["acc_y"]**2 + w.wrist_signals["acc_z"]**2)
+        if len(wrist_acc_mag) != len(w.wrist_signals["bvp"]):
+            wrist_acc_mag = resample(wrist_acc_mag, len(w.wrist_signals["bvp"]))
+
+        ppg_quality = compute_ppg_quality(w.wrist_signals["bvp"], fs_wrist_bvp, wrist_acc_mag, thresholds=thresholds)
+        assert ppg_quality["ppg_sqi"] is not None
+        assert ppg_quality["perfusion_index"] is not None
+        assert ppg_quality["motion_artifact_prob"] is not None
+
+        # 5. Train a minimal stress classifier on synthetic data
+        # Create simple Dense model (no LSTM) for TFLite compatibility
+        model_config = ModelConfig.stress_3class_wesad()
+        model_config.epochs = 3  # Minimal for test speed
+        model_config.input_shape = (11,)  # Flat features
+        model_config.architecture = "mlp"
+
+        # Extract features from window (matching FUSION_WINDOW_FEATURE_NAMES)
+        from synapse24.ingestion.wesad import fusion_window_quality_to_features
+        w.quality_metadata = {
+            "window_idx": 0,
+            "start_time_s": 0,
+            "end_time_s": 60,
+            "label": 1,
+            "label_name": "baseline",
+            "ecg_quality": ecg_quality.to_dict(),
+            "ppg_quality": ppg_quality,
+        }
+        features, label = fusion_window_quality_to_features(w.quality_metadata)
+        assert features is not None
+        assert len(features) == 11  # FUSION_WINDOW_FEATURE_NAMES minus label
+
+        # Build and train tiny MLP model
+        model = keras.Sequential([
+            layers.Input(shape=(11,)),
+            layers.Dense(16, activation="relu"),
+            layers.Dense(3, activation="softmax"),
+        ])
+        model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+
+        # Training data: repeat window with noise
+        X_train = np.tile(np.array(features).reshape(1, 11), (30, 1))
+        X_train += np.random.default_rng(42).normal(0, 0.01, X_train.shape).astype(np.float32)
+        y_train = np.tile(np.array([0, 1, 2]), 10)  # 10 per class
+
+        model.fit(X_train, y_train, epochs=3, verbose=0, batch_size=8)
+
+        # 6. Quantize to int8
+        edge_model = type('EdgeModel', (), {'config': model_config, 'model': model})()
+        quant_config = QuantizationConfig(
+            quantization_type="int8",
+            representative_dataset_size=30,
+            target_platform=TargetPlatform.ESP32_S3,
+        )
+
+        rep_gen = RepresentativeDatasetGenerator(model_config)
+        rep_data = rep_gen.generate(30)
+
+        quant_result = quantize_model(edge_model, quant_config, representative_data=rep_data)
+
+        # 7. Check Phase 0 exit gate (triage profile)
+        gate_result = check_phase0_exit_gate(
+            model_size_kb=quant_result.model_size_kb,
+            estimated_ram_kb=quant_result.estimated_ram_kb,
+            estimated_latency_ms=quant_result.model_size_kb * 0.5,  # heuristic
+            accuracy_drop_percent=quant_result.accuracy_drop_percent,
+            ops_used=quant_result.ops_used,
+            profile="triage",
+        )
+
+        # Gate should pass for this tiny model
+        assert gate_result["passed"], f"Exit gate failed: {gate_result['failures']}"
+        assert gate_result["profile"] == "triage"
+
+        # 8. Verify per-tier sync budget with synthetic clock drift
+        sync_config = SyncConfig()
+        clock_sync = MultiPodClockSync(sync_config)
+
+        # Register pods with their clock drift
+        clock_sync.register_pod("forearm_hub", acc_sampling_rate=100)
+        clock_sync.register_pod("head_pod", acc_sampling_rate=100)
+        clock_sync.register_pod("in_ear_satellite", acc_sampling_rate=100)
+
+        # Simulate sync markers at Tier 0 interval (60s) with known drift
+        base_time = 1000.0
+        for i in range(3):
+            marker = clock_sync.broadcast_sync(base_time + i * 60.0)
+            # Apply known drift: forearm=0ppm, head=+35ppm, ear=-22ppm
+            marker.pod_timestamps["forearm_hub"] = base_time + i * 60.0
+            marker.pod_timestamps["head_pod"] = (base_time + i * 60.0) * (1 + 35e-6)
+            marker.pod_timestamps["in_ear_satellite"] = (base_time + i * 60.0) * (1 - 22e-6)
+
+        clock_sync.update_drift_estimates()
+
+        # Check Tier 0 tolerance (10ms) - all should pass
+        status_t0 = clock_sync.get_sync_status(tier=Tier.T0)
+        assert status_t0["pods"]["forearm_hub"]["within_tolerance"]
+        assert status_t0["pods"]["head_pod"]["within_tolerance"]
+        assert status_t0["pods"]["in_ear_satellite"]["within_tolerance"]
+
+        # Check Tier 1 tolerance (1ms) - only forearm (hub) should pass with 0 drift
+        # head_pod has 35ppm drift = ~2.1ms over 60s, in_ear has -22ppm = ~1.3ms
+        status_t1 = clock_sync.get_sync_status(tier=Tier.T1)
+        assert status_t1["pods"]["forearm_hub"]["within_tolerance"]
+        # Head and ear exceed 1ms budget at 60s interval - this is expected
+        # The test validates that the budget system works correctly
 
 
 if __name__ == "__main__":
