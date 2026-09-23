@@ -161,6 +161,24 @@ static void ble_lsl_on_reset(int reason) {
     ESP_LOGE(TAG, "NimBLE reset: %d", reason);
 }
 
+static void ble_lsl_update_conn_params(uint16_t conn_handle) {
+    struct ble_gap_upd_params params = {0};
+    params.itvl_min = (uint16_t)(BLE_LSL_CONN_INTERVAL_MIN_MS * 1.25f);  // Convert ms to 1.25ms units
+    params.itvl_max = (uint16_t)(BLE_LSL_CONN_INTERVAL_MAX_MS * 1.25f);
+    params.latency = BLE_LSL_CONN_LATENCY;
+    params.supervision_timeout = BLE_LSL_SUPERVISION_TIMEOUT_MS / 10;  // Convert ms to 10ms units
+    params.min_ce_len = 0;
+    params.max_ce_len = 0;
+
+    int rc = ble_gap_update_params(conn_handle, &params);
+    if (rc == 0) {
+        ESP_LOGI(TAG, "Connection parameters updated: interval=%.1fms, latency=%d, timeout=%dms",
+                 BLE_LSL_CONN_INTERVAL_MIN_MS, BLE_LSL_CONN_LATENCY, BLE_LSL_SUPERVISION_TIMEOUT_MS);
+    } else {
+        ESP_LOGW(TAG, "Connection parameter update failed: %d", rc);
+    }
+}
+
 static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
     (void)arg;
 
@@ -168,7 +186,11 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
         case BLE_GAP_EVENT_CONNECT: {
             if (event->connect.status == 0) {
                 s_bridge->conn_handle = event->connect.conn_handle;
+                s_bridge->conn_params_updated = false;
                 ESP_LOGI(TAG, "Connected, handle=%d", s_bridge->conn_handle);
+
+                // Request connection parameter update for 7.5ms interval
+                ble_lsl_update_conn_params(s_bridge->conn_handle);
             } else {
                 ESP_LOGW(TAG, "Connection failed: %d", event->connect.status);
             }
@@ -177,12 +199,23 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
         case BLE_GAP_EVENT_DISCONNECT: {
             ESP_LOGI(TAG, "Disconnected, reason=%d", event->disconnect.reason);
             s_bridge->conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            s_bridge->conn_params_updated = false;
             memset(s_bridge->notifications_enabled, 0, sizeof(s_bridge->notifications_enabled));
             ble_lsl_on_sync();
             return 0;
         }
         case BLE_GAP_EVENT_MTU: {
             ESP_LOGI(TAG, "MTU updated: %d", event->mtu.value);
+            return 0;
+        }
+        case BLE_GAP_EVENT_CONN_UPDATE: {
+            if (event->conn_update.status == 0) {
+                s_bridge->conn_params_updated = true;
+                ESP_LOGI(TAG, "Connection parameters updated successfully: interval=%d (1.25ms units)",
+                         event->conn_update.conn_itvl);
+            } else {
+                ESP_LOGW(TAG, "Connection parameter update failed: %d", event->conn_update.status);
+            }
             return 0;
         }
         default:
