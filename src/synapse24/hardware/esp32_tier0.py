@@ -20,6 +20,8 @@ except ImportError:  # pragma: no cover
     StreamOutlet = None
     local_clock = None
 
+from .base import BoardAdapter, BoardConfig
+
 
 @dataclass(frozen=True)
 class ESP32Tier0Config:
@@ -343,6 +345,50 @@ class Tier0LSLValidator:
             self._acc_mag_buffer = self._acc_mag_buffer[-self.imu_fs * 30 :]
 
 
+class ESP32Tier0Adapter(BoardAdapter):
+    """BoardAdapter for ESP32 Tier 0 (forearm hub: ECG, PPG, IMU)."""
+
+    @property
+    def board_id(self) -> str:
+        return "ESP32_TIER0"
+
+    @property
+    def default_sampling_rate(self) -> int:
+        return 500  # ECG at 500 Hz (highest rate)
+
+    @property
+    def default_channels(self) -> dict[str, list[int]]:
+        return {
+            "ecg": [0],
+            "ppg": [1, 2],  # Red + IR
+            "acc": [3, 4, 5],
+            "gyro": [6, 7, 8],
+            "mag": [9, 10, 11],
+        }
+
+    def create_config(self, **overrides: Any) -> BoardConfig:
+        config = BoardConfig(
+            board_id=self.board_id,
+            mac_address=overrides.get("mac_address", ""),
+            serial_port=overrides.get("serial_port", ""),
+            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
+        )
+        for key, value in overrides.items():
+            if hasattr(config, key) and key not in ("mac_address", "serial_port", "sampling_rate"):
+                setattr(config, key, value)
+        return config
+
+    def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
+        """Get LSL stream mapping for ESP32 Tier 0 (forearm hub)."""
+        return {
+            "ECG": {"channels": [0], "type": "ECG_T0", "unit": "µV"},
+            "PPG": {"channels": [1, 2], "type": "PPG_T0", "unit": "a.u."},
+            "ACC": {"channels": [3, 4, 5], "type": "ACC_T0", "unit": "g"},
+            "GYRO": {"channels": [6, 7, 8], "type": "GYRO_T0", "unit": "°/s"},
+            "MAG": {"channels": [9, 10, 11], "type": "MAG_T0", "unit": "µT"},
+        }
+
+
 BOARD_ADAPTERS = {
-    "ESP32_TIER0": ESP32Tier0Firmware,
+    "ESP32_TIER0": ESP32Tier0Adapter,
 }
