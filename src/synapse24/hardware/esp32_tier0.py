@@ -7,6 +7,7 @@ Provides BLE LSL bridge for real-time streaming to Python hub.
 from __future__ import annotations
 
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -145,6 +146,21 @@ class ESP32Tier0Firmware:
     def stop_streaming(self) -> None:
         """Stop sensor acquisition."""
         self._running = False
+
+    def read_battery_voltage(self) -> float:
+        """Simulate reading battery voltage (nominal 3.7V LiPo)."""
+        return 3.72
+
+    def log_power_budget(self) -> dict[str, Any]:
+        """Log current power state and battery voltage per Architecture.md."""
+        power_state = {
+            "ble_active": self._running,
+            "adc_active": self._running,
+            "sampling_rate": self.config.ecg_sampling_rate,
+            "battery_voltage": self.read_battery_voltage(),
+            "timestamp": time.time(),
+        }
+        return power_state
 
     def push_ecg_sample(self, ecg_mv: float, timestamp: float | None = None) -> None:
         """Push single ECG sample to LSL."""
