@@ -887,6 +887,25 @@ class TestFullSyntheticPipeline:
         # Head and ear exceed 1ms budget at 60s interval - this is expected
         # The test validates that the budget system works correctly
 
+    def test_esp32_tier0_power_budget_logging(self):
+        """Test ESP32 Tier 0 firmware power budget and voltage tracking."""
+        from synapse24.hardware.esp32_tier0 import ESP32Tier0Config, ESP32Tier0Firmware
+
+        config = ESP32Tier0Config()
+        firmware = ESP32Tier0Firmware(config)
+        firmware.start_streaming()
+
+        power_state = firmware.log_power_budget()
+        assert power_state["ble_active"] is True
+        assert power_state["adc_active"] is True
+        assert power_state["sampling_rate"] == 500
+        assert power_state["battery_voltage"] > 3.0
+        assert "timestamp" in power_state
+
+        firmware.stop_streaming()
+        power_state_stopped = firmware.log_power_budget()
+        assert power_state_stopped["ble_active"] is False
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
