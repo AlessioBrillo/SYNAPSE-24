@@ -53,8 +53,7 @@ dev = [
     "types-requests>=2.31.0,<3.0",
     "types-pyyaml>=6.0.0,<7.0",
     "types-tqdm>=4.24.0,<5.0",
-    "pre-commit>=3.7.0,<4.0",
-    "tensorflow-cpu==2.16.1",
+"pre-commit>=3.7.0,<4.0",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
 ]
@@ -85,7 +84,7 @@ dev = [
     "types-tqdm>=4.70.0.20260827",
     "types-pytz>=2026.3.1.20260727",
     "pre-commit>=3.7.0,<4.0",
-    "tensorflow-cpu==2.16.1",
+    "tensorflow-intel==2.16.1",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
     "bandit>=1.9.4",
@@ -105,12 +104,15 @@ select = [
     "ISC",  # isort
 ]
 ignore = [
-    "D101", "D102", "D415", "PLW1510", "D107", "D105", "PYI034", "ARG002", "TC001", "TC003",
-    "UP037", "UP045", "N806", "NPY002", "SIM102", "SIM105", "SIM108", "PLW1510",
-    "PTH202", "PTH108", "E741", "D212", "D107", "F821", "C901", "PLR0912",
-    "D107", "ARG002", "ARG001", "F841", "F401", "RET504", "TRY003", "EXE001", "D103", "N806",
-    "PLR2004", "T201", "PTH123", "PLC0415", "UP045", "D212", "D212",
-    "PLR0913", "PLR0917", "E402", "E501", "TRY300", "TC002",
+    "D101", "D102", "D103", "D105", "D107", "D212", "D415",  # Missing docstrings (test files, private)
+    "ARG001", "ARG002",  # Unused function arguments (callbacks, interface compliance)
+    "F841",  # Unused variable (intentional in some patterns)
+    "N806",  # Variable in function should be lowercase (legacy constants)
+    "PLW1510",  # Unused method (interface stubs)
+    "PYI034",  # Missing module stub (third-party libs)
+    "TC001", "TC002", "TC003",  # Type checking disabled for some modules
+    "T201",  # Direct instantiation of dict/list/set (acceptable)
+    "UP037", "UP045",  # Use X | Y instead of Union (Python 3.11 compat)
 ]
 format.quote-style = "double"
 format.indent-style = "space"
@@ -204,20 +206,11 @@ omit = [
     "tests/*",
     "scripts/*",
     "*/__pycache__/*",
-    "src/synapse24/edge_ai/*",
     "src/synapse24/hardware/*",
-    "src/synapse24/ingestion/sleep_edf.py",
-    "src/synapse24/ingestion/deap.py",
-    "src/synapse24/ingestion/cerelog_eeg.py",
-    "src/synapse24/signal_quality/fnirs.py",
     # Integration-heavy acquisition modules (require LSL/hardware)
     "src/synapse24/acquisition/lsl_gateway.py",
-    "src/synapse24/acquisition/tier1_coordinator.py",
     "src/synapse24/acquisition/live_lsl_sync.py",
     "src/synapse24/acquisition/live_validator.py",
-    "src/synapse24/acquisition/sync_marker_stream.py",
-    "src/synapse24/acquisition/night_window.py",
-    "src/synapse24/acquisition/coordinator.py",
 ]
 branch = true
 concurrency = ["thread", "multiprocessing"]
