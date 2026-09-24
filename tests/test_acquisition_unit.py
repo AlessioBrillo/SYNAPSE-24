@@ -806,5 +806,243 @@ class TestPowerProfile:
         assert profile.avg_mw == 5.0
 
 
+class TestTierPromotionIntegration:
+    """Integration tests for T0<->T1 promotion cycle with motion-quality gate.
+
+    Architecture.md 33-43, 74: Tiered acquisition with IMU-triggered promotion
+    gated by measured PPG quality (SQI >= 0.5, MAP <= 0.5).
+    """
+
+    def _make_controller(self, clock_fn):
+        """Create controller with test-friendly parameters."""
+        return AcquisitionController(
+            immobility_detector=ImmobilityDetector(
+                accel_sampling_rate=1,
+                window_duration_s=1.0,
+                magnitude_threshold=0.02,
+                min_immobility_min=1.0,
+            ),
+            night_scheduler=None,
+            power_budget=PowerBudgetManager(
+                hub_battery_mah=3000,
+                target_lifetime_h=24,
+                tier0_avg_mw=5.0,
+                tier1_avg_mw=50.0,
+                tier1_max_h=10.0,
+                tier2_avg_mw=100.0,
+                tier2_max_burst_min=30.0,
+                reserve_mah=300,
+                clock_fn=clock_fn,
+            ),
+            motion_gate=MotionGateConfig(
+                sqi_min=0.5,
+                map_max=0.5,
+                required_consecutive_clean=2,
+                sqi_staleness_max_s=30.0,
+                fail_open=False,
+            ),
+            clock_fn=clock_fn,
+        )
+
+    def test_promotion_cycle_t0_t1_t0(self):
+        """Test complete T0->T1->T0 promotion cycle with motion gate."""
+        clock = 0.0
+
+        def test_clock():
+            return clock
+
+        controller = self._make_controller(test_clock)
+
+        # Phase 1: Stationary + clean PPG (should promote T0->T1)
+        phase1_promoted = False
+        for _ in range(120):  # Need 60 windows for 1 min immobility
+            controller.update_imu(
+                accel_magnitude=0.01,
+                timestamp=clock,
+                ppg_sqi=0.8,
+                motion_artifact_prob=0.1,
+            )
+            controller.tick(clock)
+            if controller.state_machine.current_tier == Tier.T1:
+                phase1_promoted = True
+                break
+            clock += 1.0
+
+        assert phase1_promoted, "Should promote on clean immobility"
+        assert controller.state_machine.current_tier == Tier.T1
+
+        # Phase 2: Movement + dirty PPG (should demote T1->T0)
+        phase2_demoted = False
+        for _ in range(50):
+            controller.update_imu(
+                accel_magnitude=1.5,
+                timestamp=clock,
+                ppg_sqi=0.2,
+                motion_artifact_prob=0.8,
+            )
+            controller.tick(clock)
+            if controller.state_machine.current_tier == Tier.T0:
+                phase2_demoted = True
+                break
+            clock += 1.0
+
+        assert phase2_demoted, "Should demote on movement"
+        assert controller.state_machine.current_tier == Tier.T0
+
+        # Phase 3: Stationary + clean again (should re-promote T0->T1)
+        phase3_repromoted = False
+        for _ in range(120):
+            controller.update_imu(
+                accel_magnitude=0.01,
+                timestamp=clock,
+                ppg_sqi=0.8,
+                motion_artifact_prob=0.1,
+            )
+            controller.tick(clock)
+            if controller.state_machine.current_tier == Tier.T1:
+                phase3_repromoted = True
+                break
+            clock += 1.0
+
+        assert phase3_repromoted, "Should re-promote after recovery"
+        assert controller.state_machine.current_tier == Tier.T1
+
+    def test_motion_gate_blocks_promotion_on_low_sqi(self):
+        """Test motion gate blocks promotion when SQI < threshold."""
+        clock = 0.0
+
+        def test_clock():
+            return clock
+
+        controller = self._make_controller(test_clock)
+
+        # Reset to T0 with dirty PPG
+        controller.state_machine.reset()
+        controller._consecutive_clean = 0
+        controller._consecutive_contaminated = 0
+        controller._latest_sqi = 0.3
+        controller._latest_map = 0.7
+        controller._latest_sqi_timestamp = clock
+
+        gate_blocked = True
+        for _ in range(100):
+            controller.update_imu(
+                accel_magnitude=0.01,
+                timestamp=clock,
+                ppg_sqi=0.3,  # Below threshold
+                motion_artifact_prob=0.7,  # Above threshold
+            )
+            controller.tick(clock)
+            if controller.state_machine.current_tier == Tier.T1:
+                gate_blocked = False
+                break
+            clock += 1.0
+
+        assert gate_blocked, "Motion gate should block promotion on low SQI"
+        assert controller.state_machine.current_tier == Tier.T0
+
+    def test_motion_gate_allows_promotion_on_clean_signal(self):
+        """Test motion gate allows promotion after 2 consecutive clean assessments."""
+        clock = 0.0
+
+        def test_clock():
+            return clock
+
+        controller = self._make_controller(test_clock)
+
+        # Feed clean PPG for 3 steps (need 2 consecutive clean)
+        for _ in range(3):
+            controller.update_imu(
+                accel_magnitude=0.01,
+                timestamp=clock,
+                ppg_sqi=0.8,
+                motion_artifact_prob=0.1,
+            )
+            controller.tick(clock)
+            clock += 1.0
+
+        # Motion gate should be armed now
+        status = controller.get_status()
+        assert status["motion_gate"]["armed"] is True
+        assert status["motion_gate"]["consecutive_clean"] >= 2
+
+        # Now immobility should trigger promotion
+        # Need to feed enough immobile samples for 1 min at 1Hz
+        controller._consecutive_clean = 2
+        controller._latest_sqi = 0.8
+        controller._latest_map = 0.1
+        controller._latest_sqi_timestamp = clock
+
+        promoted = False
+        for _ in range(70):  # 1 min = 60 windows at 1Hz
+            controller.update_imu(
+                accel_magnitude=0.01,
+                timestamp=clock,
+                ppg_sqi=0.8,
+                motion_artifact_prob=0.1,
+            )
+            controller.tick(clock)
+            if controller.state_machine.current_tier == Tier.T1:
+                promoted = True
+                break
+            clock += 1.0
+
+        assert promoted, "Should promote when motion gate armed and immobility detected"
+
+    def test_power_budget_blocks_tier1_when_exceeded(self):
+        """Test power budget demotes T1->T0 when budget exceeded."""
+        clock = 0.0
+
+        def test_clock():
+            return clock
+
+        # Use battery that can afford T1 initially but not after extended T1 use
+        # 3000mAh with 300mAh reserve = 2700mAh usable
+        # At 50mW T1 = 13.5mAh/h, at 5mW T0 = 1.35mAh/h
+        # Target 24h needs 5*24/3.7 = 32.4mAh for T0
+        # So 2700 - 32.4 = 2667.6mAh available for T1 = ~197h
+        # Set tier1_max_h >= 2 to allow promotion (hardcoded duration_h=2 in update_imu)
+        controller = AcquisitionController(
+            immobility_detector=ImmobilityDetector(1, 1.0, 0.02, 1.0),
+            night_scheduler=None,
+            power_budget=PowerBudgetManager(
+                hub_battery_mah=3000,
+                target_lifetime_h=24,
+                tier0_avg_mw=5.0,
+                tier1_avg_mw=50.0,
+                tier1_max_h=2.0,  # Allow promotion (hardcoded 2h check)
+                tier2_avg_mw=100.0,
+                tier2_max_burst_min=30.0,
+                reserve_mah=300,
+                clock_fn=test_clock,
+            ),
+            motion_gate=MotionGateConfig(sqi_min=0.5, map_max=0.5, required_consecutive_clean=2),
+            clock_fn=test_clock,
+        )
+
+        # Promote to T1 - need 60 windows for 1 min immobility at 1Hz
+        controller._consecutive_clean = 2
+        controller._latest_sqi = 0.8
+        controller._latest_map = 0.1
+        controller._latest_sqi_timestamp = clock
+        for _ in range(70):  # 60 windows + margin
+            controller.update_imu(0.01, clock, ppg_sqi=0.8, motion_artifact_prob=0.1)
+            controller.tick(clock)
+            clock += 1.0
+
+        assert controller.state_machine.current_tier == Tier.T1, "Should promote to T1"
+
+        # Now test that power budget check in tick() demotes when T1 duration exceeds max_h
+        # Manually set T1 start time to simulate session longer than tier1_max_h (2 hours)
+        controller.state_machine._t1_start_time = clock - 2.5 * 3600  # 2.5 hours ago
+
+        controller.tick(clock)
+
+        # Should demote due to power budget max duration exceeded
+        assert controller.state_machine.current_tier == Tier.T0, (
+            "Should demote when T1 max duration exceeded"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
