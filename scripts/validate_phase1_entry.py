@@ -208,8 +208,7 @@ class Phase1Validator:
 
     def _load_config(self, config_path: Path) -> dict:
         config = load_hardware_config_from_path(
-            Path(__file__).parent.parent / "config" / "hardware.yaml",
-            config_path
+            Path(__file__).parent.parent / "config" / "hardware.yaml", config_path
         )
         config["_config_path"] = str(config_path)
         return config
