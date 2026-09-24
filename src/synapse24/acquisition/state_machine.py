@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 """Tier state machine for SYNAPSE-24 acquisition."""
 
 from __future__ import annotations
@@ -8,9 +7,15 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 
 from synapse24.signal_quality import Tier
+
+if TYPE_CHECKING:
+    from synapse24.acquisition.immobility import ImmobilityDetector
+    from synapse24.acquisition.night_window import NightWindowScheduler
+    from synapse24.acquisition.power_budget import PowerBudgetManager
+    from synapse24.acquisition.coordinator import SensorPodCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -249,10 +254,10 @@ class AcquisitionController:
 
     def __init__(
         self,
-        immobility_detector: ImmobilityDetector | None = None,
-        night_scheduler: NightWindowScheduler | None = None,
-        power_budget: PowerBudgetManager | None = None,
-        pod_coordinator: SensorPodCoordinator | None = None,
+        immobility_detector: "ImmobilityDetector | None" = None,
+        night_scheduler: "NightWindowScheduler | None" = None,
+        power_budget: "PowerBudgetManager | None" = None,
+        pod_coordinator: "SensorPodCoordinator | None" = None,
         clock_fn: Callable[[], float] | None = None,
         motion_gate: MotionGateConfig | None = None,
     ) -> None:
@@ -450,7 +455,7 @@ class AcquisitionController:
             ):
                 self.state_machine.demote_to_tier0("power_budget_exceeded")
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         """Get comprehensive status."""
         return {
             "current_tier": self.state_machine.current_tier.name,
