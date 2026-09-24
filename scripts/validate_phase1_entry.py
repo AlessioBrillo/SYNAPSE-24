@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
+from synapse24.config.loader import load_hardware_config_from_path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -207,9 +207,12 @@ class Phase1Validator:
         self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
 
     def _load_config(self, config_path: Path) -> dict:
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-        return self._expand_env_vars(config)
+        config = load_hardware_config_from_path(
+            Path(__file__).parent.parent / "config" / "hardware.yaml",
+            config_path
+        )
+        config["_config_path"] = str(config_path)
+        return config
 
     def _expand_env_vars(self, obj: Any) -> Any:
         if isinstance(obj, str):

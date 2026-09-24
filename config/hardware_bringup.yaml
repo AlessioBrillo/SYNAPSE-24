@@ -1,87 +1,48 @@
-# SYNAPSE-24 Phase 1 Hardware Bringup Configuration
-# Single-pod Tier 0 validation (forearm_hub with ESP32-S3)
-# Multi-pod Tier 1 validation (head_pod Cerelog ESP-EEG + forearm_hub)
-# Extends config/hardware.yaml — overrides for live hardware validation
+# SYNAPSE-24 Phase 1 Hardware Bringup Overrides
+# Extends config/hardware.yaml — only bringup-specific values here
+# All base pod/sensor/sync/power/motion/immobility/night config inherited from hardware.yaml
 #
 # Usage:
 #   uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml
 #   uv run python scripts/validate_phase1_entry.py --tier1 --config config/hardware_bringup.yaml
 
 bringup:
-  mode: "multi_pod"  # "single_pod" | "multi_pod" — Phase 1 validates forearm_hub, Phase 2 adds head_pod
+  mode: "multi_pod"  # "single_pod" | "multi_pod"
   target_pod: "forearm_hub"
 
   # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub)
   firmware:
     path: "firmware/synapse_tier0.bin"  # Built by CI triage-model job
-    port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"  # User can override via env
+    port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"
     baud: 921600
     flash_mode: "dio"
     flash_freq: "80m"
     flash_size: "4MB"
     verify_after_flash: true
 
-  # BLE connection for forearm_hub
+  # BLE connection overrides for live hardware
   ble:
     address: "${SYNAPSE_FOREARM_BLE:-auto}"  # "auto" = scan for SYNAPSE device
     scan_timeout_s: 10
     connect_timeout_s: 15
     mtu: 185  # Negotiated MTU for higher throughput
-    service_uuid: "0000ffe0-0000-1000-8000-00805f9b34fb"
-    characteristics:
-      ecg: "0000ffe1-0000-1000-8000-00805f9b34fb"  # ECG notifications
-      ppg: "0000ffe2-0000-1000-8000-00805f9b34fb"  # PPG notifications (red + IR)
-      imu: "0000ffe3-0000-1000-8000-00805f9b34fb"  # IMU notifications (9-axis)
 
-  # Sensor specifications for forearm_hub (must match firmware sensor config)
-  sensors:
-    ecg:
-      type: "AD8232"
-      fs: 500
-      channels: 1
-      gain: 1100  # V/V
-      adc_bits: 12
-      vref_mv: 3300
-      lead_off_detection: true
-    ppg:
-      type: "MAX30102"
-      fs: 64
-      channels: 2  # red + IR
-      led_current_red_ma: 8.2
-      led_current_ir_ma: 8.2
-      sample_avg: 4
-      pulse_width_us: 411
-      adc_range: 16384  # nA
-    imu:
-      type: "ICM-20948"
-      fs: 100
-      channels: 9  # accel 3 + gyro 3 + mag 3
-      accel_fsr_g: 8
-      gyro_fsr_dps: 1000
-      mag_enabled: true
-      dmp_enabled: false  # Raw data only; fusion on host
-
-  # Cerelog ESP-EEG head pod (Tier 1) - Architecture.md §67
+  # Cerelog ESP-EEG head pod (Tier 1) - additional config beyond hardware.yaml
   cerelog_eeg:
     enabled: true
-    connection: "usb"  # "usb" | "ble" — Cerelog uses USB-C or BLE
-    port: "${SYNAPSE_HEAD_SERIAL:-/dev/ttyUSB0}"  # USB serial port
-    mac_address: "${SYNAPSE_HEAD_BLE:-auto}"  # BLE MAC if using BLE
-    fs: 500  # 500 Hz per Architecture.md §92 (Tier 1 requires 500Hz for EEG)
-    n_channels: 8  # 8-ch ADS1299
-    channel_names: ["Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4"]  # 10-20 standard
-    electrode_type: "dry"
+    connection: "usb"  # "usb" | "ble"
+    port: "${SYNAPSE_HEAD_SERIAL:-/dev/ttyUSB0}"
+    mac_address: "${SYNAPSE_HEAD_BLE:-auto}"
     impedance_check: true
-    impedance_threshold_kohm: 50.0  # kΩ — Architecture.md §77: dry electrode impedance 10-100x gel
+    impedance_threshold_kohm: 50.0
     impedance_test_duration_s: 5.0
-    tier: 1
 
-  # LSL stream configuration
+  # LSL stream configuration (extends hardware.yaml streams)
   lsl:
-    clock_domain: "local_clock"  # pylsl.local_clock()
+    clock_domain: "local_clock"
     stream_prefix: "SYNAPSE"
-    chunk_size: 16  # Samples per push_sample() call
-    max_buffered: 1000  # Max samples buffered before drop
+    chunk_size: 16
+    max_buffered: 1000
     streams:
       # Tier 0 streams (forearm_hub)
       - name: "SYNAPSE_ECG_T0"
@@ -152,84 +113,44 @@ bringup:
       - name: "SYNAPSE_Markers"
         type: "Markers"
         channel_count: 1
-        sampling_rate: 0  # Irregular
+        sampling_rate: 0
         channel_format: "string"
         source_id: "synapse_markers_001"
         tier: 1
 
-  # Clock synchronization (Architecture.md §92)
+  # Clock synchronization - override mode for multi-pod
   sync:
-    mode: "markers_plus_acc"  # "markers_only" | "markers_plus_acc" — multi-pod uses both
-    tier_budgets:
-      T0:
-        max_residual_drift_ms: 10.0
-        sync_interval_s: 60.0
-      T1:
-        max_residual_drift_ms: 1.0
-        sync_interval_s: 10.0
-    acc_correlation_window_s: 30.0
-    min_acc_correlation: 0.7
+    mode: "markers_plus_acc"  # "markers_only" | "markers_plus_acc"
     # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub)
     wired_sync_gpio: 21
 
-  # Power budget (Architecture.md §55-62)
-  power_budget:
-    hub_battery_mah: 3000
-    target_lifetime_h: 24
-    reserve_mah: 300
-    tier_profiles:
-      T0:
-        avg_mw: 5.0
-        peak_mw: 10.0
-        max_duration_h: null
-      T1:
-        avg_mw: 50.0
-        peak_mw: 100.0
-        max_duration_h: 10.0
-      T2:
-        avg_mw: 100.0
-        peak_mw: 200.0
-        max_duration_h: 0.5
-
-  # Motion gate (Architecture.md §74)
+  # Motion gate - relaxed for MAX30102 wrist PPG validation
   motion_gate:
-    sqi_min: 0.3  # Lowered for MAX30102 wrist PPG validation
+    sqi_min: 0.3  # Lowered from 0.5 (hardware.yaml) for wrist PPG
     map_max: 0.5
     required_consecutive_clean: 2
 
-  # Validation parameters
+  # Validation parameters (bringup-specific)
   validation:
-    duration_s: 60  # Recording duration for Phase 1 gate
+    duration_s: 60
     phase1_gate: true
-    immobility_hold_s: 15  # Hold arm still for this long to trigger T0→T1
-    movement_threshold_g: 1.5  # Accel magnitude to trigger T1→T0
+    immobility_hold_s: 15
+    movement_threshold_g: 1.5
     xdf_output_dir: "data/processed/live_validation"
     xdf_filename_template: "synapse_live_{timestamp}.xdf"
-    ground_truth_ecg_path: null  # Optional: path to reference ECG for HR validation
+    ground_truth_ecg_path: null
 
   # Triage model (Edge AI)
   triage_model:
-    path: "models/triage_int8.tflite"  # INT8 quantized model from CI
+    path: "models/triage_int8.tflite"
     metadata_path: "models/triage_metadata.json"
-    input_shape: [1, 30, 9]  # [batch, window, features] — 30 samples @ 100Hz IMU = 300ms
+    input_shape: [1, 30, 9]
     output_classes: ["rest", "movement", "artifact"]
-    inference_interval_s: 0.3  # Run inference every 300ms
-
-  # Immobility detection (for T0->T1 promotion)
-  immobility:
-    window_s: 30.0
-    accel_threshold_g: 0.02
-    required_windows: 10
-
-  # Night window scheduler
-  night_window:
-    sleep_start_hour: 23
-    sleep_end_hour: 7
-    timezone: "UTC"
+    inference_interval_s: 0.3
 
   # Logging
   logging:
     level: "INFO"
     console: true
     file: "logs/hardware_bringup_{timestamp}.log"
-    lsl_markers: true  # Log sync markers to LSL marker stream
+    lsl_markers: true
