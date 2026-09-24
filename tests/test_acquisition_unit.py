@@ -1039,7 +1039,9 @@ class TestTierPromotionIntegration:
         controller.tick(clock)
 
         # Should demote due to power budget max duration exceeded
-        assert controller.state_machine.current_tier == Tier.T0, "Should demote when T1 max duration exceeded"
+        assert controller.state_machine.current_tier == Tier.T0, (
+            "Should demote when T1 max duration exceeded"
+        )
 
 
 if __name__ == "__main__":

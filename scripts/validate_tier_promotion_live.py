@@ -91,29 +91,33 @@ def _run_phase(
 
         # Snapshot motion gate state every 10s
         if step % 10 == 0:
-            report["motion_gate_snapshots"].append({
-                "t": test_clock.value,
-                "armed": controller.get_status()["motion_gate"]["armed"],
-                "consecutive_clean": controller.get_status()["motion_gate"]["consecutive_clean"],
-                "latest_sqi": controller.get_status()["motion_gate"]["latest_sqi"],
-                "latest_map": controller.get_status()["motion_gate"]["latest_map"],
-            })
+            report["motion_gate_snapshots"].append(
+                {
+                    "t": test_clock.value,
+                    "armed": controller.get_status()["motion_gate"]["armed"],
+                    "consecutive_clean": controller.get_status()["motion_gate"][
+                        "consecutive_clean"
+                    ],
+                    "latest_sqi": controller.get_status()["motion_gate"]["latest_sqi"],
+                    "latest_map": controller.get_status()["motion_gate"]["latest_map"],
+                }
+            )
 
         # Snapshot power budget every 30s
         if step % 30 == 0:
-            report["power_budget_snapshots"].append(
-                controller.power_budget.get_status().__dict__
-            )
+            report["power_budget_snapshots"].append(controller.power_budget.get_status().__dict__)
 
         if target_tier is not None and controller.state_machine.current_tier == target_tier:
             event_name = "T0->T1" if target_tier == Tier.T1 else "T1->T0"
             reason = "immobility_detected" if target_tier == Tier.T1 else "movement_detected"
-            report["transitions"].append({
-                "t": test_clock.value,
-                "event": event_name,
-                "reason": reason,
-                "metadata": controller.state_machine.transition_history[-1].metadata,
-            })
+            report["transitions"].append(
+                {
+                    "t": test_clock.value,
+                    "event": event_name,
+                    "reason": reason,
+                    "metadata": controller.state_machine.transition_history[-1].metadata,
+                }
+            )
             return True
 
         test_clock.advance(1.0)
@@ -145,22 +149,37 @@ def run_promotion_validation() -> dict[str, Any]:
 
     # --- Phase 1: Stationary + clean PPG (should arm motion gate, then promote) ---
     phase1_promoted = _run_phase(
-        controller, test_clock, report,
-        steps=400, accel_magnitude=0.01, ppg_sqi=0.8, motion_artifact_prob=0.1,
+        controller,
+        test_clock,
+        report,
+        steps=400,
+        accel_magnitude=0.01,
+        ppg_sqi=0.8,
+        motion_artifact_prob=0.1,
         target_tier=Tier.T1,
     )
 
     # --- Phase 2: Movement + dirty PPG (should demote T1->T0) ---
     phase2_demoted = _run_phase(
-        controller, test_clock, report,
-        steps=200, accel_magnitude=1.5, ppg_sqi=0.2, motion_artifact_prob=0.8,
+        controller,
+        test_clock,
+        report,
+        steps=200,
+        accel_magnitude=1.5,
+        ppg_sqi=0.2,
+        motion_artifact_prob=0.8,
         target_tier=Tier.T0,
     )
 
     # --- Phase 3: Stationary + clean again (should re-promote T0->T1) ---
     phase3_repromoted = _run_phase(
-        controller, test_clock, report,
-        steps=400, accel_magnitude=0.01, ppg_sqi=0.8, motion_artifact_prob=0.1,
+        controller,
+        test_clock,
+        report,
+        steps=400,
+        accel_magnitude=0.01,
+        ppg_sqi=0.8,
+        motion_artifact_prob=0.1,
         target_tier=Tier.T1,
     )
 
