@@ -51,6 +51,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 test_results.json
+tier_promotion_report.json
 
 # Jupyter
 .ipynb_checkpoints/
