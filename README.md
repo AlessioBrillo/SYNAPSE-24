@@ -1,6 +1,6 @@
 # SYNAPSE-24: 24/7 Multimodal Bio-Sensing Wearable Platform
 
-> **Phase 0: Software & Public Data Foundation**
+> **Phase 0: Software & Public Data Foundation — COMPLETE**
 >
 > Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
 
@@ -92,32 +92,106 @@ SYNAPSE-24/
 ├── src/
 │   └── synapse24/
 │       ├── __init__.py
+│       ├── acquisition/    # Tiered acquisition, state machine, clock sync
+│       │   ├── __init__.py
+│       │   ├── clock_sync.py       # Multi-pod clock synchronization
+│       │   ├── coordinator.py      # Sensor pod coordination
+│       │   ├── immobility.py       # IMU-based immobility detection
+│       │   ├── live_lsl_sync.py    # Live LSL stream synchronization
+│       │   ├── live_validator.py   # Live signal quality validation
+│       │   ├── night_window.py     # Sleep window scheduler
+│       │   ├── power_budget.py     # Energy budget management
+│       │   ├── state_machine.py    # T0/T1/T2 tier state machine
+│       │   ├── sync_marker_stream.py # Sync marker management
+│       │   └── tier1_coordinator.py # Tier 1 EEG coordination
+│       ├── config/         # Configuration loader
+│       │   ├── __init__.py
+│       │   └── loader.py   # Hardware config with env var expansion
+│       ├── edge_ai/        # Edge AI / TinyML pipeline
+│       │   ├── __init__.py
+│       │   ├── deployment.py       # TFLM deployment artifacts
+│       │   ├── model.py            # Model configuration
+│       │   ├── quantization.py     # INT8/Float16 quantization
+│       │   ├── training.py         # Model training
+│       │   ├── wesad_int8_closure.py # WESAD INT8 closure gate
+│       │   └── wesad_fusion_closure.py # WESAD fusion closure
+│       ├── hardware/       # Hardware abstraction layer
+│       │   ├── __init__.py
+│       │   ├── base.py           # Board adapter base classes
+│       │   ├── cerelog.py        # Cerelog ESP-EEG adapter
+│       │   ├── emotibit.py       # EmotiBit adapter
+│       │   ├── esp32_tier0.py    # ESP32-S3 Tier 0 adapter
+│       │   ├── inear_eeg.py      # In-ear EEG adapter
+│       │   ├── registry.py       # Device registry
+│       │   └── synthetic.py      # Synthetic board for CI/testing
 │       ├── ingestion/      # Public dataset pipelines
 │       │   ├── __init__.py
-│       │   ├── wesad.py    # WESAD download, processing, quality
-│       │   └── mitbih.py   # MIT-BIH download, R-peak validation
+│       │   ├── cerelog_eeg.py    # Cerelog EEG ingestion
+│       │   ├── deap.py           # DEAP dataset ingestion
+│       │   ├── mitbih.py         # MIT-BIH ingestion & R-peak validation
+│       │   ├── sleep_edf.py      # Sleep-EDF ingestion & sleep staging
+│       │   ├── wesad.py          # WESAD ingestion & processing
+│       │   └── wesad_surrogate.py # WESAD surrogate windows for fusion
 │       ├── signal_quality/ # SNR, SQI, HRV, artifact metrics
 │       │   ├── __init__.py
-│       │   ├── base.py     # QualityThresholds, SignalQualityMetrics
-│       │   ├── ecg.py      # R-peaks, HRV, validation
-│       │   ├── ppg.py      # SQI, perfusion index, MAP
-│       │   └── eeg.py      # Spectral flatness, alpha ratio
-│       └── utils/
+│       │   ├── base.py           # QualityThresholds, SignalQualityMetrics
+│       │   ├── ecg.py            # R-peaks, HRV, validation
+│       │   ├── eeg.py            # Spectral flatness, alpha ratio
+│       │   ├── fnirs.py          # fNIRS quality metrics
+│       │   └── ppg.py            # SQI, perfusion index, MAP
+│       └── utils/          # LSL/XDF utilities
 │           ├── __init__.py
-│           └── xdf.py      # LSL StreamInfo, XDF I/O
+│           ├── xdf.py            # XDF I/O, validation, round-trip
+│           └── xdf_correction.py # Timestamp drift correction
 ├── scripts/
-│   ├── ingest_datasets.py  # Main ingestion entry point
-│   └── validate_baseline.py# Baseline validation entry point
+│   ├── __init__.py
+│   ├── download_datasets.py      # Dataset downloader with verification
+│   ├── hardware_bringup.py       # Hardware bringup orchestration
+│   ├── ingest_datasets.py        # Main ingestion entry point
+│   ├── quantize_and_deploy.py    # Quantization & deployment
+│   ├── reproduce_wesad_fusion.py # WESAD fusion reproduction
+│   ├── train_triage.py           # Triage model training
+│   ├── validate_baseline.py      # Baseline validation entry point
+│   ├── validate_live_sync.py     # Live sync validation
+│   ├── validate_live_tier0.py    # Live Tier 0 validation
+│   ├── validate_phase0_exit.py   # Phase 0 exit gate
+│   └── validate_phase1_entry.py  # Phase 1 entry gate (hardware bringup)
 ├── tests/
-│   ├── test_signal_quality.py  # Unit tests for quality metrics
-│   └── test_ingestion.py       # Pipeline tests (synthetic data)
+│   ├── fixtures/                 # Test fixtures & synthetic data
+│   ├── test_acquisition_unit.py     # Unit tests for acquisition
+│   ├── test_canonical_wesad_windows.py # WESAD window tests
+│   ├── test_cerelog_eeg.py          # Cerelog EEG tests
+│   ├── test_clock_sync.py           # Clock sync tests
+│   ├── test_dataset_integrity.py    # Dataset integrity checks
+│   ├── test_edge_ai.py              # Edge AI tests (requires TensorFlow)
+│   ├── test_inear_eeg.py            # In-ear EEG tests
+│   ├── test_ingestion.py            # Ingestion pipeline tests
+│   ├── test_lsl_live_sync.py        # Live LSL sync tests
+│   ├── test_mitbih_closure_gate.py  # MIT-BIH closure gate
+│   ├── test_motion_gating_blocks_tier1.py # Motion gating tests
+│   ├── test_per_tier_broadcast.py   # Per-tier sync broadcast tests
+│   ├── test_phase0_exit_gate.py     # Phase 0 exit gate tests
+│   ├── test_phase0_real_data_closure.py # Real data closure tests
+│   ├── test_phase1_dry_run.py       # Phase 1 dry-run tests
+│   ├── test_power_budget_physics.py # Power budget physics tests
+│   ├── test_signal_quality.py       # Signal quality unit tests
+│   ├── test_sleep_edf_real_data_closure.py # Sleep-EDF closure tests
+│   ├── test_tier_promotion_cycle.py # Tier promotion cycle tests
+│   ├── test_tier_durations.py       # Tier duration tracking tests
+│   ├── test_tier1_xdf_drift_correction.py # Tier 1 XDF drift correction
+│   ├── test_wesad_fusion_closure.py # WESAD fusion closure tests
+│   ├── test_wesad_int8_closure.py   # WESAD INT8 closure tests
+│   └── test_xdf_correction.py       # XDF timestamp correction tests
+├── config/
+│   ├── hardware.yaml            # Canonical hardware configuration
+│   └── hardware_bringup.yaml    # Bringup-specific overrides
 ├── .github/
 │   └── workflows/
-│       └── ci.yml          # CI/CD: lint, typecheck, test, validate
+│       └── ci.yml               # CI/CD: lint, typecheck, test, validate
 └── data/
-    ├── wesad/              # Raw WESAD (gitignored)
-    ├── mitbih/             # Raw MIT-BIH (gitignored)
-    └── processed/          # Output XDF + JSON (gitignored)
+    ├── wesad/                   # Raw WESAD (gitignored)
+    ├── mitbih/                  # Raw MIT-BIH (gitignored)
+    └── processed/               # Output XDF + JSON (gitignored)
 ```
 
 ## Signal Quality Framework
@@ -136,6 +210,12 @@ SYNAPSE-24/
 - **Spectral Flatness** (Wiener entropy): tonal vs. noisy spectrum
 - **Alpha Band Ratio**: alpha power / total power (eyes-closed target >0.3)
 - **Band Powers**: delta, theta, alpha, beta, gamma
+
+### fNIRS Metrics
+- **CV DC**: coefficient of variation of DC component
+- **SNR**: signal-to-noise ratio in dB
+- **Motion Correlation**: correlation with accelerometer
+- **Short Channel Correlation**: superficial signal regression quality
 
 ## LSL / XDF Integration
 
@@ -158,6 +238,18 @@ from synapse24.utils import validate_xdf
 summary = validate_xdf(Path("data/processed/S2_wesad.xdf"))
 ```
 
+## Tiered Acquisition (Architecture.md §33-43)
+
+| Tier | Modalities | When | Power | Purpose |
+|------|------------|------|-------|---------|
+| **T0** | PPG, IMU, Temp, 1-2ch EEG (in-ear) | Continuous H24 | ~5 mW avg | Always-on monitoring |
+| **T1** | EEG 6-16ch, fNIRS, ECG rest | Immobility / Sleep | ~50 mW avg | High-density neuro |
+| **T2** | Cognitive tasks, calibration | User-initiated | ~100 mW burst | Labeled data collection |
+
+**Motion Gate (Architecture.md §74)**: T0→T1 promotion requires measured-clean PPG (SQI ≥0.5, MAP ≤0.5) + immobility + power budget.
+
+**Clock Sync (Architecture.md §92)**: Multi-pod synchronization via LSL markers + accelerometer correlation. T0 budget: ≤10ms residual drift. T1 budget: ≤1ms.
+
 ## Development
 
 ### Code Quality
@@ -170,7 +262,7 @@ uv run ruff format .
 uv run ruff check .
 
 # Type check
-uv run mypy --strict src/
+uv run mypy --package synapse24 --config-file pyproject.toml
 
 # Test with coverage
 uv run pytest --cov=src --cov-fail-under=80
@@ -183,29 +275,39 @@ uv run pre-commit install
 uv run pre-commit run --all-files
 ```
 
-## Configuration
+### Configuration
 
-All configuration via environment variables or `config.yaml`:
+All configuration via environment variables or YAML files in `config/`:
 
-```yaml
-data_dir: "data"
-output_dir: "data/processed"
-wesad:
-  subjects: ["S2", "S3", ...]  # default: all 15
-mitbih:
-  records: ["100", "101", ...]  # default: all 48
-quality:
-  r_peak_tolerance_ms: 50
-  ppg_sqi_min: 0.7
-  eeg_flatness_max: 0.5
+- `config/hardware.yaml` — Canonical hardware configuration (pods, sync, power, motion, immobility, night window)
+- `config/hardware_bringup.yaml` — Bringup-specific overrides (firmware, BLE, validation, triage model, logging)
+
+Environment variables for secrets (BLE MACs, serial ports):
+```bash
+export SYNAPSE_FOREARM_BLE="aa:bb:cc:dd:ee:ff"
+export SYNAPSE_FOREARM_SERIAL="COM3"
+export SYNAPSE_HEAD_BLE="aa:bb:cc:dd:ee:ff"
+export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 ```
+
+## Phase 0 Exit Criteria ✅
+
+- [x] WESAD 3-class stress classification ≥80% accuracy (GroupKFold CV)
+- [x] MIT-BIH R-peak Sensitivity ≥99.6%, PPV ≥99.6%
+- [x] RMSSD MAE <5 ms
+- [x] Sleep-EDF sleep staging Cohen's κ per-subject floor
+- [x] Multi-pod LSL/XDF zero-drop round-trip verification
+- [x] Tier 0 sync ≤10ms residual drift, Tier 1 sync ≤1ms
+- [x] Edge AI triage model INT8 quantization with measured accuracy drop
+- [x] Power budget physics validated for 24h T0 + 10h T1
+- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass
 
 ## Roadmap Alignment
 
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
-| **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | ✅ **In Progress** |
-| Phase 1 | Months 2-5 | €90 ECG+PPG+IMU rig, LSL sync | ⏳ Planned |
+| **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | ✅ **COMPLETE** |
+| Phase 1 | Months 2-5 | €90 ECG+PPG+IMU rig, LSL sync | 🔄 **Ready to Start** |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |
 
@@ -224,5 +326,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-**SYNAPSE-24** — Maximizing physiological data quality, quantity, and diversity for pattern recognition.#   C I   T r i g g e r  
- 
+**SYNAPSE-24** — Maximizing physiological data quality, quantity, and diversity for pattern recognition.
