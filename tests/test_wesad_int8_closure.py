@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from synapse24.edge_ai.wesad_int8_closure import build_closure_matrix, run_wesad_int8_closure
+from synapse24.ingestion.wesad_surrogate import generate_surrogate_subject_results
 from tests.constants import (
     SURROGATE_INT8_N_FOLDS,
     SURROGATE_N_SUBJECTS,
@@ -31,9 +33,6 @@ from tests.constants import (
     WESAD_INT8_MAX_ACCURACY_DROP_PP,
     WESAD_TARGET_ACCURACY,
 )
-
-from synapse24.edge_ai.wesad_int8_closure import build_closure_matrix, run_wesad_int8_closure
-from synapse24.ingestion.wesad_surrogate import generate_surrogate_subject_results
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 WESAD_DIR = DATA_DIR / "wesad" / "WESAD"

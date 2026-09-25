@@ -619,7 +619,6 @@ def run_xdf_validation_summary(output_dir: Path) -> dict:
 
 def _parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-
     parser = argparse.ArgumentParser(description="Validate against published baselines")
     parser.add_argument(
         "--data-dir",
