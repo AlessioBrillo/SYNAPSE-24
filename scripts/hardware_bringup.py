@@ -20,7 +20,6 @@ import signal
 import struct
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,10 +39,7 @@ from synapse24.acquisition.state_machine import (
     AcquisitionController,
     MotionGateConfig,
     Tier,
-    TierTransition,
 )
-from synapse24.signal_quality import QualityThresholds
-from synapse24.signal_quality import Tier as QualityTier
 from synapse24.utils import verify_xdf_roundtrip
 
 try:

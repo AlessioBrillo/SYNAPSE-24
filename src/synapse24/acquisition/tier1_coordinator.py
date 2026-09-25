@@ -18,29 +18,25 @@ from __future__ import annotations
 import time
 import types
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 
 from synapse24.acquisition.clock_sync import (
     MultiPodClockSync,
     SyncConfig,
     SyncMarker,
-    TierSyncBudget,
 )
 from synapse24.acquisition.state_machine import (
     AcquisitionController,
     MotionGateConfig,
-    TierTransition,
     TransitionEvent,
 )
 from synapse24.hardware import BoardConfig, BoardManager, DeviceRegistry, SensorPodConfig
 from synapse24.hardware.inear_eeg import InEarEEGConfig, InEarEEGFirmware
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
-from synapse24.signal_quality import Tier
 from synapse24.signal_quality import Tier as QualityTier
 
 
@@ -346,7 +342,7 @@ class Tier1Coordinator:
                     state_t0.is_streaming = True
                     state_t0.last_data_time = time.time()
                     results[pod_id] = True
-                except Exception as e:
+                except Exception:
                     state_t0.error_count += 1
                     results[pod_id] = False
 

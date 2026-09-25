@@ -9,7 +9,6 @@ Outputs Keras model ready for TFLM INT8 quantization.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -29,12 +28,6 @@ except ImportError:
     callbacks = None
 
 from synapse24.edge_ai.model import EdgeModel, ModelConfig, ModelType, TargetPlatform
-from synapse24.edge_ai.training import (
-    EdgeImpulseTrainer,
-    TrainingConfig,
-    create_wesad_training_data,
-)
-from synapse24.ingestion import extract_native_rate_fusion_windows
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +355,7 @@ def main():
         )
         logger.info("Training completed successfully!")
         return 0
-    except Exception as e:
+    except Exception:
         logger.exception("Training failed")
         return 1
 

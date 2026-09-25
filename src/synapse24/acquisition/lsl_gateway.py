@@ -20,7 +20,7 @@ import types
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -29,11 +29,8 @@ from synapse24.acquisition.clock_sync import (
     MultiPodClockSync,
     SyncConfig,
     SyncMarker,
-    TierSyncBudget,
 )
 from synapse24.acquisition.state_machine import (
-    AcquisitionController,
-    TierTransition,
     TransitionEvent,
 )
 from synapse24.signal_quality import Tier
@@ -231,7 +228,7 @@ class LSLGateway:
 
     def create_marker_outlet(self) -> StreamOutlet:
         """Create marker outlet for sync markers and events."""
-        from pylsl import StreamInfo, StreamOutlet
+        from pylsl import StreamOutlet
 
         marker_config = StreamConfig(
             name=self.config.marker_stream_name,

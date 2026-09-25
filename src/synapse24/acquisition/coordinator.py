@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import time
 import types
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
-from synapse24.acquisition.state_machine import TierTransition, TransitionEvent
-from synapse24.hardware import BoardConfig, BoardManager, DeviceRegistry, SensorPodConfig
-from synapse24.signal_quality import Tier
+from synapse24.acquisition.state_machine import TransitionEvent
+from synapse24.hardware import BoardManager, DeviceRegistry, SensorPodConfig
 
 
 @dataclass
@@ -65,7 +64,7 @@ class SensorPodCoordinator:
                 state.manager = manager
                 state.error_count = 0
                 results[pod_id] = True
-            except Exception as e:
+            except Exception:
                 state.error_count += 1
                 results[pod_id] = False
         return results

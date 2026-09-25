@@ -825,7 +825,7 @@ def ingest_sleep_edf(
         try:
             result = process_sleep_edf_subject(psg_file, data_dir, output_dir, tier)
             all_results.append(result)
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to process {psg_file}")
 
     # Save summary

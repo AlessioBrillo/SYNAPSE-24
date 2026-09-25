@@ -37,7 +37,6 @@ from synapse24.edge_ai.model import EdgeModel, ModelConfig, ModelType, TargetPla
 from synapse24.edge_ai.quantization import (
     QuantizationConfig,
     QuantizationResult,
-    RepresentativeDatasetGenerator,
     quantize_model,
     save_quantization_artifacts,
 )
@@ -92,7 +91,6 @@ def generate_representative_dataset(
 
     # Try to load real WESAD data for representative dataset
     try:
-        from synapse24.ingestion import extract_native_rate_fusion_windows
         from synapse24.ingestion.wesad import load_wesad_subject
 
         wesad_results = []
@@ -332,7 +330,7 @@ def main():
             logger.error(f"  {note}")
         return 1
 
-    except Exception as e:
+    except Exception:
         logger.exception("Quantization/deployment failed")
         return 1
 

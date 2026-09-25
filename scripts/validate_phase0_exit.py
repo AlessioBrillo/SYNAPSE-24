@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -196,7 +196,7 @@ def run_gate_tests(gate_name: str, test_list: list[str]) -> tuple[bool, int, int
         return overall_passed, passed_count, failed_count, skipped_count
     except subprocess.TimeoutExpired:
         return False, 0, 1, 0
-    except Exception as e:
+    except Exception:
         return False, 0, 1, 0
 
 

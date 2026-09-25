@@ -16,10 +16,8 @@ from synapse24.acquisition import (
     AcquisitionController,
     ImmobilityDetector,
     MotionGateConfig,
-    NightWindowScheduler,
     PowerBudgetManager,
     Tier,
-    TierStateMachine,
 )
 from synapse24.hardware import SyntheticBoardAdapter
 

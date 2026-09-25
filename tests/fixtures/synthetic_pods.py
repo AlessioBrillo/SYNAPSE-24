@@ -399,7 +399,7 @@ def create_lsl_streams_from_synthetic(
 
     Returns list of stream dicts compatible with synapse24.utils.write_xdf
     """
-    from synapse24.utils import create_stream_info_from_dict, generate_synthetic_timestamps
+    from synapse24.utils import create_stream_info_from_dict
 
     streams = []
     pods = synthetic_data["pods"]

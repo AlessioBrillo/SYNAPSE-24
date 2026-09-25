@@ -24,8 +24,6 @@ import sys
 import uuid
 from pathlib import Path
 
-import numpy as np
-
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -34,7 +32,6 @@ from synapse24.acquisition.live_lsl_sync import (
     LSLUnavailableError,
     run_live_2pod_sync,
 )
-from synapse24.signal_quality import Tier
 
 
 def _build_config(args: argparse.Namespace) -> LiveTwoPodConfig:

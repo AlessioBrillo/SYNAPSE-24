@@ -16,22 +16,38 @@ misreported as real physiology (surrogate flag required end-to-end).
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+
+import pytest
+
+from tests.constants import (
+    MIN_SUBJECTS_FOR_CLOSURE,
+    SURROGATE_FUSION_N_FOLDS,
+    SURROGATE_N_SUBJECTS,
+    SURROGATE_SEED,
+    SURROGATE_WINDOWS_PER_CLASS,
+    SURROGATE_WINDOWS_PER_SUBJECT,
+    WESAD_TARGET_ACCURACY,
+    XDF_ACC_SAMPLES_32HZ_10S,
+    XDF_DEFAULT_N_SAMPLES,
+    XDF_PPG_SAMPLES_64HZ_10S,
+)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 WESAD_DIR = DATA_DIR / "wesad" / "WESAD"
 
 try:
     from synapse24.ingestion.wesad_surrogate import (
-        SURROGATE_SEED,
+        SURROGATE_SEED as _SURROGATE_SEED,
+    )
+    from synapse24.ingestion.wesad_surrogate import (
         generate_surrogate_subject_results,
     )
 
     _SURROGATE_IMPORTABLE = True
 except ImportError:
     _SURROGATE_IMPORTABLE = False
-
-import pytest
 
 requires_real_wesad = pytest.mark.skipif(
     not (WESAD_DIR.exists() and any(WESAD_DIR.glob("S*/S*.pkl"))),
@@ -44,16 +60,18 @@ class TestSurrogateFusionContract:
 
     def test_surrogate_module_importable(self) -> None:
         assert _SURROGATE_IMPORTABLE, "wesad_surrogate module missing (RED)"
-        assert SURROGATE_SEED == 42
+        assert _SURROGATE_SEED == SURROGATE_SEED
 
     def test_surrogate_results_carries_fusion_windows(self) -> None:
         assert _SURROGATE_IMPORTABLE
-        results = generate_surrogate_subject_results(n_subjects=6, windows_per_class=4)
-        assert len(results) == 6
+        results = generate_surrogate_subject_results(
+            n_subjects=SURROGATE_N_SUBJECTS, windows_per_class=SURROGATE_WINDOWS_PER_CLASS
+        )
+        assert len(results) == SURROGATE_N_SUBJECTS
         for r in results:
             assert r.get("surrogate") is True
             windows = r.get("fusion_windows", [])
-            assert len(windows) == 12  # 3 classes x 4 windows
+            assert len(windows) == SURROGATE_WINDOWS_PER_SUBJECT
             labels = {w["label_name"] for w in windows}
             assert labels == {"baseline", "stress", "amusement"}
 
@@ -73,38 +91,37 @@ class TestSurrogateFusionContract:
 class TestSurrogateClosureGate:
     """Pipeline proof on surrogate: GroupKFold 3-class ≥80%, windows-sourced."""
 
-    def test_groupkfold_3class_ge_80_on_surrogate(self) -> None:
-        assert _SURROGATE_IMPORTABLE
-        import importlib.util
-
+    def _load_validation_module(self, module_name: str):
         script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
-        spec = importlib.util.spec_from_file_location("validate_baseline", script_path)
+        spec = importlib.util.spec_from_file_location(module_name, script_path)
         assert spec is not None
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        return module
 
-        results = generate_surrogate_subject_results(n_subjects=6, windows_per_class=6)
+    def test_groupkfold_3class_ge_80_on_surrogate(self) -> None:
+        assert _SURROGATE_IMPORTABLE
+        module = self._load_validation_module("validate_baseline")
+
+        results = generate_surrogate_subject_results(
+            n_subjects=SURROGATE_N_SUBJECTS, windows_per_class=SURROGATE_WINDOWS_PER_CLASS
+        )
         out = module.validate_wesad_stress_classification(results)
         assert out["feature_source"] == "fusion_windows_60s"
-        assert out["n_samples"] == 6 * 18  # 6 subjects x 18 windows
-        assert out["n_subjects"] == 6
-        assert len(out["per_fold_scores"]) == 5
-        assert out["accuracy"] >= 0.80
+        assert out["n_samples"] == SURROGATE_N_SUBJECTS * SURROGATE_WINDOWS_PER_SUBJECT
+        assert out["n_subjects"] == SURROGATE_N_SUBJECTS
+        assert len(out["per_fold_scores"]) == SURROGATE_FUSION_N_FOLDS
+        assert out["accuracy"] >= WESAD_TARGET_ACCURACY
         assert out.get("target_met") is True
 
     def test_surrogate_flag_survives_validation(self) -> None:
         assert _SURROGATE_IMPORTABLE
-        import importlib.util
+        module = self._load_validation_module("validate_baseline_sf")
 
-        script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
-        spec = importlib.util.spec_from_file_location("validate_baseline_sf", script_path)
-        assert spec is not None
-        assert spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        results = generate_surrogate_subject_results(n_subjects=6, windows_per_class=6)
+        results = generate_surrogate_subject_results(
+            n_subjects=SURROGATE_N_SUBJECTS, windows_per_class=SURROGATE_WINDOWS_PER_CLASS
+        )
         out = module.validate_wesad_stress_classification(results)
         assert out.get("surrogate") is True
 
@@ -122,12 +139,11 @@ class TestSurrogateXdfProof:
         assert out.read_bytes()[:4] == b"XDF:"
         summary = validate_xdf(out)
         assert summary["validation"]["all_streams_valid"]
-        # ECG 1000 + PPG 640 + ACC 320 samples must all survive the write.
         recovered = {s["name"]: int(s["n_samples"]) for s in summary["streams"]}
         assert sum("SURROGATE" in name for name in recovered) == 3
-        assert recovered["SYNAPSE_ECG_SURROGATE_S2"] == 1000
-        assert recovered["SYNAPSE_PPG_SURROGATE_S2"] == 640
-        assert recovered["SYNAPSE_ACC_SURROGATE_S2"] == 320
+        assert recovered["SYNAPSE_ECG_SURROGATE_S2"] == XDF_DEFAULT_N_SAMPLES
+        assert recovered["SYNAPSE_PPG_SURROGATE_S2"] == XDF_PPG_SAMPLES_64HZ_10S
+        assert recovered["SYNAPSE_ACC_SURROGATE_S2"] == XDF_ACC_SAMPLES_32HZ_10S
 
 
 @pytest.mark.baseline
@@ -136,16 +152,9 @@ class TestRealWesadClosure:
 
     @requires_real_wesad
     def test_real_wesad_3class_gate(self) -> None:
-        import importlib.util
-
         from synapse24.ingestion.wesad import WESAD_SUBJECTS, extract_wesad_window_features
 
-        script_path = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
-        spec = importlib.util.spec_from_file_location("validate_baseline_real", script_path)
-        assert spec is not None
-        assert spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = self._load_validation_module("validate_baseline_real")
 
         from synapse24.ingestion.wesad import process_wesad_subject
 
@@ -158,12 +167,13 @@ class TestRealWesadClosure:
                 r = process_wesad_subject(sid, WESAD_DIR, WESAD_DIR / ".." / "processed")
             except Exception:
                 continue
-            # Only real (non-surrogate) results count toward this gate.
             if r.get("surrogate"):
                 continue
             if extract_wesad_window_features(r) is not None:
                 results.append(r)
-        assert len(results) >= 5, "Need >=5 real subjects for a GroupKFold gate"
+        assert len(results) >= MIN_SUBJECTS_FOR_CLOSURE, (
+            f"Need >={MIN_SUBJECTS_FOR_CLOSURE} real subjects for a GroupKFold gate"
+        )
         out = module.validate_wesad_stress_classification(results)
         assert out["feature_source"] == "fusion_windows_60s"
         assert out.get("surrogate", False) is False

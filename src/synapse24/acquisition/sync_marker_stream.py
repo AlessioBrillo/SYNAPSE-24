@@ -6,15 +6,12 @@ for hardware sync marker broadcast.
 
 from __future__ import annotations
 
-import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any
 
-import numpy as np
-import numpy.typing as npt
 from pylsl import StreamInfo, StreamInlet, StreamOutlet, local_clock, resolve_byprop
 
 from synapse24.utils.xdf import StreamConfig, create_stream_info

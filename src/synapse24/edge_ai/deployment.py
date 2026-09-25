@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from synapse24.edge_ai.model import EdgeModel, ModelConfig, TargetPlatform
+from synapse24.edge_ai.model import EdgeModel, TargetPlatform
 from synapse24.edge_ai.quantization import QuantizationResult, save_quantization_artifacts
 
 

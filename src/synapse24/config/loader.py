@@ -65,23 +65,23 @@ def load_hardware_config(bringup: bool = False) -> dict[str, Any]:
     # Load base hardware config
     base_path = config_dir / "hardware.yaml"
     with base_path.open("r", encoding="utf-8") as f:
-        base_config = cast(dict[str, Any], yaml.safe_load(f))
+        base_config = cast("dict[str, Any]", yaml.safe_load(f))
 
     if not bringup:
-        return cast(dict[str, Any], _expand_env_vars(base_config))
+        return cast("dict[str, Any]", _expand_env_vars(base_config))
 
     # Load bringup overrides
     bringup_path = config_dir / "hardware_bringup.yaml"
     if not bringup_path.exists():
-        return cast(dict[str, Any], _expand_env_vars(_wrap_base_for_bringup(base_config)))
+        return cast("dict[str, Any]", _expand_env_vars(_wrap_base_for_bringup(base_config)))
 
     with bringup_path.open("r", encoding="utf-8") as f:
-        bringup_config = cast(dict[str, Any], yaml.safe_load(f))
+        bringup_config = cast("dict[str, Any]", yaml.safe_load(f))
 
     # Wrap base config under 'bringup' key, then merge bringup overrides
     wrapped_base = _wrap_base_for_bringup(base_config)
     merged = _deep_merge(wrapped_base, bringup_config)
-    return cast(dict[str, Any], _expand_env_vars(merged))
+    return cast("dict[str, Any]", _expand_env_vars(merged))
 
 
 def load_hardware_config_from_path(
@@ -90,19 +90,19 @@ def load_hardware_config_from_path(
     """Load hardware config from explicit paths (for scripts)."""
     base_path = Path(base_path)
     with base_path.open("r", encoding="utf-8") as f:
-        base_config = cast(dict[str, Any], yaml.safe_load(f))
+        base_config = cast("dict[str, Any]", yaml.safe_load(f))
 
     if bringup_path is None:
-        return cast(dict[str, Any], _expand_env_vars(base_config))
+        return cast("dict[str, Any]", _expand_env_vars(base_config))
 
     bringup_path = Path(bringup_path)
     if not bringup_path.exists():
-        return cast(dict[str, Any], _expand_env_vars(_wrap_base_for_bringup(base_config)))
+        return cast("dict[str, Any]", _expand_env_vars(_wrap_base_for_bringup(base_config)))
 
     with bringup_path.open("r", encoding="utf-8") as f:
-        bringup_config = cast(dict[str, Any], yaml.safe_load(f))
+        bringup_config = cast("dict[str, Any]", yaml.safe_load(f))
 
     # Wrap base config under 'bringup' key, then merge bringup overrides
     wrapped_base = _wrap_base_for_bringup(base_config)
     merged = _deep_merge(wrapped_base, bringup_config)
-    return cast(dict[str, Any], _expand_env_vars(merged))
+    return cast("dict[str, Any]", _expand_env_vars(merged))

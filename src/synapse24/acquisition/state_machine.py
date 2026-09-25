@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Any
 from synapse24.signal_quality import Tier
 
 if TYPE_CHECKING:
+    from synapse24.acquisition.coordinator import SensorPodCoordinator
     from synapse24.acquisition.immobility import ImmobilityDetector
     from synapse24.acquisition.night_window import NightWindowScheduler
     from synapse24.acquisition.power_budget import PowerBudgetManager
-    from synapse24.acquisition.coordinator import SensorPodCoordinator
 
 logger = logging.getLogger(__name__)
 

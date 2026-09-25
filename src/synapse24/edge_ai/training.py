@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -22,7 +17,7 @@ except ImportError:
     keras = None
     layers = None
 
-from synapse24.edge_ai.model import EdgeModel, ModelConfig, ModelType, TargetPlatform
+from synapse24.edge_ai.model import EdgeModel, ModelConfig
 
 
 @dataclass

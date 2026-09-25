@@ -17,6 +17,7 @@ Architecture Decision (Principal Architect):
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -24,8 +25,7 @@ from typing import Any
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import cohen_kappa_score
-from sklearn.model_selection import GroupKFold, StratifiedKFold, cross_val_score
+from sklearn.model_selection import GroupKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -619,7 +619,6 @@ def run_xdf_validation_summary(output_dir: Path) -> dict:
 
 def _parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    import argparse
 
     parser = argparse.ArgumentParser(description="Validate against published baselines")
     parser.add_argument(

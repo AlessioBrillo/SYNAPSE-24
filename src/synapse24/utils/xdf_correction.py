@@ -7,15 +7,12 @@ preserving all stream metadata, channel formats, and chunk structure.
 from __future__ import annotations
 
 import struct
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
 import numpy.typing as npt
-import pyxdf
-from pylsl import StreamInfo
 
 from synapse24.acquisition.clock_sync import DriftEstimate
 from synapse24.utils.xdf import (
@@ -24,12 +21,9 @@ from synapse24.utils.xdf import (
     XDF_FILEHEADER_XML,
     XDF_MAGIC,
     StreamConfig,
-    _channel_format_from_xml,
-    _write_varlen_int,
     _write_xdf_chunk,
     create_stream_info,
     validate_xdf,
-    verify_xdf_roundtrip,
 )
 
 

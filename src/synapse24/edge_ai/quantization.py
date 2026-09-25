@@ -238,8 +238,6 @@ def quantize_model(
 def _get_ops_used(tflite_model: bytes) -> list[str]:
     """Extract unique ops used in TFLite model."""
     try:
-        import flatbuffers
-
         tf, _ = _get_tf()
         from tensorflow.lite.schema import Model as TFLiteModel
 

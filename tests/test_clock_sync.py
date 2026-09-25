@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
 
 import numpy as np
-import numpy.typing as npt
 import pytest
 
 from synapse24.acquisition.clock_sync import (

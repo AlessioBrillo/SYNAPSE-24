@@ -20,7 +20,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from synapse24.acquisition.clock_sync import (
-    DriftEstimate,
     MultiPodClockSync,
     SyncConfig,
     TierSyncBudget,

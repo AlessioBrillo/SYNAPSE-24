@@ -82,7 +82,7 @@ def main() -> None:
             logger.info("XDF: %s", result["xdf_path"])
         if result["json_path"]:
             logger.info("JSON: %s", result["json_path"])
-    except Exception as e:
+    except Exception:
         logger.exception("Validation failed")
         raise
 
@@ -106,7 +106,7 @@ def list_lsl_streams() -> None:
                 )
         else:
             logger.info("No LSL streams found on network.")
-    except Exception as e:
+    except Exception:
         logger.exception("Error resolving streams")
 
 

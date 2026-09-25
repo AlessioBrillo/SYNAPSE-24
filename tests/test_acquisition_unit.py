@@ -1,8 +1,6 @@
 """Unit tests for acquisition module - targeting 80%+ coverage."""
 
-import tempfile
 import time
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -16,12 +14,9 @@ from synapse24.acquisition import (
     GatewayConfig,
     ImmobilityDetector,
     LiveTwoPodConfig,
-    LSLGateway,
-    LSLUnavailableError,
     MotionGateConfig,
     MultiPodClockSync,
     NightWindowScheduler,
-    PodStreamConfig,
     PowerBudgetManager,
     PowerProfile,
     SensorPodCoordinator,
@@ -29,10 +24,8 @@ from synapse24.acquisition import (
     SyncMarker,
     SyncMarkerManager,
     SyncMarkerRecorder,
-    SyncStreamConfig,
     Tier,
     Tier0PodState,
-    Tier1Coordinator,
     Tier1PodState,
     TierStateMachine,
     TierSyncBudget,
@@ -43,7 +36,6 @@ from synapse24.acquisition import (
     hours_for_charge,
     mah_for_power,
     quantify_residual_drift,
-    run_live_2pod_sync,
 )
 
 

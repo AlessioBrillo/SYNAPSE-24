@@ -6,7 +6,6 @@ Tests the single micro-task that unblocks Phase 1 hardware procurement.
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -635,17 +634,15 @@ class TestFullSyntheticPipeline:
         """Complete pipeline: synthetic 3-pod → XDF → fusion windows → quality → train → quantize → gate."""
         import tempfile
 
-        import tensorflow as tf
         from tensorflow import keras
         from tensorflow.keras import layers
 
         from synapse24.acquisition.clock_sync import (
             MultiPodClockSync,
             SyncConfig,
-            TierSyncBudget,
         )
         from synapse24.edge_ai.deployment import check_phase0_exit_gate
-        from synapse24.edge_ai.model import ModelConfig, ModelType, TargetPlatform
+        from synapse24.edge_ai.model import ModelConfig, TargetPlatform
         from synapse24.edge_ai.quantization import (
             QuantizationConfig,
             RepresentativeDatasetGenerator,

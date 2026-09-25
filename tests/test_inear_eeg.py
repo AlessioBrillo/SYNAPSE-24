@@ -9,9 +9,6 @@ Validates:
 
 from __future__ import annotations
 
-import time
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -365,8 +362,6 @@ class TestInEarEndToEnd:
 
         When head pod activates, in-ear continues as backup/reference.
         """
-        from synapse24.signal_quality import Tier
-
         # In-ear is Tier 0
         inear_config = InEarEEGConfig()
         assert inear_config.eeg_channels >= 1

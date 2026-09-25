@@ -13,14 +13,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from synapse24.acquisition.clock_sync import Tier, TierSyncBudget
+from synapse24.acquisition.clock_sync import TierSyncBudget
 from synapse24.ingestion import (
     CERELOG_8CH_10_20,
     CerelogEEGConfig,
     CerelogEEGManager,
     ImpedanceResult,
     create_cerelog_eeg_config,
-    ingest_cerelog_eeg,
 )
 from synapse24.signal_quality import QualityThresholds, SignalQualityMetrics
 from synapse24.signal_quality import Tier as QualityTier

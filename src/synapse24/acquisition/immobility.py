@@ -7,8 +7,6 @@ from typing import Any
 
 import numpy as np
 
-from synapse24.signal_quality import Tier
-
 
 class ImmobilityDetector:
     """Detects sustained immobility from accelerometer data.

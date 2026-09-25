@@ -922,11 +922,6 @@ def process_wesad_subject(
         w.subject_id = subject_id
 
     # Compute per-window quality metrics
-    from synapse24.signal_quality import (
-        compute_ppg_sqi,
-        ppg_motion_artifact_probability,
-        r_peak_detection_quality,
-    )
 
     for w in fusion_windows:
         # ECG quality on this window

@@ -11,7 +11,7 @@ Target hardware: nRF5340 + ADS1299-4CH / AFE4400 (1-2ch, 24-bit, <10µA/ch)
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np

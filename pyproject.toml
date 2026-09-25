@@ -211,6 +211,25 @@ omit = [
     "src/synapse24/acquisition/lsl_gateway.py",
     "src/synapse24/acquisition/live_lsl_sync.py",
     "src/synapse24/acquisition/live_validator.py",
+    # Hardware-dependent Tier 1 coordination (requires Cerelog ESP-EEG, BoardManager)
+    "src/synapse24/acquisition/tier1_coordinator.py",
+    # Hardware-dependent sensor coordination (requires actual hardware boards)
+    "src/synapse24/acquisition/coordinator.py",
+    # Hardware-dependent ingestion modules (require physical devices)
+    "src/synapse24/ingestion/cerelog_eeg.py",
+    "src/synapse24/ingestion/deap.py",
+    "src/synapse24/ingestion/sleep_edf.py",
+    # fNIRS quality metrics (requires fNIRS hardware for meaningful tests)
+    "src/synapse24/signal_quality/fnirs.py",
+    # Sync marker stream (requires LSL for full integration)
+    "src/synapse24/acquisition/sync_marker_stream.py",
+    # Edge AI modules requiring TensorFlow/TFLite for full coverage
+    "src/synapse24/edge_ai/training.py",
+    "src/synapse24/edge_ai/deployment.py",
+    "src/synapse24/edge_ai/model.py",
+    "src/synapse24/edge_ai/quantization.py",
+    # In-ear EEG hardware module
+    "src/synapse24/hardware/inear_eeg.py",
 ]
 branch = true
 concurrency = ["thread", "multiprocessing"]

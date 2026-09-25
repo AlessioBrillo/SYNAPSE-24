@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -19,7 +19,6 @@ from synapse24.ingestion import (
     ingest_mitbih,
     ingest_wesad,
     load_mitbih_record,
-    load_wesad_subject,
     process_mitbih_record,
     process_wesad_subject,
     resample_labels,

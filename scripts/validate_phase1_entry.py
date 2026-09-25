@@ -18,16 +18,16 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import struct
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
 from synapse24.config.loader import load_hardware_config_from_path
 
 # Add src to path
@@ -42,10 +42,8 @@ from synapse24.acquisition.state_machine import (
     AcquisitionController,
     MotionGateConfig,
     Tier,
-    TierTransition,
 )
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
-from synapse24.signal_quality import QualityThresholds
 from synapse24.signal_quality import Tier as QualityTier
 from synapse24.utils import verify_xdf_roundtrip
 
@@ -917,7 +915,7 @@ class Phase1Validator:
                 return True
             self.logger.error(f"Flash failed: {result.stderr}")
             return False
-        except Exception as e:
+        except Exception:
             self.logger.exception("Flash error")
             return False
 

@@ -10,14 +10,12 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import requests
-from scipy.signal import resample
 from tqdm import tqdm
 
 from synapse24.signal_quality import (
     QualityThresholds,
     SignalQualityMetrics,
     Tier,
-    compute_ecg_quality,
     compute_eeg_quality,
 )
 from synapse24.utils import (

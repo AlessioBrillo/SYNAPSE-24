@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import numpy.typing as npt
 
 try:
     from pylsl import StreamInlet, local_clock, resolve_byprop
@@ -19,12 +18,10 @@ except ImportError:  # pragma: no cover
     resolve_byprop = None
     local_clock = None
 
-from synapse24.signal_quality import QualityThresholds, SignalQualityMetrics, Tier
+from synapse24.signal_quality import QualityThresholds, Tier
 from synapse24.utils import (
-    LSLStreamManager,
     StreamConfig,
     create_stream_info,
-    generate_synthetic_timestamps,
     write_xdf,
 )
 

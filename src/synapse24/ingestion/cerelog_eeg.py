@@ -9,24 +9,22 @@ Roadmap.md §148: Cerelog ESP-EEG ($349.99) recommended over OpenBCI for sensor-
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
 from synapse24.acquisition.clock_sync import MultiPodClockSync
-from synapse24.hardware import BOARD_ADAPTERS, BoardConfig, BoardManager
+from synapse24.hardware import BOARD_ADAPTERS, BoardManager
 from synapse24.signal_quality import (
     QualityThresholds,
     SignalQualityMetrics,
     Tier,
-    compute_eeg_quality,
 )
 from synapse24.utils import (
     StreamConfig,
@@ -34,7 +32,6 @@ from synapse24.utils import (
     create_quality_metadata_stream,
     create_stream_info,
     verify_xdf_roundtrip,
-    write_xdf,
 )
 
 try:
@@ -190,7 +187,7 @@ class CerelogEEGManager:
 
     def _create_lsl_streams(self) -> None:
         """Create LSL StreamInfo objects for all modalities."""
-        from pylsl import StreamInfo, StreamOutlet
+        from pylsl import StreamOutlet
 
         # Get stream mapping from adapter
         if self._board_adapter is None:

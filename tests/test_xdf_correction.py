@@ -7,14 +7,27 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import pyxdf
 
-from synapse24.acquisition.clock_sync import DriftEstimate, quantify_residual_drift
+from synapse24.acquisition.clock_sync import (
+    DriftEstimate,
+    MultiPodClockSync,
+    SyncConfig,
+    SyncMarker,
+    quantify_residual_drift,
+)
 from synapse24.utils.xdf import StreamConfig, verify_xdf_roundtrip
 from synapse24.utils.xdf_correction import (
-    CorrectionResult,
     correct_xdf_from_sync,
     correct_xdf_timestamps,
 )
+from tests.constants import (
+    XDF_DEFAULT_N_SAMPLES,
+    XDF_DRIFT_TOLERANCE_S,
+    XDF_OFFSET_TOLERANCE_S,
+)
+
+_RNG = np.random.default_rng(42)
 
 
 class TestXDFCorrection:
@@ -29,10 +42,10 @@ class TestXDFCorrection:
             source_id = f"synapse24_test_pod_{i}_{uuid.uuid4().hex[:8]}"
             source_ids.append(source_id)
 
-            n_samples = 1000
+            n_samples = XDF_DEFAULT_N_SAMPLES
             sampling_rate = 100.0 if i == 0 else 50.0
             timestamps = np.arange(n_samples, dtype=np.float64) / sampling_rate + 1000.0
-            data = np.random.randn(n_samples, 3).astype(np.float32)
+            data = _RNG.standard_normal((n_samples, 3)).astype(np.float32)
 
             config = StreamConfig(
                 name=f"TEST_POD_{i}",
@@ -70,7 +83,6 @@ class TestXDFCorrection:
         assert result.output_path == output_path
         assert output_path.exists()
 
-        # Validate output is valid XDF
         validation = result.validation
         assert validation["validation"]["all_streams_valid"]
         assert validation["n_streams"] == 2
@@ -80,7 +92,6 @@ class TestXDFCorrection:
         input_path, source_ids = self._create_test_xdf(tmp_path)
         output_path = tmp_path / "test_output.xdf"
 
-        # Pod 0 has 5ms offset
         corrections = {
             source_ids[0]: DriftEstimate(
                 pod_id=source_ids[0],
@@ -96,24 +107,21 @@ class TestXDFCorrection:
         assert result.streams_corrected == 1
         assert source_ids[0] in result.corrections_applied
 
-        # Verify correction by loading corrected XDF
         corrected_streams, _ = pyxdf.load_xdf(str(output_path))
         for stream in corrected_streams:
             info = stream["info"]
             src_id = info.get("source_id", [""])[0]
             if src_id == source_ids[0]:
-                # Timestamps should be shifted back by ~5ms
                 timestamps = stream["time_stamps"]
                 original_start = 1000.0
-                expected_start = 1000.0 - 0.005  # 5ms earlier
-                assert abs(timestamps[0] - expected_start) < 0.001
+                expected_start = 1000.0 - 0.005
+                assert abs(timestamps[0] - expected_start) < XDF_OFFSET_TOLERANCE_S
 
     def test_correct_xdf_timestamps_with_drift(self, tmp_path: Path):
         """Test correction with clock drift."""
         input_path, source_ids = self._create_test_xdf(tmp_path)
         output_path = tmp_path / "test_output.xdf"
 
-        # Pod 0 has 100 ppm drift (runs fast)
         corrections = {
             source_ids[0]: DriftEstimate(
                 pod_id=source_ids[0],
@@ -128,19 +136,14 @@ class TestXDFCorrection:
 
         assert result.streams_corrected == 1
 
-        # Verify: drift correction should stretch timestamps
         corrected_streams, _ = pyxdf.load_xdf(str(output_path))
         for stream in corrected_streams:
             info = stream["info"]
             src_id = info.get("source_id", [""])[0]
             if src_id == source_ids[0]:
                 timestamps = stream["time_stamps"]
-                # After correction, timestamps should be slightly shorter duration
-                # Original: 1000 samples at 100Hz = 10s
-                # With 100ppm fast clock, recorded duration appears ~10.001s
-                # Correction should bring it back to ~10s
                 duration = timestamps[-1] - timestamps[0]
-                assert abs(duration - 9.99) < 0.02  # ~10s
+                assert abs(duration - 9.99) < XDF_DRIFT_TOLERANCE_S
 
     def test_correct_xdf_timestamps_combined_offset_drift(self, tmp_path: Path):
         """Test correction with both offset and drift."""
@@ -169,7 +172,6 @@ class TestXDFCorrection:
         assert result.streams_corrected == 2
         assert len(result.corrections_applied) == 2
 
-        # Validate output
         validation = result.validation
         assert validation["validation"]["all_streams_valid"]
 
@@ -190,17 +192,15 @@ class TestXDFCorrection:
 
         result = correct_xdf_timestamps(input_path, output_path, corrections)
 
-        # Should still have 3 streams
         validation = result.validation
         assert validation["n_streams"] == 3
         assert validation["validation"]["all_streams_valid"]
 
-        # Check sample counts preserved
         corrected_streams, _ = pyxdf.load_xdf(str(output_path))
         assert len(corrected_streams) == 3
 
         for stream in corrected_streams:
-            assert len(stream["time_series"]) == 1000
+            assert len(stream["time_series"]) == XDF_DEFAULT_N_SAMPLES
 
     def test_correct_xdf_from_sync(self, tmp_path: Path):
         """Test convenience wrapper using sync status format."""
@@ -266,28 +266,16 @@ class TestCorrectionIntegration:
 
     def test_end_to_end_drift_correction(self, tmp_path: Path):
         """Test full pipeline: MultiPodClockSync -> correct_xdf_timestamps -> verify."""
-        import pyxdf
-
-        from synapse24.acquisition.clock_sync import (
-            MultiPodClockSync,
-            SyncConfig,
-            SyncMarker,
-        )
-
-        # Create test XDF with 2 pods
         n_samples = 5000
         sampling_rate = 100.0
 
-        # Hub timestamps (ground truth)
         hub_timestamps = np.arange(n_samples, dtype=np.float64) / sampling_rate
 
-        # Pod 0: 100 ppm fast, 5ms offset
         pod0_timestamps = (hub_timestamps + 0.005) * 1.0001
-        pod0_data = np.random.randn(n_samples, 3).astype(np.float32)
+        pod0_data = _RNG.standard_normal((n_samples, 3)).astype(np.float32)
 
-        # Pod 1: 50 ppm fast, no offset
         pod1_timestamps = hub_timestamps * 1.00005
-        pod1_data = np.random.randn(n_samples, 2).astype(np.float32)
+        pod1_data = _RNG.standard_normal((n_samples, 2)).astype(np.float32)
 
         streams = [
             {
@@ -311,12 +299,10 @@ class TestCorrectionIntegration:
         input_path = tmp_path / "raw.xdf"
         verify_xdf_roundtrip(streams, input_path)
 
-        # Simulate MultiPodClockSync estimates
         sync = MultiPodClockSync(SyncConfig())
         sync.register_pod("head_pod", 100)
         sync.register_pod("forearm_pod", 100)
 
-        # Add sync markers
         for i in range(20):
             hub_t = float(i * 60.0)
             sync.drift_estimator.add_marker(
@@ -333,20 +319,17 @@ class TestCorrectionIntegration:
         sync.update_drift_estimates()
         sync_status = sync.get_sync_status()
 
-        # Build sync_estimates with actual XDF source_ids
         sync_estimates = {
             "synapse24_SYNAPSE_HEAD_POD_headpod": sync_status["pods"]["head_pod"],
             "synapse24_SYNAPSE_FOREARM_POD_forearmpod": sync_status["pods"]["forearm_pod"],
         }
 
-        # Apply correction
         output_path = tmp_path / "corrected.xdf"
         result = correct_xdf_from_sync(input_path, output_path, sync_estimates)
 
         assert result.streams_corrected == 2
         assert result.validation["validation"]["all_streams_valid"]
 
-        # Verify residual drift < 1ms
         corrected_streams, _ = pyxdf.load_xdf(str(output_path))
         for stream in corrected_streams:
             info = stream["info"]
@@ -357,7 +340,3 @@ class TestCorrectionIntegration:
                 metrics = quantify_residual_drift(timestamps, hub_timestamps[: len(timestamps)])
                 assert metrics["max_abs_offset_ms"] < 1.0
                 assert metrics["p99_offset_ms"] < 1.0
-
-
-# Need uuid for test
-import pyxdf
