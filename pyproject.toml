@@ -133,6 +133,7 @@ ignore = [
     "E741",     # Ambiguous variable name (common in comprehensions)
     "PTH202",   # os.path.getsize vs Path.stat (compatibility)
     "PTH108",   # os.unlink vs Path.unlink (compatibility)
+    "EXE001",   # Shebang present but file not executable (scripts on Windows)
 ]
 
 [tool.ruff.lint.per-file-ignores]
