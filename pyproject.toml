@@ -84,7 +84,7 @@ dev = [
     "types-tqdm>=4.70.0.20260827",
     "types-pytz>=2026.3.1.20260727",
     "pre-commit>=3.7.0,<4.0",
-    "tensorflow-intel==2.16.1",
+    "tensorflow==2.16.1",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
     "bandit>=1.9.4",
