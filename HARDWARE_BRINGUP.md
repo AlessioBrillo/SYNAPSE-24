@@ -240,18 +240,18 @@ import matplotlib.pyplot as plt
 from synapse24.signal_quality import detect_r_peaks_neurokit
 
 streams, header = pyxdf.load_xdf(xdf_path)
-ecg_stream = next(s for s in streams if s['info']['name'][0] == 'SYNAPSE_ECG_T0')
-ecg_data = ecg_stream['time_series'].flatten()
-ecg_ts = ecg_stream['time_stamps']
+ecg_stream = next(s for s in streams if s["info"]["name"][0] == "SYNAPSE_ECG_T0")
+ecg_data = ecg_stream["time_series"].flatten()
+ecg_ts = ecg_stream["time_stamps"]
 
 r_peaks = detect_r_peaks_neurokit(ecg_data, 500)
 
 plt.figure(figsize=(15, 5))
-plt.plot(ecg_ts, ecg_data, 'b-', alpha=0.7, label='ECG')
-plt.plot(ecg_ts[r_peaks], ecg_data[r_peaks], 'ro', label=f'R-peaks ({len(r_peaks)})')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude (µV)')
-plt.title('Live ECG with Detected R-Peaks')
+plt.plot(ecg_ts, ecg_data, "b-", alpha=0.7, label="ECG")
+plt.plot(ecg_ts[r_peaks], ecg_data[r_peaks], "ro", label=f"R-peaks ({len(r_peaks)})")
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude (µV)")
+plt.title("Live ECG with Detected R-Peaks")
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.show()
