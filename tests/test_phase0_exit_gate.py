@@ -628,14 +628,18 @@ class TestFullSyntheticPipeline:
     """End-to-end synthetic pipeline: 3 pods → LSL → XDF → Fusion → Quality → Train → Quantize → Exit Gate.
 
     This test validates the entire Phase 0 software stack without hardware.
+    Requires TensorFlow (optional dependency).
     """
 
     def test_full_synthetic_pipeline_t0_t1_t0(self):  # noqa: PLR0915
         """Complete pipeline: synthetic 3-pod → XDF → fusion windows → quality → train → quantize → gate."""
         import tempfile
 
-        from tensorflow import keras
-        from tensorflow.keras import layers
+        try:
+            from tensorflow import keras
+            from tensorflow.keras import layers
+        except ImportError:
+            pytest.skip("TensorFlow not installed (optional dependency)")
 
         from synapse24.acquisition.clock_sync import (
             MultiPodClockSync,

@@ -95,8 +95,16 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
         .master.clk_speed = 400000
     };
-    ESP_ERROR_CHECK(i2c_param_config(config->i2c_port, &i2c_conf));
-    ESP_ERROR_CHECK(i2c_driver_install(config->i2c_port, i2c_conf.mode, 0, 0, 0));
+    esp_err_t err = i2c_param_config(config->i2c_port, &i2c_conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C param config failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = i2c_driver_install(config->i2c_port, i2c_conf.mode, 0, 0, 0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "I2C driver install failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     uint8_t part_id;
     ESP_ERROR_CHECK(max30102_read_reg(MAX30102_REG_PART_ID, &part_id));

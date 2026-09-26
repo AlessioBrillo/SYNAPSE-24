@@ -74,7 +74,7 @@ class CerelogEEGConfig:
 
     # Board identification
     board_type: str = "CERELOG_BOARD"
-    board_id: str = "SYNTHETIC_BOARD"  # BrainFlow ID, overridden by adapter
+    board_id: str = "CYTON_BOARD"  # BrainFlow ID (Cerelog uses ADS1299 like Cyton)
 
     # Connection
     serial_port: str = ""
@@ -167,10 +167,7 @@ class CerelogEEGManager:
             sampling_rate=self.config.sampling_rate,
         )
 
-        # Override board_id to match BrainFlow's CERELOG_BOARD if available
-        if hasattr(BoardIds, "CERELOG_BOARD"):
-            board_config.board_id = "CERELOG_BOARD"
-
+        # Use adapter's board_id (CYTON_BOARD for Cerelog) - no override needed
         self._manager = BoardManager(board_config)
         self._manager.prepare()
 

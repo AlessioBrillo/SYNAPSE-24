@@ -118,7 +118,7 @@ sync:
       sync_interval_s: 10.0
   acc_correlation_window_s: 30.0
   min_acc_correlation: 0.7
-  wired_sync_gpio: 21  # GPIO for hardwired Tier 1 sync marker (head_pod ↔ forearm_hub)
+  wired_sync_gpio: 27  # GPIO for hardwired Tier 1 sync marker (head_pod ↔ forearm_hub). GPIO 21 reserved for I2C SDA.
 
 # Power budget profiles (Architecture.md §55-62)
 power_budget:

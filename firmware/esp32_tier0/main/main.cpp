@@ -16,6 +16,7 @@
 #include "sync/sync_marker_handler.h"
 #include "sync/wired_sync_handler.h"
 #include "triage/triage_inference.h"
+#include "triage/triage_features.h"
 
 static const char* TAG = "synapse_tier0";
 
@@ -70,82 +71,30 @@ static void triage_task_fn(void* arg) {
     (void)arg;
     triage_input_t input = {0};
     triage_output_t output = {0};
+    triage_features_t features = {0};
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(200));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(200));  // 5Hz inference
 
         if (!g_triage.initialized) continue;
 
-        int available = sensor_ring_buffer_available(&g_scheduler.buffers[SENSOR_TYPE_IMU]);
-        if (available < 10) continue;
-
-        sensor_sample_t imu_samples[10];
-        int count = 0;
-        float ax_sum = 0, ay_sum = 0, az_sum = 0;
-        float gx_sum = 0, gy_sum = 0, gz_sum = 0;
-
-        while (count < 10 && sensor_ring_buffer_pop(&g_scheduler.buffers[SENSOR_TYPE_IMU], &imu_samples[count])) {
-            ax_sum += imu_samples[count].data.imu.ax;
-            ay_sum += imu_samples[count].data.imu.ay;
-            az_sum += imu_samples[count].data.imu.az;
-            gx_sum += imu_samples[count].data.imu.gx;
-            gy_sum += imu_samples[count].data.imu.gy;
-            gz_sum += imu_samples[count].data.imu.gz;
-            count++;
+        // Get features from ring buffers (matches Python extract_triage_features_live)
+        if (triage_features_compute_live(&g_scheduler, NULL, &features) != ESP_OK) {
+            continue;  // Not enough data
         }
 
-        if (count < 5) continue;
-
-        // Fill all 26 features (pad with zeros for features we don't have)
-        // Our model expects 26 features from IMU (chest ACC mean/std/entropy/freq x3, wrist ACC mean/std/entropy/freq x3, BVP mean/std)
-        // We only have IMU data, so we compute what we can and zero-pad the rest
-        input.timestamp_us = esp_timer_get_time();
-        input.feature_count = TRIAGE_NUM_FEATURES;
-
-        // Features 0-3: chest ACC X mean, std, entropy, dom_freq
-        input.features[0] = ax_sum / count;  // mean X
-        input.features[1] = 0.0f;  // std X - need more samples
-        input.features[2] = 0.0f;  // entropy X
-        input.features[3] = 0.0f;  // dom_freq X
-
-        // Features 4-7: chest ACC Y
-        input.features[4] = ay_sum / count;
-        input.features[5] = 0.0f;
-        input.features[6] = 0.0f;
-        input.features[7] = 0.0f;
-
-        // Features 8-11: chest ACC Z
-        input.features[8] = az_sum / count;
-        input.features[9] = 0.0f;
-        input.features[10] = 0.0f;
-        input.features[11] = 0.0f;
-
-        // Features 12-15: wrist ACC X
-        input.features[12] = gx_sum / count;
-        input.features[13] = 0.0f;
-        input.features[14] = 0.0f;
-        input.features[15] = 0.0f;
-
-        // Features 16-19: wrist ACC Y
-        input.features[16] = gy_sum / count;
-        input.features[17] = 0.0f;
-        input.features[18] = 0.0f;
-        input.features[19] = 0.0f;
-
-        // Features 20-23: wrist ACC Z
-        input.features[20] = gz_sum / count;
-        input.features[21] = 0.0f;
-        input.features[22] = 0.0f;
-        input.features[23] = 0.0f;
-
-        // Features 24-25: BVP mean, std (not available, zero)
-        input.features[24] = 0.0f;
-        input.features[25] = 0.0f;
+        // Copy to triage input (quantization happens in triage_inference_run)
+        input.timestamp_us = features.timestamp_us;
+        input.feature_count = features.feature_count;
+        for (int i = 0; i < TRIAGE_NUM_FEATURES; i++) {
+            input.features[i] = features.features[i];
+        }
 
         if (triage_inference_run(&g_triage, &input, &output) == ESP_OK && output.valid) {
             ESP_LOGI(TAG, "Triage: baseline=%.3f, stress=%.3f, artifact=%.3f, class=%d, time=%" PRId64 " us",
-                     output.baseline_prob, output.stress_prob, output.artifact_prob, output.predicted_class, output.inference_time_us);
+                     output.baseline_prob, output.stress_prob, output.artifact_prob, 
+                     output.predicted_class, output.inference_time_us);
         }
     }
 }
@@ -263,10 +212,10 @@ static void main_task_fn(void* arg) {
 
     ESP_ERROR_CHECK(sync_marker_handler_init(&g_sync_handler));
 
-    // Initialize wired GPIO sync (Architecture.md §29, hardware_bringup.yaml GPIO 21)
+    // Initialize wired GPIO sync (Architecture.md §29, hardware_bringup.yaml GPIO 27)
     ESP_ERROR_CHECK(synapse_wired_sync_init(&g_wired_sync, SYNAPSE_SYNC_ROLE_HUB));
     g_wired_sync.on_sync_pulse = wired_sync_pulse_callback;
-    ESP_LOGI(TAG, "Wired sync initialized on GPIO %d (hub role)", SYNAPSE_WIRED_SYNC_GPIO);
+    ESP_LOGI(TAG, "Wired sync initialized on GPIO %d (hub role) — GPIO 21 reserved for I2C SDA", SYNAPSE_WIRED_SYNC_GPIO);
 
     // Initialize PPG SQI for motion gate (Architecture.md §74)
     ESP_ERROR_CHECK(ppg_sqi_init());

@@ -10,7 +10,8 @@ extern "C" {
 #endif
 
 // Wired GPIO sync configuration (matches Python config/hardware_bringup.yaml)
-#define SYNAPSE_WIRED_SYNC_GPIO           21
+// GPIO 27 used for wired sync (GPIO 21 = I2C SDA for MAX30102 + ICM-20948)
+#define SYNAPSE_WIRED_SYNC_GPIO           27
 #define SYNAPSE_WIRED_SYNC_PULSE_WIDTH_US 10
 #define SYNAPSE_WIRED_SYNC_PULL_UP        true
 

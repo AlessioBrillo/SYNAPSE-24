@@ -123,10 +123,10 @@ class TestPhase1DryRun:
         assert validator.controller.pod_coordinator is not None
         assert validator.controller.motion_gate is not None
 
-        # Check motion gate config from hardware_bringup.yaml (sqi_min=0.3)
+        # Check motion gate config from hardware_bringup.yaml (sqi_min=0.3, required_consecutive_clean=5 for wrist PPG)
         assert validator.controller.motion_gate.sqi_min == 0.3
         assert validator.controller.motion_gate.map_max == 0.5
-        assert validator.controller.motion_gate.required_consecutive_clean == 2
+        assert validator.controller.motion_gate.required_consecutive_clean == 5
 
     def test_xdf_verification_structure(self):
         """Dry-run should produce valid XDF proof structure."""
