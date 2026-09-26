@@ -26,6 +26,13 @@ bringup:
     scan_timeout_s: 10
     connect_timeout_s: 15
     mtu: 185  # Negotiated MTU for higher throughput
+    # BLE characteristic UUIDs (must match firmware/esp32_tier0/main/ble/ble_lsl_bridge.h)
+    characteristics:
+      service: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+      ppg: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+      ecg: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+      imu: "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
+      sync: "6E400005-B5A3-F393-E0A9-E50E24DCCA9E"
 
   # Cerelog ESP-EEG head pod (Tier 1) - additional config beyond hardware.yaml
   cerelog_eeg:
@@ -121,14 +128,15 @@ bringup:
   # Clock synchronization - override mode for multi-pod
   sync:
     mode: "markers_plus_acc"  # "markers_only" | "markers_plus_acc"
-    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub)
-    wired_sync_gpio: 21
+    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub) - GPIO 27 (GPIO 21 = I2C SDA)
+    wired_sync_gpio: 27
 
   # Motion gate - relaxed for MAX30102 wrist PPG validation
+  # Architecture.md §74: "measured-clean signal" - require 5 consecutive clean assessments for wrist
   motion_gate:
     sqi_min: 0.3  # Lowered from 0.5 (hardware.yaml) for wrist PPG
     map_max: 0.5
-    required_consecutive_clean: 2
+    required_consecutive_clean: 5  # Increased from 2 for wrist PPG bringup validation
 
   # Validation parameters (bringup-specific)
   validation:

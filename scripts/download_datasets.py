@@ -36,10 +36,13 @@ logger = logging.getLogger(__name__)
 # WESAD: UCI mirror (primary) — SHA-256 from authoritative source
 # Note: UCI mirrors sometimes return HTTP 200 with HTML error page.
 # These checksums are for the canonical WESAD.zip from archive.ics.uci.edu
+# AFTER FIRST SUCCESSFUL DOWNLOAD, RUN:
+#   python -c "import hashlib; print(hashlib.sha256(open('data/wesad/WESAD.zip','rb').read()).hexdigest())"
+# THEN REPLACE THE VALUE BELOW
 WESAD_CHECKSUMS = {
-    # Primary UCI mirror
-    "https://archive.ics.uci.edu/static/public/465/wesad.zip": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER — compute on first successful download
-    "https://archive.ics.uci.edu/dataset/465/wesad.zip": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # PLACEHOLDER
+    # Primary UCI mirror — UPDATE AFTER FIRST SUCCESSFUL DOWNLOAD
+    "https://archive.ics.uci.edu/static/public/465/wesad.zip": "REPLACE_WITH_ACTUAL_SHA256_AFTER_FIRST_DOWNLOAD",
+    "https://archive.ics.uci.edu/dataset/465/wesad.zip": "REPLACE_WITH_ACTUAL_SHA256_AFTER_FIRST_DOWNLOAD",
 }
 
 # MIT-BIH: PhysioNet records — individual record checksums not practical,

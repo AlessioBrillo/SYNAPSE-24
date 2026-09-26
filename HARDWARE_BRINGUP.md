@@ -56,6 +56,8 @@ ESP32-S3 DevKitC-1                    Sensor Breakouts
 └─────────────────────────┘           └─────────────────────────────────────┘
 ```
 
+> **Wired Sync (Phase 2 Multi-Pod):** GPIO 27 is reserved for hardwired sync pulse between `forearm_hub` (hub role, output) and `head_pod` (pod role, input with interrupt). 10µs pulse at Tier 1 interval (10s) per Architecture.md §29. **Not used in Phase 1 single-pod bringup.**
+
 ### Electrode Placement (Forearm — Lead I Equivalent)
 
 ```
@@ -264,6 +266,7 @@ plt.show()
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | `ESP_ERR_NOT_FOUND` on MAX30102 PART_ID | I2C wiring wrong / pullups missing | Check SDA/SCL on GPIO 21/22; add 4.7kΩ pullups if breakout lacks them |
+| Wired sync not triggering (Phase 2) | GPIO 27 not connected / role mismatch | Verify forearm_hub→GPIO27(output) wired to head_pod→GPIO27(input); check `SYNAPSE_SYNC_ROLE_HUB` vs `SYNAPSE_SYNC_ROLE_POD` |
 | `ECG=0` samples, PPG/IMU working | AD8232 not powered / LO pins floating | Verify 3V3/GND on AD8232; tie LO+/LO- to GND if not using lead-off detect |
 | BLE not advertising | Antenna / flash config | Ensure `CONFIG_BT_ENABLED=y`; check `sdkconfig.defaults` has BLE enabled |
 | Triage inference fails | TFLM model not embedded | Run `scripts/quantize_and_deploy.py` first to generate `model_data.h` |
@@ -281,7 +284,9 @@ After Phase 1 validation passes:
 - [ ] HR MAE ≤ 2 bpm vs manual count
 - [ ] RMSSD MAE < 5 ms
 - [ ] PPG SQI ≥ 0.3 sustained for >30s
-- [ ] Triage inference running @ ≤5 ms latency
+- [ ] PPG MAP ≤ 0.5 sustained for >30s
+- [ ] Motion gate armed: 5 consecutive clean SQI/MAP windows (config/hardware_bringup.yaml)
+- [ ] Triage inference running @ ≤5 ms latency (movement/artifact/immobility detection)
 - [ ] Power draw measured: ~5–10 mA average (projects to 24h+ on 500mAh LiPo)
 
 **Then procure Phase 2 hardware:**

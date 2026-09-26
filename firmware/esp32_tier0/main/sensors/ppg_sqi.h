@@ -11,6 +11,10 @@ extern "C" {
 // PPG Signal Quality Index configuration
 // Karlen et al. 2013: wearable PPG SQI >= 0.5 acceptable
 // Architecture.md §74: motion gate requires 2 consecutive clean assessments
+// Tier 0 thresholds (hardware.yaml motion_gate: sqi_min=0.5, map_max=0.5)
+
+#define SYNAPSE_T0_PPG_SQI_MIN    0.5f
+#define SYNAPSE_T0_PPG_MAP_MAX    0.5f
 
 #define PPG_SQI_WINDOW_SIZE       256   // 4 seconds at 64Hz
 #define PPG_SQI_OUTPUT_RATE_HZ    100   // Output SQI at IMU rate (100Hz) for motion gate

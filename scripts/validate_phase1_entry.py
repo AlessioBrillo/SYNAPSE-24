@@ -795,7 +795,8 @@ class Phase1Validator:
             self._create_lsl_outlets()
             self._setup_clock_sync()
             self._setup_acquisition_controller()
-            self._setup_cerelog_eeg()
+            # Skip Cerelog EEG hardware connection in dry-run
+            self.cerelog_connected = False
             self.logger.info("Configuration validation PASSED")
             return Phase1ValidationReport(
                 run_id="dry-run",

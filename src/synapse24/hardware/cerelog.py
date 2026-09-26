@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import BoardAdapter, BoardConfig
+from .base import BOARD_ADAPTERS, BoardAdapter, BoardConfig
 
 
 class CerelogAdapter(BoardAdapter):
-    """Adapter for Cerelog ESP-EEG board (8-ch EEG, IMU 9-axis)."""
+    """Adapter for Cerelog ESP-EEG board (8-ch EEG, IMU 9-axis).
+
+    Uses BrainFlow's CYTON_BOARD ID since Cerelog ESP-EEG uses ADS1299
+    (same AFE as OpenBCI Cyton) and is protocol-compatible.
+    """
 
     @property
     def board_id(self) -> str:
-        return "CERELOG_BOARD"
+        return "CYTON_BOARD"
 
     @property
     def default_sampling_rate(self) -> int:
@@ -210,10 +214,13 @@ class MuseSAdapter(BoardAdapter):
         }
 
 
-BOARD_ADAPTERS = {
-    "CERELOG_BOARD": CerelogAdapter,
-    "PIEEG_BOARD": PiEEGAdapter,
-    "GANGLION_BOARD": OpenBCIGanglionAdapter,
-    "CYTON_BOARD": OpenBCICytonAdapter,
-    "MUSE_S_BOARD": MuseSAdapter,
-}
+# Register adapters in the shared BOARD_ADAPTERS registry from base
+BOARD_ADAPTERS.update(
+    {
+        "CERELOG_BOARD": CerelogAdapter,
+        "PIEEG_BOARD": PiEEGAdapter,
+        "GANGLION_BOARD": OpenBCIGanglionAdapter,
+        "CYTON_BOARD": OpenBCICytonAdapter,
+        "MUSE_S_BOARD": MuseSAdapter,
+    }
+)

@@ -55,6 +55,9 @@ esp_err_t sensor_scheduler_init(sensor_scheduler_t* scheduler, QueueHandle_t ble
         return err;
     }
 
+    // Set global pointer for sensor tasks
+    g_sensor_scheduler_ptr = scheduler;
+
     scheduler->running = false;
     ESP_LOGI(TAG, "Sensor scheduler initialized");
     return ESP_OK;
@@ -138,6 +141,11 @@ esp_err_t sensor_scheduler_deinit(sensor_scheduler_t* scheduler) {
             vSemaphoreDelete(scheduler->buffers[i].mutex);
             scheduler->buffers[i].mutex = NULL;
         }
+    }
+
+    // Clear global pointer
+    if (g_sensor_scheduler_ptr == scheduler) {
+        g_sensor_scheduler_ptr = NULL;
     }
 
     memset(scheduler, 0, sizeof(sensor_scheduler_t));
@@ -248,7 +256,10 @@ static void coordinator_task_fn(void* arg) {
 
 static void sensor_task_fn(void* arg) {
     sensor_config_t* config = (sensor_config_t*)arg;
-    sensor_scheduler_t* scheduler = NULL;
+    // The scheduler pointer is stored in the task's task handle array index
+    // We retrieve it via the global scheduler pointer set during init
+    extern sensor_scheduler_t* g_sensor_scheduler_ptr;
+    sensor_scheduler_t* scheduler = g_sensor_scheduler_ptr;
     sensor_sample_t sample = {0};
     sample.type = config->type;
     TickType_t period_ticks = pdMS_TO_TICKS(1000 / config->sampling_rate_hz);
@@ -270,3 +281,6 @@ static void sensor_task_fn(void* arg) {
         sensor_ring_buffer_push(&scheduler->buffers[config->type], &sample);
     }
 }
+
+// Global pointer for sensor tasks to access scheduler
+sensor_scheduler_t* g_sensor_scheduler_ptr = NULL;
