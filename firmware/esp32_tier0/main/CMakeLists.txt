@@ -10,6 +10,7 @@ idf_component_register(
         "sync/wired_sync_handler.cpp"
         "triage/triage_inference.cpp"
         "scheduler/sensor_scheduler.cpp"
+        "power/power_monitor.cpp"
     INCLUDE_DIRS
         "main"
         "include"
@@ -18,6 +19,7 @@ idf_component_register(
         "sync"
         "triage"
         "scheduler"
+        "power"
     REQUIRES
         esp_wifi
         esp_bt

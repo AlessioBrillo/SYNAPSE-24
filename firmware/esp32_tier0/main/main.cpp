@@ -17,6 +17,7 @@
 #include "sync/wired_sync_handler.h"
 #include "triage/triage_inference.h"
 #include "triage/triage_features.h"
+#include "power_monitor.h"
 
 static const char* TAG = "synapse_tier0";
 
@@ -220,6 +221,9 @@ static void main_task_fn(void* arg) {
     // Initialize PPG SQI for motion gate (Architecture.md §74)
     ESP_ERROR_CHECK(ppg_sqi_init());
 
+    // Initialize power budget monitor (Architecture.md §55-62)
+    ESP_ERROR_CHECK(power_monitor_init());
+
     // Initialize triage inference with embedded model
     ESP_ERROR_CHECK(triage_inference_init(&g_triage));
 
@@ -268,6 +272,9 @@ static void main_task_fn(void* arg) {
             size_t arena_used;
             triage_inference_get_model_info(&g_triage, NULL, &arena_used);
             ESP_LOGI(TAG, "TFLM arena used: %zu bytes", arena_used);
+
+            // Power budget update (Architecture.md §55-62)
+            power_monitor_update();
 
             last_stats = xTaskGetTickCount();
         }

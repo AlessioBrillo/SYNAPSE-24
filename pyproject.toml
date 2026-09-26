@@ -3,14 +3,13 @@ name = "synapse-24"
 version = "0.1.0"
 description = "24/7 multimodal bio-sensing wearable platform — Phase 0: Software & Public Data Foundation"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     # Core scientific stack
     "numpy>=1.26.0,<2.0",
     "scipy>=1.13.0,<2.0",
     "pandas>=2.2.0,<3.0",
     "scikit-learn>=1.5.0,<2.0",
-
     # Biosignal processing
     "neurokit2>=0.2.9,<0.3",
     "mne>=1.8.0,<2.0",
@@ -19,26 +18,23 @@ dependencies = [
     "pyhrv>=0.5.0,<1.0",
     "yasa>=0.6.2,<1.0",
     "neurodsp>=2.3.0,<3.0",
-
     # Data I/O & formats
     "wfdb>=4.2.0,<5.0",
     "pylsl>=1.16.0,<2.0",
     "pyxdf>=1.6.0,<2.0",
     "edfio>=0.3.0,<1.0",
-
     # Hardware abstraction
     "brainflow>=5.10.0,<6.0",
-
     # Edge AI / TinyML
     # "edgeimpulse-python>=1.0.0,<2.0",  # Install from Edge Impulse CLI: edge-impulse-linux --setup
     # "tflite-runtime>=2.14.0,<3.0",  # No PyPI wheel for Python 3.12; install from Google or use TFLite from TensorFlow
-
     # Utilities
     "tqdm>=4.66.0,<5.0",
     "requests>=2.32.0,<3.0",
     "pyyaml>=6.0.0,<7.0",
     "pydantic>=2.7.0,<3.0",
     "pydantic-settings>=2.3.0,<3.0",
+    "tensorflow-cpu>=2.16.2",
 ]
 
 [project.optional-dependencies]
@@ -171,6 +167,7 @@ exclude = [
     "build",
     "dist",
     "site-packages",
+    "site-packages/numpy",
 ]
 
 [[tool.mypy.overrides]]
@@ -187,8 +184,10 @@ module = [
     "flatbuffers.*",
     "mne.*",
     "yasa.*",
+    "numpy.*",
 ]
 ignore_missing_imports = true
+disable_error_code = "syntax"
 
 [[tool.mypy.overrides]]
 module = [

@@ -67,7 +67,7 @@ temp/
 
 # Edge AI artifacts
 *.tflite
-*.h
+firmware/**/build/**/*.h
 *.tflm
 edge_impulse/
 models/

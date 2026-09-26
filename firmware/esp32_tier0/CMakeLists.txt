@@ -71,26 +71,6 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Source files
-set(SOURCES
-    main/main.cpp
-    main/sensors/ecg_ad8232.cpp
-    main/sensors/ppg_max30102.cpp
-    main/sensors/imu_icm20948.cpp
-    main/ble/ble_lsl_bridge.cpp
-    main/sync/sync_marker_handler.cpp
-    main/power/power_monitor.cpp
-    main/triage/triage_inference.cpp
-)
-
-# Add executable
-idf_component_register(
-    SRCS ${SOURCES}
-    INCLUDE_DIRS "main" "include"
-    REQUIRES ${COMPONENT_REQUIRES}
-    PRIV_REQUIRES
-)
-
 # Flash size: 4MB (ESP32-S3 default)
 # Partition table: default with 1.5MB app, 1.5MB OTA
 # Target: ESP32-S3 (Xtensa LX7 dual-core, 240MHz, 512KB SRAM + 384KB ROM)
