@@ -51,16 +51,14 @@ from synapse24.signal_quality import (
 )
 from synapse24.utils import validate_xdf, write_xdf
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class StreamBuffer:
     """Thread-safe circular buffer for LSL stream data."""
+
     name: str
     type: str
     sampling_rate: float
@@ -99,6 +97,7 @@ class StreamBuffer:
 @dataclass
 class QualityMetricsBuffer:
     """Stores quality metrics per segment for XDF metadata stream."""
+
     segments: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -174,7 +173,9 @@ class LiveLSLValidator:
                     "source_id": info.source_id(),
                     "info": info,
                 }
-                logger.info(f"  Found: {name} ({info.type()}, {info.channel_count()}ch, {info.nominal_srate()}Hz)")
+                logger.info(
+                    f"  Found: {name} ({info.type()}, {info.channel_count()}ch, {info.nominal_srate()}Hz)"
+                )
 
         if not synapse_streams:
             logger.warning("No SYNAPSE streams found. Is firmware running and BLE connected?")
@@ -183,7 +184,9 @@ class LiveLSLValidator:
 
     def setup_buffers(self, streams: dict[str, Any]) -> None:
         """Initialize stream buffers based on discovered streams."""
-        max_samples_per_buffer = int(max(s["sampling_rate"] for s in streams.values()) * self.duration_s * 1.5)
+        max_samples_per_buffer = int(
+            max(s["sampling_rate"] for s in streams.values()) * self.duration_s * 1.5
+        )
 
         for name, info in streams.items():
             self.buffers[name] = StreamBuffer(
@@ -233,7 +236,9 @@ class LiveLSLValidator:
                 if chunk:
                     with self.marker_lock:
                         for sample, ts in zip(chunk, timestamps):
-                            marker_str = sample[0] if isinstance(sample, (list, np.ndarray)) else str(sample)
+                            marker_str = (
+                                sample[0] if isinstance(sample, (list, np.ndarray)) else str(sample)
+                            )
                             self.marker_buffer.append((float(ts), str(marker_str)))
                             self.stats["markers_received"] += 1
             except Exception:
@@ -310,6 +315,7 @@ class LiveLSLValidator:
                         # Resample ACC to PPG rate if needed
                         if len(acc_data) != len(ppg_signal):
                             from scipy.signal import resample
+
                             acc_mag = np.sqrt(np.sum(acc_data**2, axis=1))
                             acc_mag = resample(acc_mag, len(ppg_signal))
                         else:
@@ -370,7 +376,9 @@ class LiveLSLValidator:
                 "segment_idx": i,
                 "start_time_s": float(ecg_ts_seg[0]) if len(ecg_ts_seg) > 0 else 0,
                 "end_time_s": float(ecg_ts_seg[-1]) if len(ecg_ts_seg) > 0 else 0,
-                "duration_s": float(ecg_ts_seg[-1] - ecg_ts_seg[0]) if len(ecg_ts_seg) > 1 else self.segment_s,
+                "duration_s": float(ecg_ts_seg[-1] - ecg_ts_seg[0])
+                if len(ecg_ts_seg) > 1
+                else self.segment_s,
             }
 
             # ECG quality per segment
@@ -397,9 +405,12 @@ class LiveLSLValidator:
                                 # Resample to PPG length
                                 if len(acc_mag_seg) != len(ppg_seg):
                                     from scipy.signal import resample
+
                                     acc_mag_seg = resample(acc_mag_seg, len(ppg_seg))
 
-                        pq = compute_ppg_quality(ppg_seg, 64, acc_mag_seg, thresholds=self.thresholds)
+                        pq = compute_ppg_quality(
+                            ppg_seg, 64, acc_mag_seg, thresholds=self.thresholds
+                        )
                         seg_metrics["ppg_quality"] = pq
 
             self.quality_buffer.add_segment(seg_metrics)
@@ -438,29 +449,33 @@ class LiveLSLValidator:
             # Create marker-style stream for quality
             q_timestamps = [s["start_time_s"] for s in quality_segments]
             q_data = [[json.dumps(s)] for s in quality_segments]
-            streams.append({
-                "name": "SYNAPSE_Quality_Metadata",
-                "type": "Quality_Metadata",
-                "data": np.array(q_data, dtype=object),
-                "timestamps": np.array(q_timestamps, dtype=np.float64),
-                "sampling_rate": 0.0,  # Irregular
-                "channel_count": 1,
-                "channel_format": "string",
-            })
+            streams.append(
+                {
+                    "name": "SYNAPSE_Quality_Metadata",
+                    "type": "Quality_Metadata",
+                    "data": np.array(q_data, dtype=object),
+                    "timestamps": np.array(q_timestamps, dtype=np.float64),
+                    "sampling_rate": 0.0,  # Irregular
+                    "channel_count": 1,
+                    "channel_format": "string",
+                }
+            )
 
         # Markers stream
         if self.marker_buffer:
             m_timestamps = [m[0] for m in self.marker_buffer]
             m_data = [[m[1]] for m in self.marker_buffer]
-            streams.append({
-                "name": "SYNAPSE_Markers",
-                "type": "Markers",
-                "data": np.array(m_data, dtype=object),
-                "timestamps": np.array(m_timestamps, dtype=np.float64),
-                "sampling_rate": 0.0,
-                "channel_count": 1,
-                "channel_format": "string",
-            })
+            streams.append(
+                {
+                    "name": "SYNAPSE_Markers",
+                    "type": "Markers",
+                    "data": np.array(m_data, dtype=object),
+                    "timestamps": np.array(m_timestamps, dtype=np.float64),
+                    "sampling_rate": 0.0,
+                    "channel_count": 1,
+                    "channel_format": "string",
+                }
+            )
 
         logger.info(f"Writing XDF to {xdf_path} ({len(streams)} streams)...")
         write_xdf(xdf_path, streams)
@@ -493,14 +508,18 @@ class LiveLSLValidator:
         # Quality summary
         if "ecg" in quality_results:
             ecg = quality_results["ecg"]
-            logger.info(f"ECG: Se={ecg.get('metrics',{}).get('ecg',{}).get('r_peak_sensitivity','N/A'):.3f}, "
-                       f"PPV={ecg.get('metrics',{}).get('ecg',{}).get('r_peak_ppv','N/A'):.3f}")
+            logger.info(
+                f"ECG: Se={ecg.get('metrics', {}).get('ecg', {}).get('r_peak_sensitivity', 'N/A'):.3f}, "
+                f"PPV={ecg.get('metrics', {}).get('ecg', {}).get('r_peak_ppv', 'N/A'):.3f}"
+            )
 
         if "ppg" in quality_results:
             ppg = quality_results["ppg"]
-            logger.info(f"PPG: SQI={ppg.get('ppg_sqi','N/A'):.3f}, "
-                       f"PI={ppg.get('perfusion_index','N/A'):.3f}%, "
-                       f"MAP={ppg.get('motion_artifact_prob','N/A'):.3f}")
+            logger.info(
+                f"PPG: SQI={ppg.get('ppg_sqi', 'N/A'):.3f}, "
+                f"PI={ppg.get('perfusion_index', 'N/A'):.3f}%, "
+                f"MAP={ppg.get('motion_artifact_prob', 'N/A'):.3f}"
+            )
 
         logger.info("=" * 60)
 
@@ -510,8 +529,12 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config/hardware_bringup.yaml"))
     parser.add_argument("--output-dir", type=Path, default=Path("data/processed/live_validation"))
     parser.add_argument("--duration", type=float, default=60.0, help="Capture duration in seconds")
-    parser.add_argument("--segment", type=float, default=10.0, help="Quality segment duration in seconds")
-    parser.add_argument("--discover-timeout", type=float, default=15.0, help="Stream discovery timeout")
+    parser.add_argument(
+        "--segment", type=float, default=10.0, help="Quality segment duration in seconds"
+    )
+    parser.add_argument(
+        "--discover-timeout", type=float, default=15.0, help="Stream discovery timeout"
+    )
     parser.add_argument("--validate-xdf", action="store_true", help="Validate XDF after write")
     args = parser.parse_args()
 
@@ -565,14 +588,19 @@ def main() -> int:
     # Save quality report
     report_path = xdf_path.with_suffix(".quality.json")
     with open(report_path, "w") as f:
-        json.dump({
-            "timestamp": time.time(),
-            "duration_s": args.duration,
-            "config": str(args.config),
-            "quality": quality_results,
-            "stats": validator.stats,
-            "xdf_validation": validation["validation"] if args.validate_xdf else None,
-        }, f, indent=2, default=str)
+        json.dump(
+            {
+                "timestamp": time.time(),
+                "duration_s": args.duration,
+                "config": str(args.config),
+                "quality": quality_results,
+                "stats": validator.stats,
+                "xdf_validation": validation["validation"] if args.validate_xdf else None,
+            },
+            f,
+            indent=2,
+            default=str,
+        )
     logger.info(f"Quality report saved to {report_path}")
 
     return 0

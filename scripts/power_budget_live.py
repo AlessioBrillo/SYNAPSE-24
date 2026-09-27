@@ -31,16 +31,14 @@ except ImportError:
 
 from synapse24.config.loader import load_hardware_config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class PowerReading:
     """Single power measurement."""
+
     timestamp: float
     voltage_v: float
     current_ma: float | None = None
@@ -51,6 +49,7 @@ class PowerReading:
 @dataclass
 class PowerStats:
     """Aggregated power statistics."""
+
     readings: list[PowerReading] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -85,12 +84,18 @@ class PowerStats:
                 self.total_energy_mwh = 0.0
                 self.total_charge_mah = 0.0
                 for i in range(1, len(self.readings)):
-                    dt_h = (self.readings[i].timestamp - self.readings[i-1].timestamp) / 3600
-                    p_avg = (self.readings[i].power_mw + self.readings[i-1].power_mw) / 2
-                    if self.readings[i].power_mw is not None and self.readings[i-1].power_mw is not None:
+                    dt_h = (self.readings[i].timestamp - self.readings[i - 1].timestamp) / 3600
+                    p_avg = (self.readings[i].power_mw + self.readings[i - 1].power_mw) / 2
+                    if (
+                        self.readings[i].power_mw is not None
+                        and self.readings[i - 1].power_mw is not None
+                    ):
                         self.total_energy_mwh += p_avg * dt_h
-                    if self.readings[i].current_ma is not None and self.readings[i-1].current_ma is not None:
-                        i_avg = (self.readings[i].current_ma + self.readings[i-1].current_ma) / 2
+                    if (
+                        self.readings[i].current_ma is not None
+                        and self.readings[i - 1].current_ma is not None
+                    ):
+                        i_avg = (self.readings[i].current_ma + self.readings[i - 1].current_ma) / 2
                         self.total_charge_mah += i_avg * dt_h
 
 
@@ -244,7 +249,7 @@ class LivePowerMonitor:
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
 
-        logger.info(f"Power monitoring started for {self.duration_s/3600:.1f}h...")
+        logger.info(f"Power monitoring started for {self.duration_s / 3600:.1f}h...")
         return True
 
     def wait_for_completion(self) -> None:
@@ -338,7 +343,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Live power budget tracking for SYNAPSE-24")
     parser.add_argument("--config", type=Path, default=Path("config/hardware.yaml"))
     parser.add_argument("--output-dir", type=Path, default=Path("data/processed/power_validation"))
-    parser.add_argument("--duration", type=float, default=3600.0, help="Monitoring duration in seconds")
+    parser.add_argument(
+        "--duration", type=float, default=3600.0, help="Monitoring duration in seconds"
+    )
     parser.add_argument("--interval", type=float, default=1.0, help="Sampling interval in seconds")
     parser.add_argument("--battery-mah", type=float, default=3000.0, help="Battery capacity in mAh")
     parser.add_argument("--nominal-voltage", type=float, default=3.7, help="Nominal voltage (V)")
@@ -372,12 +379,16 @@ def main() -> int:
     logger.info("=" * 60)
     logger.info("POWER BUDGET PROJECTION")
     logger.info("=" * 60)
-    logger.info(f"Battery: {projection.get('hub_battery_mah', 0)} mAh (usable: {projection.get('usable_mah', 0)} mAh)")
+    logger.info(
+        f"Battery: {projection.get('hub_battery_mah', 0)} mAh (usable: {projection.get('usable_mah', 0)} mAh)"
+    )
     logger.info(f"Avg Power: {projection.get('avg_power_mw', 0):.1f} mW")
     logger.info(f"Avg Current: {projection.get('avg_current_ma', 0):.1f} mA")
     logger.info(f"Avg Voltage: {projection.get('avg_voltage_v', 0):.3f} V")
     logger.info(f"Consumed: {projection.get('consumed_mah', 0):.1f} mAh")
-    logger.info(f"Projected Total Lifetime: {projection.get('projected_total_lifetime_h', 0):.1f} h")
+    logger.info(
+        f"Projected Total Lifetime: {projection.get('projected_total_lifetime_h', 0):.1f} h"
+    )
     logger.info(f"Projected Remaining: {projection.get('projected_remaining_h', 0):.1f} h")
     logger.info(f"Target (24h): {'MET ✓' if projection.get('meets_target') else 'NOT MET ✗'}")
     logger.info("=" * 60)
