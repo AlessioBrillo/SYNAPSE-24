@@ -32,7 +32,7 @@ class QuantizationConfig:
 
     quantization_type: str = "int8"  # int8, int16, float16, float32
     representative_dataset_size: int = 100
-    representative_dataset_fn: Optional[Callable[[], npt.NDArray[np.float64]]] = None
+    representative_dataset_fn: Callable[[], npt.NDArray[np.float64]] | None = None
     inference_input_type: str = "int8"  # int8, float32
     inference_output_type: str = "int8"  # int8, float32
     supported_ops: list[str] | None = None  # ["TFLITE_BUILTINS_INT8", "SELECT_TF_OPS"]
