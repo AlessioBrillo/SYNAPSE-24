@@ -7,7 +7,7 @@
 #   uv run python scripts/validate_phase1_entry.py --tier1 --config config/hardware_bringup.yaml
 
 bringup:
-  mode: "multi_pod"  # "single_pod" | "multi_pod"
+  mode: "single_pod"  # "single_pod" | "multi_pod" — Phase 1: forearm_hub only
   target_pod: "forearm_hub"
 
   # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub)
@@ -33,10 +33,15 @@ bringup:
       ecg: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
       imu: "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
       sync: "6E400005-B5A3-F393-E0A9-E50E24DCCA9E"
+      power: "6E400006-B5A3-F393-E0A9-E50E24DCCA9E"  # Power telemetry
+
+  # PPG sampling rate for bringup (100Hz for SQI validation, 64Hz for deployment)
+  # MAX30102 supports up to 1000Hz; 100Hz gives better motion artifact rejection
+  ppg_bringup_sampling_rate_hz: 100
 
   # Cerelog ESP-EEG head pod (Tier 1) - additional config beyond hardware.yaml
   cerelog_eeg:
-    enabled: true
+    enabled: false  # Phase 1: forearm_hub only
     connection: "usb"  # "usb" | "ble"
     port: "${SYNAPSE_HEAD_SERIAL:-/dev/ttyUSB0}"
     mac_address: "${SYNAPSE_HEAD_BLE:-auto}"
@@ -51,7 +56,7 @@ bringup:
     chunk_size: 16
     max_buffered: 1000
     streams:
-      # Tier 0 streams (forearm_hub)
+      # Tier 0 streams (forearm_hub) — PPG at 100Hz for bringup
       - name: "SYNAPSE_ECG_T0"
         type: "ECG"
         channel_count: 1
@@ -61,8 +66,8 @@ bringup:
         tier: 0
       - name: "SYNAPSE_PPG_T0"
         type: "PPG"
-        channel_count: 2
-        sampling_rate: 64
+        channel_count: 2  # Red + IR
+        sampling_rate: 100  # Bringup: 100Hz; Deployment: 64Hz (WESAD wrist rate)
         channel_format: "float32"
         source_id: "synapse_ppg_t0_001"
         tier: 0
@@ -87,35 +92,14 @@ bringup:
         channel_format: "float32"
         source_id: "synapse_mag_t0_001"
         tier: 0
-      # Tier 1 streams (head_pod Cerelog)
-      - name: "SYNAPSE_EEG_T1"
-        type: "EEG"
-        channel_count: 8
-        sampling_rate: 500
+      # Power telemetry stream
+      - name: "SYNAPSE_Power"
+        type: "Power"
+        channel_count: 4  # voltage_v, current_ma, power_mw, battery_percent
+        sampling_rate: 1
         channel_format: "float32"
-        source_id: "synapse_eeg_t1_001"
-        tier: 1
-      - name: "SYNAPSE_ACC_T1"
-        type: "ACC"
-        channel_count: 3
-        sampling_rate: 100
-        channel_format: "float32"
-        source_id: "synapse_acc_t1_001"
-        tier: 1
-      - name: "SYNAPSE_GYRO_T1"
-        type: "GYRO"
-        channel_count: 3
-        sampling_rate: 100
-        channel_format: "float32"
-        source_id: "synapse_gyro_t1_001"
-        tier: 1
-      - name: "SYNAPSE_MAG_T1"
-        type: "MAG"
-        channel_count: 3
-        sampling_rate: 100
-        channel_format: "float32"
-        source_id: "synapse_mag_t1_001"
-        tier: 1
+        source_id: "synapse_power_001"
+        tier: 0
       # Sync markers (highest tier)
       - name: "SYNAPSE_Markers"
         type: "Markers"
@@ -127,7 +111,7 @@ bringup:
 
   # Clock synchronization - override mode for multi-pod
   sync:
-    mode: "markers_plus_acc"  # "markers_only" | "markers_plus_acc"
+    mode: "markers_only"  # Phase 1: markers_only (BLE); T1 needs markers_plus_acc + wired
     # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub) - GPIO 27 (GPIO 21 = I2C SDA)
     wired_sync_gpio: 27
 
@@ -148,13 +132,23 @@ bringup:
     xdf_filename_template: "synapse_live_{timestamp}.xdf"
     ground_truth_ecg_path: null
 
-  # Triage model (Edge AI)
+  # Triage model (Edge AI) — binary artifact detection only
+  # Promotion logic (rest/movement) handled by Python AcquisitionController
+  # using validated immobility + power budget + motion gate
   triage_model:
     path: "models/triage_int8.tflite"
     metadata_path: "models/triage_metadata.json"
     input_shape: [1, 30, 9]
-    output_classes: ["rest", "movement", "artifact"]
-    inference_interval_s: 0.3
+    output_classes: ["clean", "artifact"]  # Binary: artifact gate for T0→T1 promotion
+    inference_interval_s: 0.2  # 5Hz inference
+
+  # Power budget tracking (live)
+  power_monitor:
+    enabled: true
+    interval_s: 1.0
+    battery_capacity_mah: 3000
+    nominal_voltage_v: 3.7
+    target_lifetime_h: 24.0
 
   # Logging
   logging:

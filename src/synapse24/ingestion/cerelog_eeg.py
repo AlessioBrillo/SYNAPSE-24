@@ -419,7 +419,7 @@ class CerelogEEGManager:
                 timestamps.astype(np.float64),
             )
 
-        return n_samples
+        return int(n_samples)
 
     def acquire_blocking(
         self,
