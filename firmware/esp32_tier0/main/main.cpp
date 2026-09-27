@@ -11,10 +11,13 @@
 #include "ecg_ad8232.h"
 #include "ppg_max30102.h"
 #include "ppg_sqi.h"
+#include "ppg_processor.h"
 #include "imu_icm20948.h"
+#include "imu_processor.h"
 #include "ble_lsl_bridge.h"
 #include "sync/sync_marker_handler.h"
 #include "sync/wired_sync_handler.h"
+#include "sync/clock_sync.h"
 #include "triage/triage_inference.h"
 #include "triage/triage_features.h"
 #include "power_monitor.h"
@@ -33,6 +36,9 @@ static QueueHandle_t g_scheduler_queue = NULL;
 static TaskHandle_t g_main_task = NULL;
 static TaskHandle_t g_triage_task = NULL;
 static TaskHandle_t g_quality_task = NULL;
+static TaskHandle_t g_ppg_feature_task = NULL;
+static TaskHandle_t g_imu_feature_task = NULL;
+static TaskHandle_t g_clock_sync_task = NULL;
 
 static ecg_ad8232_config_t g_ecg_config = {
     .adc_channel = ADC1_CHANNEL_0,
@@ -149,6 +155,107 @@ static void wired_sync_pulse_callback(int64_t timestamp_us, void* user_ctx) {
     ESP_LOGD(TAG, "Wired sync pulse received at %" PRId64 " us", timestamp_us);
 }
 
+// PPG Feature Processor Task: reads PPG samples from ring buffer at 64Hz, computes features at 10Hz
+static void ppg_feature_task_fn(void* arg) {
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period_ticks = pdMS_TO_TICKS(1000 / PPG_PROCESSOR_SAMPLE_RATE_HZ);  // 64Hz
+    
+    ESP_LOGI(TAG, "PPG Feature Task started (64Hz input, 10Hz output)");
+    
+    while (1) {
+        vTaskDelayUntil(&last_wake, period_ticks);
+        
+        if (!g_scheduler.running) continue;
+        
+        // Pop PPG samples from ring buffer
+        sensor_sample_t sample;
+        sensor_ring_buffer_t* ppg_rb = &g_scheduler.buffers[SENSOR_TYPE_PPG];
+        while (sensor_ring_buffer_pop(ppg_rb, &sample)) {
+            ppg_sqi_result_t sqi;
+            ppg_max30102_get_sqi(&sqi);
+            
+            ppg_features_t features;
+            esp_err_t ret = ppg_processor_process_sample(
+                sample.data.ppg.red, 
+                sample.data.ppg.ir, 
+                sample.timestamp_us, 
+                &sqi, 
+                &features
+            );
+            
+            if (ret == ESP_OK && features.valid) {
+                // Log feature output at 10Hz
+                ESP_LOGD(TAG, "PPG Features: HR=%.1f BPM, RMSSD=%.1f ms, SDNN=%.1f ms, SNR=%.1f dB, PI=%.1f%%",
+                         features.hr_bpm, features.rmssd_ms, features.sdnn_ms, features.snr_db, features.pi_percent);
+                
+                // TODO: Queue features for BLE transmission (compressed feature packet)
+            }
+        }
+    }
+}
+
+// IMU Feature Processor Task: reads IMU samples from ring buffer at 100Hz, computes features at 1Hz
+static void imu_feature_task_fn(void* arg) {
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period_ticks = pdMS_TO_TICKS(1000 / IMU_PROCESSOR_SAMPLE_RATE_HZ);  // 100Hz
+    
+    ESP_LOGI(TAG, "IMU Feature Task started (100Hz input, 1Hz output)");
+    
+    while (1) {
+        vTaskDelayUntil(&last_wake, period_ticks);
+        
+        if (!g_scheduler.running) continue;
+        
+        // Pop IMU samples from ring buffer
+        sensor_sample_t sample;
+        sensor_ring_buffer_t* imu_rb = &g_scheduler.buffers[SENSOR_TYPE_IMU];
+        while (sensor_ring_buffer_pop(imu_rb, &sample)) {
+            imu_features_t features;
+            esp_err_t ret = imu_processor_process_sample(
+                sample.data.imu.ax, sample.data.imu.ay, sample.data.imu.az,
+                sample.data.imu.gx, sample.data.imu.gy, sample.data.imu.gz,
+                sample.timestamp_us, &features
+            );
+            
+            if (ret == ESP_OK) {
+                // Log feature output at 1Hz
+                ESP_LOGD(TAG, "IMU Features: motion=%.3fg, entropy=%.3f, dom_freq=%.2fHz, sleep_prob=%.3f, stationary=%d",
+                         features.motion_intensity, features.spectral_entropy, features.dominant_freq_hz,
+                         features.sleep_probability, features.is_stationary);
+                
+                // TODO: Use sleep_probability for Tier 0 -> Tier 1 promotion decision
+                // TODO: Queue features for BLE transmission (compressed feature packet)
+            }
+        }
+    }
+}
+
+// Clock Sync Task: 1Hz BLE timestamp exchange with linear drift model
+static void clock_sync_task_fn(void* arg) {
+    clock_sync_t* sync = (clock_sync_t*)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period_ticks = pdMS_TO_TICKS(CLOCK_SYNC_EXCHANGE_INTERVAL_MS);  // 1Hz
+    
+    ESP_LOGI(TAG, "Clock Sync Task started (1Hz exchange)");
+    
+    while (1) {
+        vTaskDelayUntil(&last_wake, period_ticks);
+        
+        if (!g_ble_bridge.running || !ble_lsl_bridge_is_connected(&g_ble_bridge)) continue;
+        
+        // Send sync request
+        int64_t pod_send_us;
+        if (clock_sync_pod_send_request(sync, &pod_send_us) == ESP_OK) {
+            // Send via BLE sync characteristic
+            // The hub will reply with its timestamps
+            // For now, we just log - actual BLE write happens in ble_lsl_bridge
+            ESP_LOGD(TAG, "Sync request sent: seq=%" PRIu32, sync->next_sequence);
+        }
+    }
+}
+
 static void main_task_fn(void* arg) {
     (void)arg;
     sensor_sample_t sample;
@@ -224,11 +331,33 @@ static void main_task_fn(void* arg) {
     // Initialize power budget monitor (Architecture.md §55-62)
     ESP_ERROR_CHECK(power_monitor_init());
 
+    // Initialize PPG feature processor (5s window, 10Hz output)
+    ESP_ERROR_CHECK(ppg_processor_init());
+
+    // Initialize IMU feature processor (10s window, 1Hz output)
+    ESP_ERROR_CHECK(imu_processor_init());
+
+    // Initialize clock sync (1Hz exchange, 60s drift model update)
+    static clock_sync_t g_clock_sync;
+    ESP_ERROR_CHECK(clock_sync_init(&g_clock_sync));
+
     // Initialize triage inference with embedded model
     ESP_ERROR_CHECK(triage_inference_init(&g_triage));
 
     // Start quality assessment task (100Hz PPG SQI output for motion gate)
     xTaskCreate(quality_task_fn, "quality_task", 4096, NULL, 5, &g_quality_task);
+
+    // Start PPG feature processor task (reads from PPG ring buffer at 64Hz, outputs at 10Hz)
+    static void ppg_feature_task_fn(void* arg);
+    xTaskCreate(ppg_feature_task_fn, "ppg_feat_task", 4096, NULL, 5, &g_ppg_feature_task);
+
+    // Start IMU feature processor task (reads from IMU ring buffer at 100Hz, outputs at 1Hz)
+    static void imu_feature_task_fn(void* arg);
+    xTaskCreate(imu_feature_task_fn, "imu_feat_task", 4096, NULL, 5, &g_imu_feature_task);
+
+    // Start clock sync task (1Hz BLE timestamp exchange)
+    static void clock_sync_task_fn(void* arg);
+    xTaskCreate(clock_sync_task_fn, "clk_sync_task", 4096, &g_clock_sync, 5, &g_clock_sync_task);
 
     xTaskCreate(triage_task_fn, "triage_task", 8192, NULL, 5, &g_triage_task);
 
@@ -263,11 +392,35 @@ static void main_task_fn(void* arg) {
                      g_latest_sqi.sqi, g_latest_sqi.perfusion_index, g_latest_sqi.motion_artifact_prob,
                      g_motion_gate_armed, g_consecutive_clean);
 
+            // PPG Features
+            ppg_features_t ppg_feat;
+            if (ppg_processor_get_latest(&ppg_feat) == ESP_OK && ppg_feat.valid) {
+                ESP_LOGI(TAG, "PPG Features: HR=%.1f BPM, RMSSD=%.1f ms, SDNN=%.1f ms, SNR=%.1f dB, PI=%.1f%%, peaks=%d",
+                         ppg_feat.hr_bpm, ppg_feat.rmssd_ms, ppg_feat.sdnn_ms, ppg_feat.snr_db, ppg_feat.pi_percent, ppg_feat.peak_count);
+            }
+
+            // IMU Features
+            imu_features_t imu_feat;
+            if (imu_processor_get_latest(&imu_feat) == ESP_OK) {
+                ESP_LOGI(TAG, "IMU Features: motion=%.3fg, entropy=%.3f, dom_freq=%.2fHz, sleep_prob=%.3f, stationary=%d",
+                         imu_feat.motion_intensity, imu_feat.spectral_entropy, imu_feat.dominant_freq_hz,
+                         imu_feat.sleep_probability, imu_feat.is_stationary);
+            }
+
             uint32_t markers;
             float drift;
             int64_t offset;
             sync_marker_handler_get_stats(&g_sync_handler, &markers, &drift, &offset);
             ESP_LOGI(TAG, "Sync: markers=%" PRIu32 ", drift=%.2f ppm, offset=%" PRId64 " us", markers, drift, offset);
+
+            // Clock Sync
+            uint32_t exchanges;
+            float clk_drift;
+            int64_t clk_offset;
+            float last_rtt;
+            clock_sync_get_stats(&g_clock_sync, &exchanges, &clk_drift, &clk_offset, &last_rtt);
+            ESP_LOGI(TAG, "Clk Sync: exchanges=%" PRIu32 ", drift=%.2f ppm, offset=%" PRId64 " us, RTT=%.1f us",
+                     exchanges, clk_drift, clk_offset, last_rtt);
 
             size_t arena_used;
             triage_inference_get_model_info(&g_triage, NULL, &arena_used);
