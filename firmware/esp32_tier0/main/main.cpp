@@ -53,8 +53,8 @@ static ppg_max30102_config_t g_ppg_config = {
     .gpio_int = GPIO_NUM_5,
     .led_current_red = 0x1F,
     .led_current_ir = 0x1F,
-    .led_current_green = 0x00,
-    .sample_rate = 0x03,
+    .led_current_green = 0x0F,   // Green LED on for Tier 0 PPG
+    .sample_rate = 0x02,         // 50 Hz (was 0x03 for ~64Hz higher rate)
     .pulse_width = 0x03,
     .adc_range = 0x03
 };
@@ -65,8 +65,8 @@ static imu_icm20948_config_t g_imu_config = {
     .gpio_int = GPIO_NUM_6,
     .accel_fsr_g = 8,
     .gyro_fsr_dps = 500,
-    .accel_odr_hz = 100,
-    .gyro_odr_hz = 100
+    .accel_odr_hz = 50,      // 50 Hz for Tier 0 (reduced power)
+    .gyro_odr_hz = 50
 };
 
 // Motion gate state (Architecture.md §74)
@@ -307,11 +307,9 @@ static void main_task_fn(void* arg) {
         .task_handle = &imu_task
     };
 
-    xTaskCreate(sensor_task_fn, "ecg_task", 4096, &ecg_sensor, 10, &ecg_task);
     xTaskCreate(sensor_task_fn, "ppg_task", 4096, &ppg_sensor, 10, &ppg_task);
     xTaskCreate(sensor_task_fn, "imu_task", 4096, &imu_sensor, 10, &imu_task);
 
-    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ecg_sensor));
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ppg_sensor));
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &imu_sensor));
 
@@ -384,9 +382,9 @@ static void main_task_fn(void* arg) {
 
         if (xTaskGetTickCount() - last_wake >= pdMS_TO_TICKS(10000)) {
             sensor_scheduler_get_stats(&g_scheduler, sample_counts, dropped_samples);
-            ESP_LOGI(TAG, "Stats: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32 " | Dropped: ECG=%" PRIu32 ", PPG=%" PRIu32 ", IMU=%" PRIu32,
-                     sample_counts[0], sample_counts[1], sample_counts[2],
-                     dropped_samples[0], dropped_samples[1], dropped_samples[2]);
+            ESP_LOGI(TAG, "Stats: PPG=%" PRIu32 ", IMU=%" PRIu32 " | Dropped: PPG=%" PRIu32 ", IMU=%" PRIu32,
+                     sample_counts[0], sample_counts[1],
+                     dropped_samples[0], dropped_samples[1]);
 
             ESP_LOGI(TAG, "PPG SQI: sqi=%.3f, pi=%.3f%%, map=%.3f, gate_armed=%d, consecutive_clean=%d",
                      g_latest_sqi.sqi, g_latest_sqi.perfusion_index, g_latest_sqi.motion_artifact_prob,

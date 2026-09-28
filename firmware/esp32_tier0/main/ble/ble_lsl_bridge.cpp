@@ -85,18 +85,87 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struc
     switch (ctxt->op) {
         case BLE_GATT_ACCESS_OP_READ_CHR: {
             if (chr_type == BLE_LSL_CHAR_SYNC) {
-                uint32_t seq = 0;
-                os_mbuf_append(ctxt->om, &seq, sizeof(seq));
+                // Return last sync exchange data from history buffer
+                if (s_bridge && s_bridge->sync_count > 0) {
+                    uint8_t idx = (s_bridge->sync_head + s_bridge->sync_count - 1) % BLE_LSL_SYNC_HISTORY_MAX;
+                    ble_lsl_sync_entry_t* entry = &s_bridge->sync_history[idx];
+                    if (entry->hub_recv_us > 0) {
+                        // Format: [uint32 seq, int64 hub_recv_us, int64 hub_send_us]
+                        os_mbuf_append(ctxt->om, &entry->sequence, sizeof(uint32_t));
+                        os_mbuf_append(ctxt->om, &entry->hub_recv_us, sizeof(int64_t));
+                        os_mbuf_append(ctxt->om, &entry->hub_send_us, sizeof(int64_t));
+                    } else {
+                        // No valid data, send zeros
+                        uint32_t seq = 0;
+                        int64_t hub_recv = 0;
+                        int64_t hub_send = 0;
+                        os_mbuf_append(ctxt->om, &seq, sizeof(seq));
+                        os_mbuf_append(ctxt->om, &hub_recv, sizeof(hub_recv));
+                        os_mbuf_append(ctxt->om, &hub_send, sizeof(hub_send));
+                    }
+                } else {
+                    // No data initialized, send zeros
+                    uint32_t seq = 0;
+                    int64_t hub_recv = 0;
+                    int64_t hub_send = 0;
+                    os_mbuf_append(ctxt->om, &seq, sizeof(seq));
+                    os_mbuf_append(ctxt->om, &hub_recv, sizeof(hub_recv));
+                    os_mbuf_append(ctxt->om, &hub_send, sizeof(hub_send));
+                }
+            } else {
+                // For other chars, return zeros
+                uint32_t zero = 0;
+                os_mbuf_append(ctxt->om, &zero, sizeof(zero));
             }
             return 0;
         }
         case BLE_GATT_ACCESS_OP_WRITE_CHR: {
-            if (chr_type == BLE_LSL_CHAR_SYNC && ctxt->om->om_len == sizeof(uint32_t) + sizeof(int64_t)) {
-                uint32_t seq;
-                int64_t hub_ts;
-                os_mbuf_copydata(ctxt->om, 0, sizeof(seq), &seq);
-                os_mbuf_copydata(ctxt->om, sizeof(seq), sizeof(hub_ts), &hub_ts);
-                ESP_LOGD(TAG, "Sync marker received: seq=%" PRIu32 ", hub_ts=%" PRId64, seq, hub_ts);
+            if (chr_type == BLE_LSL_CHAR_SYNC) {
+                // Receive sync request: [uint32 seq, int64 pod_send_us]
+                if (ctxt->om->om_len >= BLE_LSL_SYNC_REQUEST_SIZE) {
+                    uint32_t seq;
+                    int64_t pod_send_us;
+                    os_mbuf_copydata(ctxt->om, 0, sizeof(seq), &seq);
+                    os_mbuf_copydata(ctxt->om, sizeof(seq), sizeof(pod_send_us), &pod_send_us);
+                    
+                    // Record the sync request (hub receive time)
+                    int64_t hub_recv_us = esp_timer_get_time();
+                    
+                    // Send hub send time (small processing delay)
+                    int64_t hub_send_us = esp_timer_get_time();
+                    
+                    // Store in sync history for read-after-write protocol
+                    if (s_bridge && s_bridge->sync_count < BLE_LSL_SYNC_HISTORY_MAX) {
+                        int idx = s_bridge->sync_count++;
+                        s_bridge->sync_history[idx].sequence = seq;
+                        s_bridge->sync_history[idx].pod_send_us = pod_send_us;
+                        s_bridge->sync_history[idx].hub_recv_us = hub_recv_us;
+                        s_bridge->sync_history[idx].hub_send_us = hub_send_us;
+                        // pod_recv_us and offset/drift will be filled when pod reads reply
+                        s_bridge->sync_history[idx].pod_recv_us = 0;
+                        s_bridge->sync_history[idx].offset_us = 0;
+                        s_bridge->sync_history[idx].drift_ppm = 0.0f;
+                        s_bridge->sync_head = idx;
+                    } else if (s_bridge) {
+                        // Overwrite oldest entry (circular buffer)
+                        int idx = s_bridge->sync_count - 1;  // = BLE_LSL_SYNC_HISTORY_MAX - 1 when full
+                        // But we need to update head too - actually let's just increment count at max
+                        if (s_bridge->sync_count >= BLE_LSL_SYNC_HISTORY_MAX) {
+                            s_bridge->sync_head = (s_bridge->sync_head + 1) % BLE_LSL_SYNC_HISTORY_MAX;
+                        }
+                        int idx2 = (s_bridge->sync_head + s_bridge->sync_count - 1) % BLE_LSL_SYNC_HISTORY_MAX;
+                        s_bridge->sync_history[idx2].sequence = seq;
+                        s_bridge->sync_history[idx2].pod_send_us = pod_send_us;
+                        s_bridge->sync_history[idx2].hub_recv_us = hub_recv_us;
+                        s_bridge->sync_history[idx2].hub_send_us = hub_send_us;
+                        s_bridge->sync_history[idx2].pod_recv_us = 0;
+                        s_bridge->sync_history[idx2].offset_us = 0;
+                        s_bridge->sync_history[idx2].drift_ppm = 0.0f;
+                    }
+                    
+                    ESP_LOGD(TAG, "Sync request received: seq=%" PRIu32 ", pod_send=%" PRId64 ", hub_recv=%" PRId64 ", hub_send=%" PRId64,
+                             seq, pod_send_us, hub_recv_us, hub_send_us);
+                }
             }
             return 0;
         }
