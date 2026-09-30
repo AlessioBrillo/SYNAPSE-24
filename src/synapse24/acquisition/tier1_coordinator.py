@@ -273,9 +273,9 @@ class Tier1Coordinator:
         # Connect Tier 1 pods (Cerelog)
         for pod_id, state in self._tier1_pods.items():
             try:
-                assert (
-                    state.cerelog_manager is not None
-                ), f"Tier 1 pod {pod_id} not properly registered"
+                assert state.cerelog_manager is not None, (
+                    f"Tier 1 pod {pod_id} not properly registered"
+                )
                 state.cerelog_manager.prepare()
                 state.impedance_checked = False
                 state.quality_passed = False

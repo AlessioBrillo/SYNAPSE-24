@@ -171,6 +171,7 @@ exclude = [
     "dist",
     "site-packages",
     "site-packages/numpy",
+    "site-packages\\\\numpy",
     ".*AppData.*site-packages.*numpy.*",
     ".*AppData.*site-packages.*typing_extensions.*",
 ]
@@ -189,7 +190,6 @@ module = [
     "flatbuffers.*",
     "mne.*",
     "yasa.*",
-    "numpy.*",
 ]
 ignore_missing_imports = true
 disable_error_code = "syntax"
@@ -197,11 +197,15 @@ disallow_untyped_defs = false
 check_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["numpy"]
+module = [
+    "numpy",
+    "numpy.*",
+]
 ignore_missing_imports = true
 disable_error_code = "syntax"
 disallow_untyped_defs = false
 check_untyped_defs = false
+ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [

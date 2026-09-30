@@ -102,12 +102,14 @@ MOCK_POD_STATUS = {
 
 class TierChangeRequest(BaseModel):
     """Request to change acquisition tier."""
+
     target_tier: str  # "T0", "T1", "T2"
     reason: str = "user_requested"
 
 
 class RecordingControl(BaseModel):
     """Request to start/stop XDF recording."""
+
     action: str  # "start" or "stop"
     session_name: str | None = None
     duration_s: float | None = None
@@ -141,6 +143,7 @@ app.add_middleware(
 
 # ==================== REST Endpoints ====================
 
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
@@ -166,7 +169,11 @@ async def get_signal_quality(pod_id: str):
     # TODO: Connect to real signal_quality module
     mock_quality = {
         "head_pod": {
-            "eeg": {"snr_db": 24.5, "impedance_kohm": [5.2, 4.8, 5.1, 4.9, 5.0, 5.3, 4.7, 5.1], "quality": "good"},
+            "eeg": {
+                "snr_db": 24.5,
+                "impedance_kohm": [5.2, 4.8, 5.1, 4.9, 5.0, 5.3, 4.7, 5.1],
+                "quality": "good",
+            },
             "ecg": {"hr_bpm": 72, "rmssd_ms": 42.3, "snr_db": 18.7, "quality": "good"},
         },
         "forearm_hub": {
@@ -187,9 +194,10 @@ async def get_live_data(pod_id: str, duration_s: float = 10.0):
     # TODO: Connect to real LSLGateway.get_recent_data()
     # Return mock time-series data
     import numpy as np
+
     n_samples = int(duration_s * 100)  # 100 Hz mock
     t = np.linspace(0, duration_s, n_samples)
-    
+
     if pod_id == "head_pod":
         # Mock EEG (8 channels)
         data = np.random.randn(8, n_samples) * 10 + 50 * np.sin(2 * np.pi * 10 * t)
@@ -197,10 +205,10 @@ async def get_live_data(pod_id: str, duration_s: float = 10.0):
             "pod_id": pod_id,
             "timestamps": t.tolist(),
             "data": data.tolist(),
-            "channels": [f"EEG{i+1}" for i in range(8)],
+            "channels": [f"EEG{i + 1}" for i in range(8)],
             "sampling_rate": 100,
         }
-    elif pod_id == "forearm_hub":
+    if pod_id == "forearm_hub":
         # Mock PPG + ACC
         ppg = 100000 + 5000 * np.sin(2 * np.pi * 1.2 * t) + np.random.randn(n_samples) * 100
         acc = np.random.randn(3, n_samples) * 0.1
@@ -220,7 +228,7 @@ async def control_tier(request: TierChangeRequest):
     valid_tiers = ["T0", "T1", "T2"]
     if request.target_tier not in valid_tiers:
         return {"error": f"Invalid tier. Must be one of {valid_tiers}"}
-    
+
     logger.info(f"Tier change requested: {request.target_tier} ({request.reason})")
     return {"success": True, "target_tier": request.target_tier, "reason": request.reason}
 
@@ -285,21 +293,24 @@ async def get_config():
 
 # ==================== WebSocket for Real-time Updates ====================
 
+
 @app.websocket("/ws/live")
 async def websocket_live(websocket: WebSocket):
     """WebSocket endpoint for real-time data push."""
     await websocket.accept()
     connected_clients.add(websocket)
     logger.info(f"WebSocket connected. Total clients: {len(connected_clients)}")
-    
+
     try:
         while True:
             # Send periodic updates (in production, push on data arrival)
             await asyncio.sleep(1.0)
-            await websocket.send_json({
-                "type": "status_update",
-                "data": MOCK_POD_STATUS,
-            })
+            await websocket.send_json(
+                {
+                    "type": "status_update",
+                    "data": MOCK_POD_STATUS,
+                }
+            )
     except WebSocketDisconnect:
         connected_clients.discard(websocket)
         logger.info(f"WebSocket disconnected. Total clients: {len(connected_clients)}")
@@ -318,4 +329,5 @@ async def broadcast_to_clients(message: dict[str, Any]):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

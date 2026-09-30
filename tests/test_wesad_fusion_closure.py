@@ -171,9 +171,9 @@ class TestRealWesadClosure:
                 continue
             if extract_wesad_window_features(r) is not None:
                 results.append(r)
-        assert (
-            len(results) >= MIN_SUBJECTS_FOR_CLOSURE
-        ), f"Need >={MIN_SUBJECTS_FOR_CLOSURE} real subjects for a GroupKFold gate"
+        assert len(results) >= MIN_SUBJECTS_FOR_CLOSURE, (
+            f"Need >={MIN_SUBJECTS_FOR_CLOSURE} real subjects for a GroupKFold gate"
+        )
         out = module.validate_wesad_stress_classification(results)
         assert out["feature_source"] == "fusion_windows_60s"
         assert out.get("surrogate", False) is False
