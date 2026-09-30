@@ -1,0 +1,14 @@
+# Backend dependencies for SYNAPSE-24 Dashboard API
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-multipart>=0.0.6
+websockets>=12.0
+pylsl>=1.16
+numpy>=1.26.0
+pyyaml>=6.0.1
+python-dotenv>=1.0.1
+
+# SYNAPSE-24 internal (installed in dev mode)
+# -e ../src

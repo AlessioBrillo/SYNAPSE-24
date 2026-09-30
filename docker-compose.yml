@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # Backend API (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./src:/app/src:ro
+      - ./config:/app/config:ro
+    environment:
+      - PYTHONPATH=/app/src
+      - SYNAPSE_CONFIG_DIR=/app/config
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      - redis
+    networks:
+      - synapse-network
+
+  # Frontend Dev Server (Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - synapse-network
+
+  # Redis for caching/session (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - synapse-network
+
+  # LSL Relay (for network LSL streaming)
+  lsl-relay:
+    image: ghcr.io/synapse24/lsl-relay:latest
+    ports:
+      - "22345:22345"  # LSL TCP port
+    environment:
+      - LSL_RELAY_PORT=22345
+    networks:
+      - synapse-network
+
+volumes:
+  redis-data:
+
+networks:
+  synapse-network:
+    driver: bridge
