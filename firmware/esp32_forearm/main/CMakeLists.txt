@@ -1,0 +1,53 @@
+# SYNAPSE-24 Forearm Hub (ECG + PPG + IMU, sync HUB role, drives GPIO 27).
+# Sources live in firmware/common (single source of truth); this variant
+# selects the full hub subset including ECG and its own main.cpp.
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "../../common/sensors/ecg_ad8232.cpp"
+        "../../common/sensors/ppg_max30102.cpp"
+        "../../common/sensors/ppg_sqi.cpp"
+        "../../common/sensors/ppg_processor.cpp"
+        "../../common/sensors/imu_icm20948.cpp"
+        "../../common/sensors/imu_processor.cpp"
+        "../../common/ble/ble_lsl_bridge.cpp"
+        "../../common/sync/sync_marker_handler.cpp"
+        "../../common/sync/wired_sync_handler.cpp"
+        "../../common/sync/clock_sync.cpp"
+        "../../common/triage/triage_inference.cpp"
+        "../../common/triage/triage_features.cpp"
+        "../../common/scheduler/sensor_scheduler.cpp"
+        "../../common/power/power_monitor.cpp"
+    INCLUDE_DIRS
+        "."
+        "../../common/sensors"
+        "../../common/ble"
+        "../../common/sync"
+        "../../common/triage"
+        "../../common/scheduler"
+        "../../common/power"
+    REQUIRES
+        esp_wifi
+        bt
+        driver
+        esp_adc
+        esp_timer
+        freertos
+        nvs_flash
+        esp_system
+        heap
+        log
+        spi_flash
+        bootloader_support
+        esp_common
+        esp_rom
+        hal
+        soc
+        esp_hw_support
+        esp_partition
+        esp_pm
+        esp_netif
+        lwip
+        mbedtls
+    PRIV_REQUIRES
+)
