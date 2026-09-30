@@ -97,7 +97,7 @@ from synapse_device import (
     SessionConfig,
     ExportFormat,
     SignalQuality,
-    StressLevel
+    StressLevel,
 )
 
 # --- Discovery ---
@@ -119,11 +119,11 @@ provisioning_result = device.provision(
 
 # --- Recording ---
 session_config = SessionConfig(
-    sport_type="running",           # running, cycling, sleep, generic
+    sport_type="running",  # running, cycling, sleep, generic
     duration_seconds=3600,
     enable_gps=True,
     enable_ecg=True,
-    ecg_sampling_rate=500,          # Hz
+    ecg_sampling_rate=500,  # Hz
     enable_ppg=True,
     ppg_sampling_rate=64,
     enable_imu=True,
@@ -140,9 +140,9 @@ session.on_signal_quality = lambda sq: print(f"SQI: {sq.ppg_sqi:.2f}, MAP: {sq.p
 session.wait()  # or session.stop()
 
 # --- Access Recorded Data ---
-fit_data = session.to_fit()           # FIT file bytes
-xdf_data = session.to_xdf()           # XDF file bytes
-csv_data = session.to_csv()           # CSV string
+fit_data = session.to_fit()  # FIT file bytes
+xdf_data = session.to_xdf()  # XDF file bytes
+csv_data = session.to_csv()  # CSV string
 
 # Or save directly
 session.save("my_run.fit", format=ExportFormat.FIT)
@@ -150,12 +150,12 @@ session.save("my_run.xdf", format=ExportFormat.XDF)
 
 # --- Streaming (Non-blocking) ---
 stream = device.create_stream(
-    protocol="lsl",                   # "lsl", "mqtt", "http", "callback"
+    protocol="lsl",  # "lsl", "mqtt", "http", "callback"
     lsl_stream_name="SYNAPSE_BAND",
     mqtt_host="mqtt.example.com",
     mqtt_topic="synapse/devices/SYN-BAND-A1B2",
     http_endpoint="https://cloud.example.com/ingest",
-    callback=lambda sample: process_sample(sample)
+    callback=lambda sample: process_sample(sample),
 )
 stream.start()
 # ... do other things ...
@@ -167,8 +167,7 @@ print(f"OTA: {ota_result.status}")  # SUCCESS, FAILED, ROLLED_BACK
 
 # --- Calibration ---
 cal_result = device.calibrate(
-    calibration_type="impedance",
-    parameters={"target_impedance_kohm": 10}
+    calibration_type="impedance", parameters={"target_impedance_kohm": 10}
 )
 
 # --- Device Settings ---
@@ -192,11 +191,13 @@ from datetime import datetime
 from typing import Optional, List
 from enum import Enum
 
+
 class TransportType(Enum):
     BLE = "ble"
     SERIAL = "serial"
     USB = "usb"
     TCP = "tcp"
+
 
 class SportType(Enum):
     RUNNING = "running"
@@ -206,18 +207,21 @@ class SportType(Enum):
     SLEEP = "sleep"
     GENERIC = "generic"
 
+
 class StressLevel(Enum):
     BASELINE = 0
     STRESS = 1
     ARTIFACT = 2
 
+
 class SignalQualityMetrics:
-    ecg_sqi: float          # 0.0-1.0
+    ecg_sqi: float  # 0.0-1.0
     ppg_sqi: float
-    ppg_map: float          # Motion Artifact Probability 0.0-1.0
-    ppg_pi: float           # Perfusion Index %
+    ppg_map: float  # Motion Artifact Probability 0.0-1.0
+    ppg_pi: float  # Perfusion Index %
     ecg_rpeak_confidence: float
-    imu_motion_level: float # 0.0-1.0
+    imu_motion_level: float  # 0.0-1.0
+
 
 @dataclass
 class DeviceInfo:
@@ -225,14 +229,15 @@ class DeviceInfo:
     hardware_version: str
     firmware_version: str
     mac_address: str
-    battery_level: int          # 0-100
+    battery_level: int  # 0-100
     is_charging: bool
-    sensors: List[str]          # ["ECG", "PPG", "IMU", "GPS", "TEMP"]
+    sensors: List[str]  # ["ECG", "PPG", "IMU", "GPS", "TEMP"]
     storage_used_mb: float
     storage_total_mb: float
     cloud_connected: bool
     cloud_url: Optional[str]
     last_sync: Optional[datetime]
+
 
 @dataclass
 class SessionConfig:
@@ -248,31 +253,33 @@ class SessionConfig:
     enable_temp: bool = True
     auto_pause: bool = True  # Motion-based pause
 
+
 @dataclass
 class SessionSample:
     timestamp: datetime
     heart_rate: Optional[int] = None
     rr_intervals: Optional[List[int]] = None  # ms
-    ecg: Optional[List[float]] = None         # Raw ECG samples
-    ppg: Optional[List[float]] = None         # Raw PPG samples (dual wavelength)
-    accel: Optional[tuple] = None             # (x, y, z) g
-    gyro: Optional[tuple] = None              # (x, y, z) deg/s
-    gps: Optional[dict] = None                # lat, lon, alt, speed, accuracy
-    temperature: Optional[float] = None       # Celsius
+    ecg: Optional[List[float]] = None  # Raw ECG samples
+    ppg: Optional[List[float]] = None  # Raw PPG samples (dual wavelength)
+    accel: Optional[tuple] = None  # (x, y, z) g
+    gyro: Optional[tuple] = None  # (x, y, z) deg/s
+    gps: Optional[dict] = None  # lat, lon, alt, speed, accuracy
+    temperature: Optional[float] = None  # Celsius
     signal_quality: Optional[SignalQualityMetrics] = None
     stress_level: Optional[StressLevel] = None
     battery: Optional[int] = None
 
+
 class Session:
     """Active recording session with real-time callbacks."""
-    
-    def __init__(self, device: 'SynapseDevice', config: SessionConfig):
+
+    def __init__(self, device: "SynapseDevice", config: SessionConfig):
         self.device = device
         self.config = config
         self.samples: List[SessionSample] = []
         self.start_time: datetime
         self.end_time: Optional[datetime] = None
-        
+
         # Callbacks (set by user)
         self.on_sample: Optional[callable] = None
         self.on_heart_rate: Optional[callable] = None
@@ -281,14 +288,14 @@ class Session:
         self.on_signal_quality: Optional[callable] = None
         self.on_gps: Optional[callable] = None
         self.on_error: Optional[callable] = None
-    
-    def wait(self) -> 'Session': ...
-    def stop(self) -> 'Session': ...
+
+    def wait(self) -> "Session": ...
+    def stop(self) -> "Session": ...
     def to_fit(self) -> bytes: ...
     def to_xdf(self) -> bytes: ...
     def to_csv(self) -> str: ...
     def save(self, path: str, format: ExportFormat): ...
-    
+
     @property
     def duration(self) -> float: ...
     @property

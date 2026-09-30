@@ -33,15 +33,15 @@ class TestNormativeRates:
         from synapse24.hardware.esp32_tier0 import ESP32Tier0Config
 
         cfg = ESP32Tier0Config()
-        assert (
-            cfg.ecg_sampling_rate == NORM_ECG_HZ
-        ), f"ECG {cfg.ecg_sampling_rate} != normative {NORM_ECG_HZ}"
-        assert (
-            cfg.ppg_sampling_rate == NORM_PPG_HZ
-        ), f"PPG {cfg.ppg_sampling_rate} != normative {NORM_PPG_HZ}"
-        assert (
-            cfg.imu_sampling_rate == NORM_IMU_HZ
-        ), f"IMU {cfg.imu_sampling_rate} != normative {NORM_IMU_HZ}"
+        assert cfg.ecg_sampling_rate == NORM_ECG_HZ, (
+            f"ECG {cfg.ecg_sampling_rate} != normative {NORM_ECG_HZ}"
+        )
+        assert cfg.ppg_sampling_rate == NORM_PPG_HZ, (
+            f"PPG {cfg.ppg_sampling_rate} != normative {NORM_PPG_HZ}"
+        )
+        assert cfg.imu_sampling_rate == NORM_IMU_HZ, (
+            f"IMU {cfg.imu_sampling_rate} != normative {NORM_IMU_HZ}"
+        )
 
     def test_synthetic_helper_emits_normative_lengths(self) -> None:
         from synapse24.hardware.esp32_tier0 import create_synthetic_tier0_data
