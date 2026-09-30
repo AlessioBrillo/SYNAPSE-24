@@ -196,19 +196,21 @@ class SynapseBleClient:
 
     async def scan(self, timeout_s: float = 10.0) -> str | None:
         """Scan for a SYNAPSE device; return its address or ``None``."""
-        from bleak import BleakScanner
+        from bleak import BleakScanner  # type: ignore[import-not-found]
 
         devices = await BleakScanner.discover(timeout=timeout_s)
         filt = self.device_name_filter.upper()
         for d in devices:
             if (d.name or "").upper().find(filt) >= 0:
-                self.address = d.address
-                return d.address
+                addr = d.address
+                if isinstance(addr, str):
+                    self.address = addr
+                    return addr
         return None
 
     async def sync_exchange(self, client: object, num_exchanges: int = 1) -> list[SyncExchange]:
         """Run ``num_exchanges`` ping-pong exchanges on an open BleakClient."""
-        from bleak import BleakClient  # noqa: F401  (type check only)
+        from bleak import BleakClient  # type: ignore[import-not-found]
 
         results: list[SyncExchange] = []
         ble_client = client  # typed as object to avoid hard bleak dependency
