@@ -1,6 +1,5 @@
 /** Sync Monitor Component - Clock Synchronization Visualization */
 
-import { useMemo } from 'react';
 import { useSyncStatus } from '../hooks/useData';
 import type { SystemStatus, PodSyncInfo } from '../types';
 
@@ -137,7 +136,6 @@ function TierBudgetCard() {
 }
 
 function TierBudgetRow({ tier, maxDrift, interval, color }: { tier: string; maxDrift: string; interval: string; color: 'green' | 'blue' }) {
-  const colors = { green: 'text-green-400', blue: 'text-blue-400' };
   return (
     <div className="flex items-center justify-between p-3 bg-gray-800 rounded">
       <span className={`px-2 py-1 rounded text-xs font-semibold bg-${color}-900 text-${color}-200`}>
@@ -212,10 +210,10 @@ function SyncRow({ podId, info }: { podId: string; info: PodSyncInfo }) {
   return (
     <tr className="border-b border-gray-800 hover:bg-gray-800/50">
       <td className="p-4 font-mono text-sm">{podId}</td>
-      <td className="p-4 text-center font-mono text-sm {offsetColor}">
+      <td className={`p-4 text-center font-mono text-sm ${offsetColor}`}>
         {info.offset_ms >= 0 ? '+' : ''}{info.offset_ms.toFixed(2)}
       </td>
-      <td className="p-4 text-center font-mono text-sm {driftColor}">
+      <td className={`p-4 text-center font-mono text-sm ${driftColor}`}>
         {info.drift_ppm.toFixed(2)}
       </td>
       <td className="p-4 text-center">

@@ -3,11 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api/client';
 import type {
-  SystemStatus,
-  SyncStatus,
-  PodSignalQuality,
-  LiveDataPoint,
-  HardwareConfig,
   Tier,
   TierChangeRequest,
   RecordingControlRequest,

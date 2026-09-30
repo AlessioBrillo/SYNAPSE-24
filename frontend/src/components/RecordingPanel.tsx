@@ -1,7 +1,6 @@
 /** Recording Panel Component - XDF Session Recording & Management */
 
-import { useState, useEffect } from 'react';
-import { useSystemStatus } from '../hooks/useData';
+import { useState, useEffect, useMemo } from 'react';
 import { useRecordingControl } from '../hooks/useData';
 import type { SystemStatus } from '../types';
 
@@ -366,7 +365,12 @@ export function RecordingPanel({ status }: RecordingPanelProps) {
   );
 }
 
-import { useMemo } from 'react';
+function formatTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 function RecordingStatusIndicator({ recording, elapsed }: { recording: boolean; elapsed: number }) {
   if (!recording) return null;
@@ -379,13 +383,6 @@ function RecordingStatusIndicator({ recording, elapsed }: { recording: boolean; 
       </span>
     </div>
   );
-}
-
-function formatTime(seconds: number) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 interface RecordingSession {

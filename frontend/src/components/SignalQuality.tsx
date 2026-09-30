@@ -19,7 +19,7 @@ const MODALITY_LABELS: Record<string, string> = {
   eeg_ear: 'EEG (Ear)',
 };
 
-const METRIC_CONFIG: Record<string, { label: string; unit: string; goodRange?: [number, number] }[]> = {
+const METRIC_CONFIG: Record<string, { key: string; label: string; unit: string; goodRange?: [number, number] }[]> = {
   eeg: [
     { key: 'snr_db', label: 'SNR', unit: 'dB', goodRange: [20, Infinity] },
     { key: 'impedance_kohm', label: 'Impedance', unit: 'kΩ', goodRange: [0, 10] },
@@ -61,10 +61,13 @@ function getMetricStatus(value: number | undefined, goodRange?: [number, number]
   return 'poor';
 }
 
-function formatValue(value: number | number[] | undefined): string {
+function formatValue(value: number | number[] | string | undefined): string {
   if (value === undefined) return 'N/A';
   if (Array.isArray(value)) {
     return value.map(v => v.toFixed(1)).join(', ');
+  }
+  if (typeof value === 'string') {
+    return value;
   }
   return value.toFixed(2);
 }
@@ -78,7 +81,7 @@ export function SignalQuality({ status }: SignalQualityProps) {
       ...Object.keys(status.tier0_pods),
       ...Object.keys(status.inear_pods),
     ];
-  }, [status});
+  }, [status]);
 
   // Fetch quality for each pod
   const qualityHooks = podIds.map(podId => 
@@ -86,7 +89,6 @@ export function SignalQuality({ status }: SignalQualityProps) {
   );
 
   const allLoading = qualityHooks.some(h => h.loading);
-  const anyError = qualityHooks.some(h => h.error);
 
   return (
     <div className="space-y-6">
@@ -119,7 +121,6 @@ export function SignalQuality({ status }: SignalQualityProps) {
             return (
               <PodQualityCard
                 key={podId}
-                podId={podId}
                 podName={podInfo.name}
                 quality={podQuality}
                 loading={podLoading}
@@ -136,7 +137,7 @@ export function SignalQuality({ status }: SignalQualityProps) {
       {podIds.length > 0 && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
           <h3 className="text-lg font-semibold mb-4">Quality Matrix</h3>
-          <QualityMatrix podIds={podIds} qualityHooks={qualityHooks} />
+          <QualityMatrix podIds={podIds} qualityHooks={qualityHooks} status={status} />
         </div>
       )}
     </div>
@@ -144,7 +145,6 @@ export function SignalQuality({ status }: SignalQualityProps) {
 }
 
 function PodQualityCard({
-  podId,
   podName,
   quality,
   loading,
@@ -152,7 +152,6 @@ function PodQualityCard({
   connected,
   streaming,
 }: {
-  podId: string;
   podName: string;
   quality: PodSignalQuality | null;
   loading: boolean;
@@ -301,9 +300,11 @@ function PodQualityCard({
 function QualityMatrix({
   podIds,
   qualityHooks,
+  status,
 }: {
   podIds: string[];
   qualityHooks: ReturnType<typeof useSignalQuality>[];
+  status: SystemStatus | null;
 }) {
   // Collect all unique modalities across pods
   const allModalities = useMemo(() => {
@@ -378,9 +379,4 @@ function QualityMatrix({
       </table>
     </div>
   );
-}
-
-// Need to access status in QualityMatrix - pass it as prop
-function QualityMatrixWrapper({ podIds, qualityHooks, status }: { podIds: string[]; qualityHooks: ReturnType<typeof useSignalQuality>[]; status: SystemStatus | null }) {
-  return <QualityMatrix podIds={podIds} qualityHooks={qualityHooks} />;
 }

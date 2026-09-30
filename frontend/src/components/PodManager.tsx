@@ -1,11 +1,25 @@
 /** Pod Manager Component - Device Configuration & Connection Management */
 
-import { useState } from 'react';
-import { useSystemStatus, useHardwareConfig } from '../hooks/useData';
-import type { SystemStatus, PodConfig, Tier1PodStatus, Tier0PodStatus, InEarPodStatus } from '../types';
+import { useState, useMemo } from 'react';
+import { useHardwareConfig } from '../hooks/useData';
+import type { SystemStatus, PodConfig } from '../types';
 
 interface PodManagerProps {
   status: SystemStatus | null;
+}
+
+interface PodWithConfig {
+  id: string;
+  name: string;
+  tier: 'T1' | 'T0';
+  type: 'head' | 'forearm' | 'inear';
+  connected: boolean;
+  streaming: boolean;
+  clock_offset_ms: number;
+  error_count: number;
+  last_data_age_s: number | null;
+  battery_remaining_pct?: number;
+  config?: PodConfig;
 }
 
 export function PodManager({ status }: PodManagerProps) {
@@ -14,18 +28,18 @@ export function PodManager({ status }: PodManagerProps) {
   const { data: hardwareConfig, loading: configLoading } = useHardwareConfig();
 
   // Collect all pods from status
-  const allPods = useMemo(() => {
+  const allPods = useMemo((): PodWithConfig[] => {
     if (!status) return [];
-    const pods: Array<{ id: string; tier: 'T1' | 'T0' | 'T0'; ... }> = [];
+    const pods: PodWithConfig[] = [];
     
     Object.entries(status.tier1_pods).forEach(([id, pod]) => {
-      pods.push({ id, ...pod, tier: 'T1' as const, type: 'head' });
+      pods.push({ id, ...pod, tier: 'T1', type: 'head' });
     });
     Object.entries(status.tier0_pods).forEach(([id, pod]) => {
-      pods.push({ id, ...pod, tier: 'T0' as const, type: 'forearm' });
+      pods.push({ id, ...pod, tier: 'T0', type: 'forearm' });
     });
     Object.entries(status.inear_pods).forEach(([id, pod]) => {
-      pods.push({ id, ...pod, tier: 'T0' as const, type: 'inear' });
+      pods.push({ id, ...pod, tier: 'T0', type: 'inear' });
     });
     
     return pods;
@@ -170,21 +184,13 @@ SYNAPSE_CLOCK_DOMAIN=local_clock`}</pre>
       {/* Add/Edit Pod Modal */}
       {(editingPod || newPod) && (
         <PodModal
-          pod={editingPod ? podsWithConfig.find(p => p.id === editingPod) : null}
-          hardwareConfig={hardwareConfig?.pods}
+          pod={editingPod ? podsWithConfig.find(p => p.id === editingPod) ?? null : null}
           onClose={() => { setEditingPod(null); setNewPod(false); }}
-          onSave={(podData) => {
-            console.log('Save pod:', podData);
-            setEditingPod(null);
-            setNewPod(false);
-          }}
         />
       )}
     </div>
   );
 }
-
-import { useMemo } from 'react';
 
 function PodRow({ 
   pod, 
@@ -193,18 +199,18 @@ function PodRow({
   onEdit, 
   onCancel 
 }: { 
-  pod: any; 
+  pod: PodWithConfig; 
   index: number;
   isEditing: boolean;
   onEdit: () => void;
   onCancel: () => void;
 }) {
   const tierColors = { T1: 'blue', T0: 'green' };
-  const color = tierColors[pod.tier as keyof typeof tierColors] || 'gray';
+  const color = tierColors[pod.tier] || 'gray';
 
   if (isEditing) {
     return (
-      <PodEditRow pod={pod} onCancel={onCancel} onSave={() => {}} />
+      <PodEditRow onCancel={onCancel} />
     );
   }
 
@@ -289,12 +295,11 @@ function PodRow({
   );
 }
 
-function PodEditRow({ pod, onCancel, onSave }: { pod: any; onCancel: () => void; onSave: () => void }) {
+function PodEditRow({ onCancel }: { onCancel: () => void }) {
   return (
     <div className="p-4 bg-gray-800/50 border-t border-gray-700">
       <p className="text-gray-400 text-sm mb-4">Editing not yet implemented. Configure via hardware.yaml and .env</p>
       <div className="flex gap-2">
-        <button onClick={onSave} className="px-3 py-1 bg-synapse-600 hover:bg-synapse-500 rounded text-xs">Save</button>
         <button onClick={onCancel} className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs">Cancel</button>
       </div>
     </div>
@@ -312,14 +317,10 @@ function DetailItem({ label, value }: { label: string; value: string }) {
 
 function PodModal({ 
   pod, 
-  hardwareConfig, 
-  onClose, 
-  onSave 
+  onClose 
 }: { 
-  pod: any | null; 
-  hardwareConfig: any[] | undefined;
+  pod: PodWithConfig | null; 
   onClose: () => void;
-  onSave: (data: any) => void;
 }) {
   const isEditing = !!pod;
 

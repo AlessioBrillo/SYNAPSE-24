@@ -13,7 +13,7 @@ import { useSystemStatus } from './hooks/useData';
 import type { SystemStatus, Tier } from './types';
 
 const PAGES = ['overview', 'live', 'quality', 'sync', 'tiers', 'pods', 'recording'] as const;
-type Page = typeof PAGES[number];
+export type Page = typeof PAGES[number];
 
 function PageContent({ status, currentPage }: { status: SystemStatus | null; currentPage: Page }) {
   switch (currentPage) {

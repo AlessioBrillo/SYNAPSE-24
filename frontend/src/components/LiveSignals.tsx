@@ -1,9 +1,9 @@
 /** Live Signals Component - Real-time Signal Visualization */
 
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Plot from 'react-plotly.js';
 import { useLiveData } from '../hooks/useData';
-import type { SystemStatus, LiveDataPoint } from '../types';
+import type { SystemStatus } from '../types';
 
 interface LiveSignalsProps {
   status: SystemStatus | null;
@@ -35,7 +35,6 @@ export function LiveSignals({ status }: LiveSignalsProps) {
   const [selectedModality, setSelectedModality] = useState<string>('EEG');
   const [timeWindow, setTimeWindow] = useState(WINDOW_DURATION);
   const [paused, setPaused] = useState(false);
-  const plotRef = useRef<Plot>(null);
 
   // Get available pods from status
   const availablePods = useMemo(() => {
@@ -119,36 +118,37 @@ export function LiveSignals({ status }: LiveSignalsProps) {
   }, [liveData, selectedPod, selectedModality]);
 
   // Layout configuration
-  const layout = useMemo(() => ({
-    plot_bgcolor: '#050505',
-    paper_bgcolor: '#050505',
-    font: { color: '#d1d5db', family: 'Inter, sans-serif' },
-    margin: { l: 60, r: 30, t: 40, b: 50 },
-    hovermode: 'x unified' as const,
-    xaxis: {
-      showgrid: true,
-      gridcolor: '#374151',
-      title: { text: 'Time (s)', font: { size: 12 } },
-      range: liveData?.timestamps?.length
-        ? [liveData.timestamps[liveData.timestamps.length - 1] - timeWindow, liveData.timestamps[liveData.timestamps.length - 1]]
-        : [0, timeWindow],
-      fixedrange: false,
-    },
-    yaxis: {
-      showgrid: true,
-      gridcolor: '#374151',
-      title: { text: MODALITY_CONFIG[selectedPod]?.find(m => m.name === selectedModality)?.unit || '', font: { size: 12 } },
-      fixedrange: false,
-    },
-    height: 350,
-    dragmode: 'pan' as const,
-    uirevision: 'live-signals', // Preserve zoom/pan on updates
-  }), [selectedPod, selectedModality, timeWindow, liveData?.timestamps?.length]);
-
-  // Handle plot ref for imperative updates
-  const handlePlotRef = useCallback((ref: Plot | null) => {
-    plotRef.current = ref;
-  }, []);
+  const layout = useMemo(() => {
+    const timestamps = liveData?.timestamps;
+    const hasData = timestamps && timestamps.length > 0;
+    const range: [number, number] = hasData
+      ? [timestamps[timestamps.length - 1] - timeWindow, timestamps[timestamps.length - 1]]
+      : [0, timeWindow];
+    
+    return {
+      plot_bgcolor: '#050505',
+      paper_bgcolor: '#050505',
+      font: { color: '#d1d5db', family: 'Inter, sans-serif' },
+      margin: { l: 60, r: 30, t: 40, b: 50 },
+      hovermode: 'x unified' as const,
+      xaxis: {
+        showgrid: true,
+        gridcolor: '#374151',
+        title: { text: 'Time (s)', font: { size: 12 } },
+        range,
+        fixedrange: false,
+      },
+      yaxis: {
+        showgrid: true,
+        gridcolor: '#374151',
+        title: { text: MODALITY_CONFIG[selectedPod]?.find(m => m.name === selectedModality)?.unit || '', font: { size: 12 } },
+        fixedrange: false,
+      },
+      height: 350,
+      dragmode: 'pan' as const,
+      uirevision: 'live-signals', // Preserve zoom/pan on updates
+    };
+  }, [selectedPod, selectedModality, timeWindow, liveData?.timestamps?.length]);
 
   return (
     <div className="space-y-6">
@@ -239,7 +239,6 @@ export function LiveSignals({ status }: LiveSignalsProps) {
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         {plotData.length > 0 ? (
           <Plot
-            ref={handlePlotRef}
             data={plotData}
             layout={layout}
             config={{

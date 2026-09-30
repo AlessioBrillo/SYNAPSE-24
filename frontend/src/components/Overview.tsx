@@ -1,7 +1,7 @@
 /** Overview Dashboard Component */
 
 import { useMemo } from 'react';
-import type { SystemStatus, Tier1PodStatus, Tier0PodStatus, InEarPodStatus } from '../types';
+import type { SystemStatus, PodWithQuality } from '../types';
 
 interface OverviewProps {
   status: SystemStatus | null;
@@ -17,27 +17,16 @@ export function Overview({ status }: OverviewProps) {
     };
   }, [status]);
 
-  const allPods = [...pods.tier1, ...pods.tier0, ...pods.inear];
+  const allPods: PodWithQuality[] = [...pods.tier1, ...pods.tier0, ...pods.inear];
   const connectedPods = allPods.filter(p => p.connected).length;
   const streamingPods = allPods.filter(p => p.streaming).length;
   const totalPods = allPods.length;
 
   const avgQuality = useMemo(() => {
-    const withQuality = allPods.filter(p => 'quality_passed' in p && p.quality_passed !== undefined);
+    const withQuality = allPods.filter(p => p.quality_passed !== undefined);
     if (withQuality.length === 0) return 0;
     return withQuality.filter(p => p.quality_passed).length / withQuality.length;
   }, [allPods]);
-
-  const tier1Duration = status?.controller.tier1_duration_s;
-  const tier2Duration = status?.controller.tier2_duration_s;
-
-  const formatDuration = (seconds: number | null) => {
-    if (seconds === null) return 'N/A';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
 
   return (
     <div className="space-y-6">
@@ -226,7 +215,7 @@ function PodGroupCard({
 }: {
   title: string;
   subtitle: string;
-  pods: Array<Tier1PodStatus | Tier0PodStatus | InEarPodStatus & { id: string }>;
+  pods: PodWithQuality[];
   tier: 'T0' | 'T1';
 }) {
   const tierColors = { T0: 'green', T1: 'blue' };
@@ -271,7 +260,7 @@ function PodGroupCard({
                     {pod.quality_passed ? 'Quality OK' : 'Quality Fail'}
                   </span>
                 )}
-                {'battery_remaining_pct' in pod && (
+                {'battery_remaining_pct' in pod && pod.battery_remaining_pct !== undefined && (
                   <span className="text-gray-400">Battery: {pod.battery_remaining_pct.toFixed(0)}%</span>
                 )}
               </div>

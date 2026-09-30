@@ -40,6 +40,22 @@ export interface InEarPodStatus extends BasePodStatus {
   battery_remaining_pct: number;
 }
 
+// For components that need pod ID included
+export interface PodWithId {
+  id: string;
+  name: string;
+  connected: boolean;
+  streaming: boolean;
+  clock_offset_ms: number;
+  error_count: number;
+  last_data_age_s: number | null;
+}
+
+export interface PodWithQuality extends PodWithId {
+  quality_passed?: boolean;
+  battery_remaining_pct?: number;
+}
+
 export interface AllPodsStatus {
   tier1_pods: Record<string, Tier1PodStatus>;
   tier0_pods: Record<string, Tier0PodStatus>;
@@ -151,6 +167,8 @@ export interface PodConfig {
   channels?: Record<string, number>;
   placement?: string;
   electrode_type?: string;
+  ble_address?: string;
+  serial_port?: string;
 }
 
 export interface SyncConfig {
