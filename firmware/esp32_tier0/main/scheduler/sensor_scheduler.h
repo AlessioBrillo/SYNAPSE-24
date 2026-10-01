@@ -2,10 +2,12 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "esp_err.h"
 #include "esp_timer.h"
 
 #ifdef __cplusplus
@@ -85,10 +87,18 @@ esp_err_t sensor_scheduler_deinit(sensor_scheduler_t* scheduler);
 
 bool sensor_ring_buffer_push(sensor_ring_buffer_t* rb, const sensor_sample_t* sample);
 bool sensor_ring_buffer_pop(sensor_ring_buffer_t* rb, sensor_sample_t* sample);
+bool sensor_ring_buffer_peek(const sensor_ring_buffer_t* rb, sensor_sample_t* sample, size_t offset);
 size_t sensor_ring_buffer_available(const sensor_ring_buffer_t* rb);
 void sensor_ring_buffer_reset(sensor_ring_buffer_t* rb);
 
 void sensor_scheduler_get_stats(const sensor_scheduler_t* scheduler, uint32_t* sample_counts, uint32_t* dropped_samples);
+
+// FreeRTOS sensor polling task (one instance per registered sensor).
+// Must be non-static: created from app_main via xTaskCreate.
+void sensor_task_fn(void* arg);
+
+// Global scheduler pointer for sensor tasks (set on init, cleared on deinit).
+extern sensor_scheduler_t* g_sensor_scheduler_ptr;
 
 #ifdef __cplusplus
 }

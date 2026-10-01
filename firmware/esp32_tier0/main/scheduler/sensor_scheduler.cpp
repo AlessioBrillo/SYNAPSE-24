@@ -6,12 +6,15 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <inttypes.h>
 
 static const char* TAG = "sensor_scheduler";
 
+// Global pointer for sensor tasks to access scheduler (declared in header).
+sensor_scheduler_t* g_sensor_scheduler_ptr = NULL;
+
 static void coordinator_timer_callback(void* arg);
 static void coordinator_task_fn(void* arg);
-static void sensor_task_fn(void* arg);
 
 static inline int64_t get_time_us(void) {
     return esp_timer_get_time();
@@ -57,6 +60,21 @@ esp_err_t sensor_scheduler_init(sensor_scheduler_t* scheduler, QueueHandle_t ble
 
     // Set global pointer for sensor tasks
     g_sensor_scheduler_ptr = scheduler;
+
+    // Create coordinator task (drains ring buffers -> BLE TX queue on timer tick).
+    BaseType_t created = xTaskCreate(coordinator_task_fn, "sched_coord", 4096,
+                                     scheduler, SENSOR_TASK_PRIO_COORDINATOR,
+                                     &scheduler->coordinator_task);
+    if (created != pdPASS || scheduler->coordinator_task == NULL) {
+        ESP_LOGE(TAG, "Failed to create coordinator task");
+        for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
+            vSemaphoreDelete(scheduler->buffers[i].mutex);
+        }
+        esp_timer_delete(scheduler->coordinator_timer);
+        scheduler->coordinator_timer = NULL;
+        g_sensor_scheduler_ptr = NULL;
+        return ESP_ERR_NO_MEM;
+    }
 
     scheduler->running = false;
     ESP_LOGI(TAG, "Sensor scheduler initialized");
@@ -136,6 +154,11 @@ esp_err_t sensor_scheduler_deinit(sensor_scheduler_t* scheduler) {
         scheduler->coordinator_timer = NULL;
     }
 
+    if (scheduler->coordinator_task) {
+        vTaskDelete(scheduler->coordinator_task);
+        scheduler->coordinator_task = NULL;
+    }
+
     for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
         if (scheduler->buffers[i].mutex) {
             vSemaphoreDelete(scheduler->buffers[i].mutex);
@@ -196,8 +219,30 @@ bool sensor_ring_buffer_pop(sensor_ring_buffer_t* rb, sensor_sample_t* sample) {
     return success;
 }
 
-size_t sensor_ring_buffer_available(const sensor_ring_buffer_t* rb) {
-    if (!rb || !rb->mutex) {
+bool sensor_ring_buffer_peek(const sensor_ring_buffer_t* rb, sensor_sample_t* sample, size_t offset) {
+    if (!rb || !sample || !rb->mutex) {
+        return false;
+    }
+
+    if (xSemaphoreTake((SemaphoreHandle_t)rb->mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+
+    size_t available = (rb->head >= rb->tail)
+        ? (rb->head - rb->tail)
+        : (SENSOR_SCHEDULER_RING_BUFFER_SIZE - rb->tail + rb->head);
+    bool success = false;
+    if (offset < available) {
+        size_t idx = (rb->tail + offset) % SENSOR_SCHEDULER_RING_BUFFER_SIZE;
+        *sample = rb->buffer[idx];
+        success = true;
+    }
+
+    xSemaphoreGive((SemaphoreHandle_t)rb->mutex);
+    return success;
+}
+
+size_t sensor_ring_buffer_available(const sensor_ring_buffer_t* rb) {    if (!rb || !rb->mutex) {
         return 0;
     }
 
@@ -229,6 +274,7 @@ void sensor_scheduler_get_stats(const sensor_scheduler_t* scheduler, uint32_t* s
 
 static void coordinator_timer_callback(void* arg) {
     sensor_scheduler_t* scheduler = (sensor_scheduler_t*)arg;
+    if (!scheduler || !scheduler->coordinator_task) return;
     BaseType_t higher_priority_task_woken = pdFALSE;
     vTaskNotifyGiveFromISR(scheduler->coordinator_task, &higher_priority_task_woken);
     portYIELD_FROM_ISR(higher_priority_task_woken);
@@ -254,11 +300,14 @@ static void coordinator_task_fn(void* arg) {
     }
 }
 
-static void sensor_task_fn(void* arg) {
+void sensor_task_fn(void* arg) {
     sensor_config_t* config = (sensor_config_t*)arg;
-    // The scheduler pointer is stored in the task's task handle array index
-    // We retrieve it via the global scheduler pointer set during init
-    extern sensor_scheduler_t* g_sensor_scheduler_ptr;
+    if (!config || config->sampling_rate_hz == 0) {
+        ESP_LOGE(TAG, "sensor_task_fn: invalid config");
+        vTaskDelete(NULL);
+        return;
+    }
+    // The scheduler pointer is stored in the global set during init.
     sensor_scheduler_t* scheduler = g_sensor_scheduler_ptr;
     sensor_sample_t sample = {0};
     sample.type = config->type;
@@ -282,5 +331,4 @@ static void sensor_task_fn(void* arg) {
     }
 }
 
-// Global pointer for sensor tasks to access scheduler
-sensor_scheduler_t* g_sensor_scheduler_ptr = NULL;
+// Global pointer defined at top of file (see g_sensor_scheduler_ptr).

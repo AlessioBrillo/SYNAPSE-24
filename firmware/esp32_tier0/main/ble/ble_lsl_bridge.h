@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include "sensor_scheduler.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Bluetooth LE LSL Clock Synchronization UUIDs (128-bit base: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E)
 #define BLE_LSL_UUID_BASE "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define BLE_LSL_UUID_PPG  "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -79,4 +83,20 @@ esp_err_t ble_lsl_bridge_send_sync_marker(ble_lsl_bridge_t* bridge, uint32_t seq
 bool ble_lsl_bridge_is_connected(const ble_lsl_bridge_t* bridge);
 int64_t ble_lsl_bridge_get_hub_clock(void);
 
+// BLE connection parameters (Architecture.md §92: 7.5ms interval for 500Hz ECG)
+#ifndef BLE_LSL_CONN_INTERVAL_MIN_MS
+#define BLE_LSL_CONN_INTERVAL_MIN_MS 7.5f
+#endif
+#ifndef BLE_LSL_CONN_INTERVAL_MAX_MS
+#define BLE_LSL_CONN_INTERVAL_MAX_MS 15.0f
+#endif
+#ifndef BLE_LSL_CONN_LATENCY
+#define BLE_LSL_CONN_LATENCY 0
+#endif
+#ifndef BLE_LSL_SUPERVISION_TIMEOUT_MS
+#define BLE_LSL_SUPERVISION_TIMEOUT_MS 2000
+#endif
+
 #ifdef __cplusplus
+}
+#endif

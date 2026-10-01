@@ -1,10 +1,14 @@
 #include "clock_sync.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_err.h"
 #include <string.h>
 #include <math.h>
+#include <inttypes.h>
 
 static const char* TAG = "clock_sync";
+
+static esp_err_t clock_sync_update_drift_model(clock_sync_t* sync, int64_t ref_time_us);
 
 esp_err_t clock_sync_init(clock_sync_t* sync) {
     if (!sync) return ESP_ERR_INVALID_ARG;
@@ -22,9 +26,18 @@ esp_err_t clock_sync_init(clock_sync_t* sync) {
 
 esp_err_t clock_sync_pod_send_request(clock_sync_t* sync, int64_t* send_timestamp_us) {
     if (!sync || !sync->initialized || !send_timestamp_us) return ESP_ERR_INVALID_ARG;
-    
+
     *send_timestamp_us = esp_timer_get_time();
     sync->next_sequence++;
+
+    // Record the request so pod_receive_reply can match it later.
+    clock_sync_entry_t entry = {0};
+    entry.sequence = sync->next_sequence;
+    entry.pod_send_us = *send_timestamp_us;
+    sync->history[sync->head] = entry;
+    sync->head = (uint8_t)((sync->head + 1) % CLOCK_SYNC_MAX_HISTORY);
+    if (sync->count < CLOCK_SYNC_MAX_HISTORY) sync->count++;
+
     ESP_LOGD(TAG, "Pod send sync request: seq=%" PRIu32 ", t=%" PRId64, sync->next_sequence, *send_timestamp_us);
     return ESP_OK;
 }
@@ -34,11 +47,11 @@ esp_err_t clock_sync_pod_receive_reply(clock_sync_t* sync, uint32_t sequence,
                                         int64_t pod_recv_us) {
     if (!sync || !sync->initialized) return ESP_ERR_INVALID_STATE;
     
-    // Find the matching request in history
-    // For simplicity, assume sequential - in production use a map
+    // Find the matching request in history (search newest-first, wrap-safe).
     int idx = -1;
     for (int i = 0; i < sync->count; i++) {
-        int h = (sync->head + sync->count - 1 - i) % CLOCK_SYNC_MAX_HISTORY;
+        int h = (sync->head - 1 - i) % CLOCK_SYNC_MAX_HISTORY;
+        if (h < 0) h += CLOCK_SYNC_MAX_HISTORY;
         if (sync->history[h].sequence == sequence) {
             idx = h;
             break;
@@ -89,7 +102,7 @@ esp_err_t clock_sync_pod_receive_reply(clock_sync_t* sync, uint32_t sequence,
 }
 
 static esp_err_t clock_sync_update_drift_model(clock_sync_t* sync, int64_t ref_time_us) {
-    if (sync->count < CLOCK_SYNC_MIN_SAMPLES_FOR_DRIFT) return ESP_ERR_INVALID_STATE;
+    if (!sync || sync->count < CLOCK_SYNC_MIN_SAMPLES_FOR_DRIFT) return ESP_ERR_INVALID_STATE;
     
     double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
     int valid = 0;

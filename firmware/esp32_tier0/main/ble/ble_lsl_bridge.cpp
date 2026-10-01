@@ -1,5 +1,7 @@
 #include "ble_lsl_bridge.h"
+#include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -11,6 +13,8 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include <string.h>
+#include <inttypes.h>
+#include <assert.h>
 
 static const char* TAG = "ble_lsl_bridge";
 
@@ -85,9 +89,10 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struc
     switch (ctxt->op) {
         case BLE_GATT_ACCESS_OP_READ_CHR: {
             if (chr_type == BLE_LSL_CHAR_SYNC) {
-                // Return last sync exchange data from history buffer
+                // Return last sync exchange data from history buffer.
+                // sync_head = next write index; newest entry = (head - 1 + MAX) % MAX.
                 if (s_bridge && s_bridge->sync_count > 0) {
-                    uint8_t idx = (s_bridge->sync_head + s_bridge->sync_count - 1) % BLE_LSL_SYNC_HISTORY_MAX;
+                    uint8_t idx = (uint8_t)((s_bridge->sync_head + BLE_LSL_SYNC_HISTORY_MAX - 1) % BLE_LSL_SYNC_HISTORY_MAX);
                     ble_lsl_sync_entry_t* entry = &s_bridge->sync_history[idx];
                     if (entry->hub_recv_us > 0) {
                         // Format: [uint32 seq, int64 hub_recv_us, int64 hub_send_us]
@@ -134,9 +139,9 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struc
                     // Send hub send time (small processing delay)
                     int64_t hub_send_us = esp_timer_get_time();
                     
-                    // Store in sync history for read-after-write protocol
-                    if (s_bridge && s_bridge->sync_count < BLE_LSL_SYNC_HISTORY_MAX) {
-                        int idx = s_bridge->sync_count++;
+                    // Store in sync history (ring buffer, head = next write index).
+                    if (s_bridge) {
+                        uint8_t idx = s_bridge->sync_head;
                         s_bridge->sync_history[idx].sequence = seq;
                         s_bridge->sync_history[idx].pod_send_us = pod_send_us;
                         s_bridge->sync_history[idx].hub_recv_us = hub_recv_us;
@@ -145,22 +150,9 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struc
                         s_bridge->sync_history[idx].pod_recv_us = 0;
                         s_bridge->sync_history[idx].offset_us = 0;
                         s_bridge->sync_history[idx].drift_ppm = 0.0f;
-                        s_bridge->sync_head = idx;
-                    } else if (s_bridge) {
-                        // Overwrite oldest entry (circular buffer)
-                        int idx = s_bridge->sync_count - 1;  // = BLE_LSL_SYNC_HISTORY_MAX - 1 when full
-                        // But we need to update head too - actually let's just increment count at max
-                        if (s_bridge->sync_count >= BLE_LSL_SYNC_HISTORY_MAX) {
-                            s_bridge->sync_head = (s_bridge->sync_head + 1) % BLE_LSL_SYNC_HISTORY_MAX;
-                        }
-                        int idx2 = (s_bridge->sync_head + s_bridge->sync_count - 1) % BLE_LSL_SYNC_HISTORY_MAX;
-                        s_bridge->sync_history[idx2].sequence = seq;
-                        s_bridge->sync_history[idx2].pod_send_us = pod_send_us;
-                        s_bridge->sync_history[idx2].hub_recv_us = hub_recv_us;
-                        s_bridge->sync_history[idx2].hub_send_us = hub_send_us;
-                        s_bridge->sync_history[idx2].pod_recv_us = 0;
-                        s_bridge->sync_history[idx2].offset_us = 0;
-                        s_bridge->sync_history[idx2].drift_ppm = 0.0f;
+                        s_bridge->sync_head = (uint8_t)((s_bridge->sync_head + 1) % BLE_LSL_SYNC_HISTORY_MAX);
+                        if (s_bridge->sync_count < BLE_LSL_SYNC_HISTORY_MAX) s_bridge->sync_count++;
+                        s_bridge->sync_initialized = true;
                     }
                     
                     ESP_LOGD(TAG, "Sync request received: seq=%" PRIu32 ", pod_send=%" PRId64 ", hub_recv=%" PRId64 ", hub_send=%" PRId64,
@@ -170,7 +162,7 @@ static int gatt_svr_chr_access(uint16_t conn_handle, uint16_t attr_handle, struc
             return 0;
         }
         case BLE_GATT_ACCESS_OP_WRITE_DSC: {
-            if (attr_handle == s_ccc_handles[chr_type]) {
+            if (s_bridge && attr_handle == s_ccc_handles[chr_type]) {
                 uint16_t value;
                 os_mbuf_copydata(ctxt->om, 0, sizeof(value), &value);
                 s_bridge->notifications_enabled[chr_type] = (value & 0x0001) != 0;
@@ -253,6 +245,7 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
 
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT: {
+            if (!s_bridge) return 0;
             if (event->connect.status == 0) {
                 s_bridge->conn_handle = event->connect.conn_handle;
                 s_bridge->conn_params_updated = false;
@@ -267,6 +260,7 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
         }
         case BLE_GAP_EVENT_DISCONNECT: {
             ESP_LOGI(TAG, "Disconnected, reason=%d", event->disconnect.reason);
+            if (!s_bridge) return 0;
             s_bridge->conn_handle = BLE_HS_CONN_HANDLE_NONE;
             s_bridge->conn_params_updated = false;
             memset(s_bridge->notifications_enabled, 0, sizeof(s_bridge->notifications_enabled));
@@ -278,6 +272,7 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
             return 0;
         }
         case BLE_GAP_EVENT_CONN_UPDATE: {
+            if (!s_bridge) return 0;
             if (event->conn_update.status == 0) {
                 s_bridge->conn_params_updated = true;
                 ESP_LOGI(TAG, "Connection parameters updated successfully: interval=%d (1.25ms units)",
@@ -331,8 +326,10 @@ esp_err_t ble_lsl_bridge_init(ble_lsl_bridge_t* bridge, QueueHandle_t scheduler_
     }
 
     for (int i = 0; i < BLE_LSL_CHAR_MAX; i++) {
-        s_chr_handles[i] = ble_gatts_find_chr_handle(&gatt_svr_chrs[i].uuid);
-        s_ccc_handles[i] = s_chr_handles[i] + 1;
+        uint16_t chr_handle = ble_gatts_find_chr(&gatt_svr_svc_uuid.u, gatt_svr_chrs[i].uuid, NULL, NULL);
+        s_chr_handles[i] = chr_handle;
+        // CCCD handle follows the characteristic value handle when NOTIFY is enabled.
+        s_ccc_handles[i] = chr_handle ? (uint16_t)(chr_handle + 1) : 0;
     }
 
     ESP_LOGI(TAG, "BLE LSL bridge initialized");
@@ -431,4 +428,8 @@ esp_err_t ble_lsl_bridge_send_sync_marker(ble_lsl_bridge_t* bridge, uint32_t seq
 
 bool ble_lsl_bridge_is_connected(const ble_lsl_bridge_t* bridge) {
     return bridge && bridge->conn_handle != BLE_HS_CONN_HANDLE_NONE;
+}
+
+int64_t ble_lsl_bridge_get_hub_clock(void) {
+    return esp_timer_get_time();
 }
