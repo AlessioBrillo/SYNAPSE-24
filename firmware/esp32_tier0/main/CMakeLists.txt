@@ -12,11 +12,11 @@ idf_component_register(
         "sync/wired_sync_handler.cpp"
         "sync/clock_sync.cpp"
         "triage/triage_inference.cpp"
+        "triage/triage_features.cpp"
         "scheduler/sensor_scheduler.cpp"
         "power/power_monitor.cpp"
     INCLUDE_DIRS
-        "main"
-        "include"
+        "."
         "sensors"
         "ble"
         "sync"
@@ -25,15 +25,14 @@ idf_component_register(
         "power"
     REQUIRES
         esp_wifi
-        esp_bt
-        nimble
+        bt
         driver
-        i2c
-        adc
+        esp_adc
         esp_timer
         freertos
         nvs_flash
         esp_system
+        heap
         log
         spi_flash
         bootloader_support
@@ -47,8 +46,5 @@ idf_component_register(
         esp_netif
         lwip
         mbedtls
-        console
-        esp_console
-        linenoise
     PRIV_REQUIRES
 )

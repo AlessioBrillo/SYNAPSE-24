@@ -132,27 +132,37 @@ static int detect_peaks(const float* buffer, size_t count, int* peak_indices, in
     return found;
 }
 
-static esp_err_t compute_features(const float* ir_buffer, size_t count, int64_t timestamp_us, 
+static esp_err_t compute_features(const float* ir_buffer, size_t count, int64_t timestamp_us,
                                   const ppg_sqi_result_t* sqi, ppg_features_t* features) {
+    if (!ir_buffer || !features) return ESP_ERR_INVALID_ARG;
     if (count < PPG_PROCESSOR_WINDOW_SAMPLES / 2) return ESP_ERR_INVALID_SIZE;
-    
-    // Apply IIR bandpass filter (0.5-40 Hz) to IR signal before peak detection
-    static iir_biquad_t s_filt = {0};
-    if (!s_filt.b0) iir_biquad_design_bp(0.5f, 40.0f, (float)PPG_PROCESSOR_SAMPLE_RATE_HZ, &s_filt);
-    
-    // Apply filter and 12-bit quantization
+
+    // IIR bandpass state (0.5-40 Hz @ 50 Hz, Direct Form I).
+    // Coefficients are compile-time constants; state is reset per window
+    // to keep the function pure and testable on host.
+    static const float kB0 = 0.0675f;
+    static const float kB2 = -0.0675f;
+    static const float kA1 = -1.0f;
+    static const float kA2 = 0.930f;
+
     float filtered_buf[PPG_PROCESSOR_WINDOW_SAMPLES];
+    float x1 = 0.0f, x2 = 0.0f, y1 = 0.0f, y2 = 0.0f;
     for (size_t i = 0; i < count; i++) {
-        // Direct form I biquad: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
         float x = ir_buffer[i];
-        float y = filt->b0 * x + filt->x1 * b1 - filt->a1 * y1 - filt->a2 * y2;  // placeholder
-        // Simplified: just use the raw buffer for now, filter integration later
-        filtered_buf[i] = ir_buffer[i];  // TODO: replace with actual filtered value
+        float y = kB0 * x + kB2 * x2 - kA1 * y1 - kA2 * y2;
+        x2 = x1;
+        x1 = x;
+        y2 = y1;
+        y1 = y;
+        // 12-bit quantization (compress-before-transmit, Arch §55-62)
+        int16_t q = (int16_t)(y > 1.0f ? 2047 : (y < -1.0f ? -2048 : y * 2048.0f));
+        filtered_buf[i] = (float)q / 2048.0f;
     }
-    
-    // For now, proceed with raw buffer - filter will be integrated in next commit
-    // (The filter coefficients and biquad state are set up; we apply in the task fn)
-    
+
+    int peak_indices[PPG_PROCESSOR_WINDOW_SAMPLES / 10];
+    int peak_count = detect_peaks(filtered_buf, count, peak_indices,
+                                  (int)(sizeof(peak_indices) / sizeof(peak_indices[0])));
+
     if (peak_count < PPG_PROCESSOR_MIN_PEAKS) {
         memset(features, 0, sizeof(ppg_features_t));
         features->valid = false;

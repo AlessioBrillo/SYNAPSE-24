@@ -246,9 +246,9 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
         features.acc_rms_x = compute_rms(ax_lin, s_ctx.count);
         features.acc_rms_y = compute_rms(ay_lin, s_ctx.count);
         features.acc_rms_z = compute_rms(az_lin, s_ctx.count);
-        features.gx_rms = compute_rms(gx_lin, s_ctx.count);
-        features.gy_rms = compute_rms(gy_lin, s_ctx.count);
-        features.gz_rms = compute_rms(gz_lin, s_ctx.count);
+        features.gyro_rms_x = compute_rms(gx_lin, s_ctx.count);
+        features.gyro_rms_y = compute_rms(gy_lin, s_ctx.count);
+        features.gyro_rms_z = compute_rms(gz_lin, s_ctx.count);
         
         // Total motion intensity (vector magnitude RMS)
         float vm_rms_sum = 0.0f;

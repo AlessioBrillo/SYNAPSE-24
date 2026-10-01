@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 #include "sensor_scheduler.h"
 #include "ppg_sqi.h"
 

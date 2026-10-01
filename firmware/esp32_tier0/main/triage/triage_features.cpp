@@ -1,6 +1,8 @@
 #include "triage_features.h"
 #include "sensor_scheduler.h"
+#include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <math.h>
 #include <string.h>
 
@@ -50,20 +52,28 @@ esp_err_t triage_features_compute_live(
     triage_features_t* features_out
 ) {
     if (!features_out) return ESP_ERR_INVALID_ARG;
-    
+
     const sensor_scheduler_t* scheduler = (const sensor_scheduler_t*)imu_ring_buffer;
-    
-    // Get latest IMU samples from ring buffer (need at least 10)
-    sensor_sample_t imu_samples[IMU_RING_BUF_SIZE];
-    int count = 0;
-    while (count < IMU_RING_BUF_SIZE) {
-        sensor_sample_t s;
-        if (!sensor_ring_buffer_pop((sensor_ring_buffer_t*)&scheduler->buffers[SENSOR_TYPE_IMU], &s)) break;
-        imu_samples[count++] = s;
-    }
-    if (count < 10) {
+    if (!scheduler) return ESP_ERR_INVALID_ARG;
+
+    // Peek (non-destructive) the most recent IMU samples.
+    // The coordinator task owns draining; triage must never pop.
+    size_t available = sensor_ring_buffer_available(&scheduler->buffers[SENSOR_TYPE_IMU]);
+    if (available < 10) {
         memset(features_out, 0, sizeof(triage_features_t));
         return ESP_ERR_INVALID_SIZE;
+    }
+
+    size_t count = available > IMU_RING_BUF_SIZE ? IMU_RING_BUF_SIZE : available;
+    size_t start = available - count;  // most recent `count` samples
+    sensor_sample_t imu_samples[IMU_RING_BUF_SIZE];
+    for (size_t i = 0; i < count; i++) {
+        sensor_sample_t s = {0};
+        if (!sensor_ring_buffer_peek(&scheduler->buffers[SENSOR_TYPE_IMU], &s, start + i)) {
+            memset(features_out, 0, sizeof(triage_features_t));
+            return ESP_ERR_INVALID_SIZE;
+        }
+        imu_samples[i] = s;
     }
     
     // Compute features matching Python extract_triage_features_live()

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 #include "sensor_scheduler.h"
 
 #ifdef __cplusplus
