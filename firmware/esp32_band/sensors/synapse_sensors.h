@@ -144,6 +144,12 @@ esp_err_t synapse_sensors_set_enabled(sensor_type_t sensor_type, bool enable);
  */
 esp_err_t synapse_sensors_set_gps_power_mode(bool low_power);
 
+/**
+ * @brief Poll GPS/Temp drivers and refresh cached aux data
+ * Call periodically from acquisition FSM (1Hz)
+ */
+void synapse_sensors_update_aux_data(void);
+
 #ifdef __cplusplus
 }
 #endif
