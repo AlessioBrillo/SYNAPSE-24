@@ -22,29 +22,38 @@ jobs:
       matrix:
         variant: [esp32_head, esp32_forearm, esp32_band]
       fail-fast: false
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
         with:
-          esp_idf_version: ${{ env.ESP_IDF_VERSION }}
-          install_tools: true
-          setup_path: ${{ runner.temp }}/esp-idf
+          path: ~/.espressif
+          key: esp-idf-tools-${{ env.ESP_IDF_VERSION }}-${{ runner.os }}
+
+      - name: Install ESP-IDF
+        run: |
+          if [ ! -d ~/esp-idf ]; then
+            git clone --depth 1 --branch ${{ env.ESP_IDF_VERSION }} https://github.com/espressif/esp-idf.git ~/esp-idf
+          fi
+          cd ~/esp-idf
+          ./install.sh ${{ env.TARGET }}
 
       - name: Configure project
         working-directory: firmware/${{ matrix.variant }}
         run: |
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py reconfigure
 
       - name: Build firmware
         working-directory: firmware/${{ matrix.variant }}
         run: |
+          . ~/esp-idf/export.sh
           idf.py build
         env:
           BUILD_TYPE: release
@@ -52,6 +61,7 @@ jobs:
       - name: Check binary size
         working-directory: firmware/${{ matrix.variant }}
         run: |
+          . ~/esp-idf/export.sh
           idf.py size
           python3 << 'PYEOF'
           import json
@@ -73,11 +83,14 @@ jobs:
         working-directory: firmware/${{ matrix.variant }}
         run: |
           sudo apt-get update && sudo apt-get install -y cppcheck
-          cppcheck --enable=all --std=c++17 --suppress=missingIncludeSystem \
-            -I main -I ../../common/sensors -I ../../common/scheduler -I ../../common/sync \
-            -I ../../common/ble -I ../../common/triage -I ../../common/power \
+          SRCS=$(find . -name "*.c" -o -name "*.cpp" -o -name "*.h" | tr '\n' ' ')
+          cppcheck --enable=all --suppress=missingIncludeSystem \
+            -I main -I config -I sensors -I acquisition -I signal_quality -I edge_ai \
+            -I power -I ble -I fit -I provisioning -I ota \
+            -I ../common/sensors -I ../common/scheduler -I ../common/sync \
+            -I ../common/ble -I ../common/triage -I ../common/power \
             --inline-suppr --error-exitcode=1 \
-            main/*.cpp ../../common/**/*.cpp 2>&1 | tee cppcheck.log
+            $SRCS 2>&1 | tee cppcheck.log
           if grep -q "error:" cppcheck.log; then
             echo "::error::cppcheck found errors"
             exit 1
@@ -87,9 +100,10 @@ jobs:
       - name: Run clang-tidy
         working-directory: firmware/${{ matrix.variant }}
         run: |
+          . ~/esp-idf/export.sh
           sudo apt-get install -y clang-tidy
           idf.py reconfigure 2>&1 | tail -20
-          find main -name "*.cpp" -exec clang-tidy -p build --checks='*,-llvm-header-guard,-readability-identifier-naming,-modernize-use-trailing-return-type' {} \; 2>&1 | tee clang_tidy.log
+          find . -name "*.cpp" -not -path "./build/*" -exec clang-tidy -p build --checks='*,-llvm-header-guard,-readability-identifier-naming,-modernize-use-trailing-return-type' {} \; 2>&1 | tee clang_tidy.log
           if grep -q "warning:" clang_tidy.log; then
             echo "::warning::clang-tidy found warnings"
             cat clang_tidy.log
@@ -100,6 +114,7 @@ jobs:
       - name: Run unit tests (host simulation)
         working-directory: firmware/${{ matrix.variant }}
         run: |
+          . ~/esp-idf/export.sh
           idf.py -D TEST_BUILD=1 build 2>&1 | tail -30
           echo "Test build successful"
 
@@ -125,15 +140,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
         with:
-          esp_idf_version: ${{ env.ESP_IDF_VERSION }}
+          path: ~/.espressif
+          key: esp-idf-tools-${{ env.ESP_IDF_VERSION }}-${{ runner.os }}
+
+      - name: Install ESP-IDF
+        run: |
+          if [ ! -d ~/esp-idf ]; then
+            git clone --depth 1 --branch ${{ env.ESP_IDF_VERSION }} https://github.com/espressif/esp-idf.git ~/esp-idf
+          fi
+          cd ~/esp-idf
+          ./install.sh ${{ env.TARGET }}
 
       - name: Build current PR (head)
         working-directory: firmware/esp32_head
         id: build_pr_head
         run: |
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
           python3 << 'PYEOF'
@@ -152,6 +177,7 @@ jobs:
         working-directory: firmware/esp32_forearm
         id: build_pr_forearm
         run: |
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
           python3 << 'PYEOF'
@@ -170,6 +196,7 @@ jobs:
         working-directory: firmware/esp32_band
         id: build_pr_band
         run: |
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
           python3 << 'PYEOF'
@@ -190,6 +217,7 @@ jobs:
         run: |
           git stash
           git checkout ${{ github.base_ref }}
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
           python3 << 'PYEOF'
@@ -212,6 +240,7 @@ jobs:
         run: |
           git stash
           git checkout ${{ github.base_ref }}
+          . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
           python3 << 'PYEOF'
