@@ -10,7 +10,6 @@
 #include "nvs.h"
 #include "freertos/event_groups.h"
 #include "synapse_provisioning.h"
-#include "ble_gatt_server.h"
 
 static const char *TAG = "SYNAPSE_PROV";
 #define PROV_NS "synapse_prov"
