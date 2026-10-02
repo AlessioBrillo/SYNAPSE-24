@@ -20,12 +20,12 @@ static temp_tmp117_t g_temp = {0};
 // I2C register read/write helpers
 static esp_err_t i2c_write_reg(uint8_t reg, uint16_t value) {
     uint8_t data[3] = {reg, (value >> 8) & 0xFF, value & 0xFF};
-    return i2c_master_write_to_device(g_temp.config.i2c_port, g_temp.config.i2c_addr, data, 3, pdMS_TO_TICKS(100));
+    return i2c_master_write_to_device((i2c_port_t)g_temp.config.i2c_port, g_temp.config.i2c_addr, data, 3, pdMS_TO_TICKS(100));
 }
 
 static esp_err_t i2c_read_reg(uint8_t reg, uint16_t *value) {
     uint8_t data[2];
-    esp_err_t ret = i2c_master_write_read_device(g_temp.config.i2c_port, g_temp.config.i2c_addr, &reg, 1, data, 2, pdMS_TO_TICKS(100));
+    esp_err_t ret = i2c_master_write_read_device((i2c_port_t)g_temp.config.i2c_port, g_temp.config.i2c_addr, &reg, 1, data, 2, pdMS_TO_TICKS(100));
     if (ret == ESP_OK) {
         *value = (data[0] << 8) | data[1];
     }

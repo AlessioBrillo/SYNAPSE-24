@@ -35,9 +35,11 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     g_sensors.ecg_config.gain = hw_cfg->ecg_gain;
 
     // PPG
-    g_sensors.ppg_config.i2c_port = hw_cfg->ppg_i2c_port;
+    g_sensors.ppg_config.i2c_port = (i2c_port_t)hw_cfg->ppg_i2c_port;
     g_sensors.ppg_config.i2c_addr = hw_cfg->ppg_i2c_addr;
     g_sensors.ppg_config.gpio_int = hw_cfg->ppg_gpio_int;
+    g_sensors.ppg_config.sda_gpio_num = 8;  // S3-safe (no GPIO22-25 on ESP32-S3)
+    g_sensors.ppg_config.scl_gpio_num = 9;
     g_sensors.ppg_config.led_current_red = hw_cfg->ppg_led_current_red;
     g_sensors.ppg_config.led_current_ir = hw_cfg->ppg_led_current_ir;
     g_sensors.ppg_config.led_current_green = hw_cfg->ppg_led_current_green;
@@ -46,9 +48,11 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     g_sensors.ppg_config.adc_range = hw_cfg->ppg_adc_range;
 
     // IMU
-    g_sensors.imu_config.i2c_port = hw_cfg->imu_i2c_port;
+    g_sensors.imu_config.i2c_port = (i2c_port_t)hw_cfg->imu_i2c_port;
     g_sensors.imu_config.i2c_addr = hw_cfg->imu_i2c_addr;
     g_sensors.imu_config.gpio_int = hw_cfg->imu_gpio_int;
+    g_sensors.imu_config.sda_gpio_num = 8;
+    g_sensors.imu_config.scl_gpio_num = 9;
     g_sensors.imu_config.accel_fsr_g = hw_cfg->imu_accel_fsr_g;
     g_sensors.imu_config.gyro_fsr_dps = hw_cfg->imu_gyro_fsr_dps;
     g_sensors.imu_config.accel_odr_hz = hw_cfg->imu_accel_odr_hz;

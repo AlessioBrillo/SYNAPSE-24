@@ -129,7 +129,7 @@ static void gps_parser_task(void *arg) {
     ESP_LOGI(TAG, "GPS parser task started");
 
     while (gps->running) {
-        int len = uart_read_bytes(gps->config.uart_port, rx_buffer, gps->config.rx_buffer_size - 1, pdMS_TO_TICKS(100));
+        int len = uart_read_bytes((uart_port_t)gps->config.uart_port, rx_buffer, gps->config.rx_buffer_size - 1, pdMS_TO_TICKS(100));
         
         if (len > 0) {
             for (int i = 0; i < len; i++) {
@@ -232,12 +232,12 @@ static esp_err_t send_ubx_message(uint8_t msg_class, uint8_t msg_id,
     uint8_t ck_a, ck_b;
     ubx_checksum(&header[2], 4 + payload_len, &ck_a, &ck_b);
     
-    uart_write_bytes(g_gps.config.uart_port, (const char*)header, 6);
+    uart_write_bytes((uart_port_t)g_gps.config.uart_port, (const char*)header, 6);
     if (payload_len > 0) {
-        uart_write_bytes(g_gps.config.uart_port, (const char*)payload, payload_len);
+        uart_write_bytes((uart_port_t)g_gps.config.uart_port, (const char*)payload, payload_len);
     }
     uint8_t cks[2] = {ck_a, ck_b};
-    uart_write_bytes(g_gps.config.uart_port, (const char*)cks, 2);
+    uart_write_bytes((uart_port_t)g_gps.config.uart_port, (const char*)cks, 2);
     
     return ESP_OK;
 }
@@ -276,10 +276,10 @@ esp_err_t gps_max_m10s_init(const gps_max_m10s_config_t *config) {
         .source_clk = UART_SCLK_DEFAULT,
     };
     
-    ESP_ERROR_CHECK(uart_param_config(config->uart_port, &uart_cfg));
-    ESP_ERROR_CHECK(uart_set_pin(config->uart_port, config->tx_gpio, config->rx_gpio, 
+    ESP_ERROR_CHECK(uart_param_config((uart_port_t)config->uart_port, &uart_cfg));
+    ESP_ERROR_CHECK(uart_set_pin((uart_port_t)config->uart_port, config->tx_gpio, config->rx_gpio, 
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_driver_install(config->uart_port, config->rx_buffer_size * 2, 
+    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)config->uart_port, config->rx_buffer_size * 2, 
                                          0, 0, NULL, 0));
     
     // Create mutex
@@ -352,7 +352,7 @@ esp_err_t gps_max_m10s_deinit(void) {
         g_gps.data_mutex = NULL;
     }
     
-    uart_driver_delete(g_gps.config.uart_port);
+    uart_driver_delete((uart_port_t)g_gps.config.uart_port);
     g_gps.initialized = false;
     
     ESP_LOGI(TAG, "GPS deinitialized");

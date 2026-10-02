@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "driver/i2c.h"
 #include "sensor_scheduler.h"
 #include "ppg_sqi.h"
 
@@ -10,10 +11,18 @@
 extern "C" {
 #endif
 
+// Default I2C pins for ESP32-S3 (GPIO22-25 do NOT exist on S3).
+// Shared bus with IMU: both drivers tolerate ESP_ERR_INVALID_STATE on
+// i2c_driver_install when the bus is already owned by the other driver.
+#define SYNAPSE_I2C_SDA_GPIO_DEFAULT 8
+#define SYNAPSE_I2C_SCL_GPIO_DEFAULT 9
+
 typedef struct {
-    int i2c_port;
+    i2c_port_t i2c_port;
     int i2c_addr;
     int gpio_int;
+    int sda_gpio_num;       // I2C SDA GPIO (default 8 on S3)
+    int scl_gpio_num;       // I2C SCL GPIO (default 9 on S3)
     uint8_t led_current_red;
     uint8_t led_current_ir;
     uint8_t led_current_green;

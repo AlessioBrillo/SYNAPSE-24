@@ -112,7 +112,7 @@ bringup:
   # Clock synchronization - override mode for multi-pod
   sync:
     mode: "markers_only"  # Phase 1: markers_only (BLE); T1 needs markers_plus_acc + wired
-    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub) - GPIO 27 (GPIO 21 = I2C SDA)
+    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub) - GPIO 27 (I2C: SDA=GPIO 8, SCL=GPIO 9)
     wired_sync_gpio: 27
 
   # Motion gate - relaxed for MAX30102 wrist PPG validation

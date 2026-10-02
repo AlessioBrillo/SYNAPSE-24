@@ -15,11 +15,11 @@
 #include "imu_icm20948.h"
 #include "imu_processor.h"
 #include "ble_lsl_bridge.h"
-#include "sync/sync_marker_handler.h"
-#include "sync/wired_sync_handler.h"
-#include "sync/clock_sync.h"
-#include "triage/triage_inference.h"
-#include "triage/triage_features.h"
+#include "sync_marker_handler.h"
+#include "wired_sync_handler.h"
+#include "clock_sync.h"
+#include "triage_inference.h"
+#include "triage_features.h"
 #include "power_monitor.h"
 
 static const char* TAG = "synapse_tier0";
@@ -51,6 +51,8 @@ static ppg_max30102_config_t g_ppg_config = {
     .i2c_port = I2C_NUM_0,
     .i2c_addr = 0x57,
     .gpio_int = GPIO_NUM_5,
+    .sda_gpio_num = 8,
+    .scl_gpio_num = 9,
     .led_current_red = 0x1F,
     .led_current_ir = 0x1F,
     .led_current_green = 0x0F,   // Green LED on for Tier 0 PPG
@@ -63,6 +65,8 @@ static imu_icm20948_config_t g_imu_config = {
     .i2c_port = I2C_NUM_0,
     .i2c_addr = 0x68,
     .gpio_int = GPIO_NUM_6,
+    .sda_gpio_num = 8,
+    .scl_gpio_num = 9,
     .accel_fsr_g = 8,
     .gyro_fsr_dps = 500,
     .accel_odr_hz = 50,      // 50 Hz for Tier 0 (reduced power)
