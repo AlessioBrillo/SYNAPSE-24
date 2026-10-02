@@ -21,8 +21,8 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
-#include "synapse_ble_gatt.h"
-#include "synapse_fit.h"
+#include "ble_gatt_server.h"
+#include "fit_writer.h"
 #include "synapse_provisioning.h"
 #include "synapse_ota.h"
 #include "synapse_acquisition.h"

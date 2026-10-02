@@ -1,0 +1,253 @@
+# Synapse Band v1 - Config Module Kconfig
+
+menu "Synapse Band Hardware Configuration"
+
+config SYNAPSE_ECG_ADC_CHANNEL
+    int "ECG ADC Channel (ADC1)"
+    default 0
+    range 0 7
+    help
+        ADC1 channel for AD8232 output. ADC1_CH0 = GPIO36.
+
+config SYNAPSE_ECG_GPIO_DRDY
+    int "ECG DRDY/Lead-off GPIO (-1 to disable)"
+    default 4
+    help
+        GPIO for AD8232 DRDY/lead-off detection. -1 to disable.
+
+config SYNAPSE_ECG_VREF_MV
+    int "ECG ADC Reference Voltage (mV)"
+    default 1100
+    help
+        ADC reference voltage for ESP32-S3 ADC calibration.
+
+config SYNAPSE_ECG_GAIN
+    int "ECG AD8232 Gain (x100)"
+    default 600
+    help
+        AD8232 gain setting. 600 = 6.0x gain.
+
+config SYNAPSE_PPG_I2C_PORT
+    int "PPG I2C Port"
+    default 0
+    range 0 1
+    help
+        I2C port for MAX30102 (0 or 1).
+
+config SYNAPSE_PPG_I2C_ADDR
+    hex "PPG I2C Address"
+    default 0x57
+    help
+        I2C address for MAX30102.
+
+config SYNAPSE_PPG_GPIO_INT
+    int "PPG Interrupt GPIO"
+    default 5
+    help
+        GPIO for MAX30102 INT pin.
+
+config SYNAPSE_PPG_LED_CURRENT_RED
+    hex "PPG Red LED Current"
+    default 0x1F
+    help
+        MAX30102 red LED current register value (0x00-0x3F).
+
+config SYNAPSE_PPG_LED_CURRENT_IR
+    hex "PPG IR LED Current"
+    default 0x1F
+    help
+        MAX30102 IR LED current register value (0x00-0x3F).
+
+config SYNAPSE_PPG_LED_CURRENT_GREEN
+    hex "PPG Green LED Current"
+    default 0x0F
+    help
+        MAX30102 green LED current register value (0x00-0x3F).
+
+config SYNAPSE_PPG_SAMPLE_RATE
+    hex "PPG Sample Rate Register"
+    default 0x03
+    help
+        MAX30102 sample rate register. 0x02=50Hz, 0x03=64Hz, 0x04=100Hz.
+
+config SYNAPSE_PPG_PULSE_WIDTH
+    hex "PPG Pulse Width Register"
+    default 0x03
+    help
+        MAX30102 pulse width register. 0x03=411µs.
+
+config SYNAPSE_PPG_ADC_RANGE
+    hex "PPG ADC Range Register"
+    default 0x03
+    help
+        MAX30102 ADC range register. 0x03=16384nA.
+
+config SYNAPSE_IMU_I2C_PORT
+    int "IMU I2C Port"
+    default 0
+    range 0 1
+    help
+        I2C port for ICM-20948 (shared with PPG).
+
+config SYNAPSE_IMU_I2C_ADDR
+    hex "IMU I2C Address"
+    default 0x68
+    help
+        I2C address for ICM-20948.
+
+config SYNAPSE_IMU_GPIO_INT
+    int "IMU Interrupt GPIO"
+    default 6
+    help
+        GPIO for ICM-20948 INT pin.
+
+config SYNAPSE_IMU_ACCEL_FSR_G
+    int "IMU Accelerometer FSR (g)"
+    default 8
+    range 2 16
+    help
+        Accelerometer full-scale range in g.
+
+config SYNAPSE_IMU_GYRO_FSR_DPS
+    int "IMU Gyroscope FSR (dps)"
+    default 500
+    range 250 2000
+    help
+        Gyroscope full-scale range in dps.
+
+config SYNAPSE_IMU_ACCEL_ODR_HZ
+    int "IMU Accelerometer ODR (Hz)"
+    default 100
+    help
+        Accelerometer output data rate in Hz.
+
+config SYNAPSE_IMU_GYRO_ODR_HZ
+    int "IMU Gyroscope ODR (Hz)"
+    default 100
+    help
+        Gyroscope output data rate in Hz.
+
+config SYNAPSE_GPS_UART_PORT
+    int "GPS UART Port"
+    default 1
+    range 0 2
+    help
+        UART port for MAX-M10S GPS module.
+
+config SYNAPSE_GPS_UART_TX_GPIO
+    int "GPS UART TX GPIO"
+    default 17
+    help
+        GPIO for GPS UART TX.
+
+config SYNAPSE_GPS_UART_RX_GPIO
+    int "GPS UART RX GPIO"
+    default 18
+    help
+        GPIO for GPS UART RX.
+
+config SYNAPSE_GPS_BAUDRATE
+    int "GPS UART Baudrate"
+    default 115200
+    help
+        GPS UART baudrate for UBX protocol.
+
+config SYNAPSE_GPS_USE_UBX
+    bool "Use UBX binary protocol (vs NMEA)"
+    default y
+    help
+        Use UBX binary protocol for efficiency. NMEA only for debug.
+
+config SYNAPSE_TEMP_I2C_PORT
+    int "Temperature I2C Port"
+    default 0
+    range 0 1
+    help
+        I2C port for TMP117 (shared with PPG/IMU).
+
+config SYNAPSE_TEMP_I2C_ADDR
+    hex "Temperature I2C Address"
+    default 0x48
+    help
+        I2C address for TMP117.
+
+config SYNAPSE_TEMP_GPIO_ALERT
+    int "Temperature Alert GPIO (-1 to disable)"
+    default 7
+    help
+        GPIO for TMP117 ALERT pin. -1 to disable.
+
+config SYNAPSE_BAT_ADC_CHANNEL
+    int "Battery ADC Channel (ADC1)"
+    default 3
+    range 0 7
+    help
+        ADC1 channel for battery voltage divider. ADC1_CH3 = GPIO3.
+
+config SYNAPSE_BAT_VOLTAGE_DIVIDER
+    int "Battery Voltage Divider Ratio (x100)"
+    default 200
+    help
+        Voltage divider ratio * 100. 200 = 2.0 (1:1 divider).
+
+config SYNAPSE_BLE_DEVICE_NAME
+    string "BLE Device Name"
+    default "SYNAPSE-BAND"
+    help
+        BLE GAP device name for advertising.
+
+config SYNAPSE_HUB_BATTERY_MAH
+    int "Hub Battery Capacity (mAh)"
+    default 3000
+    help
+        Battery capacity in mAh for power budget calculations.
+
+config SYNAPSE_TARGET_LIFETIME_H
+    int "Target Lifetime (hours)"
+    default 24
+    help
+        Target battery lifetime in hours.
+
+config SYNAPSE_RESERVE_MAH
+    int "Reserve Capacity (mAh)"
+    default 300
+    help
+        Reserve capacity to keep unused.
+
+config SYNAPSE_T0_AVG_MW
+    int "Tier 0 Average Power (mW)"
+    default 5
+    help
+        Tier 0 (continuous) average power consumption in mW.
+
+config SYNAPSE_T1_AVG_MW
+    int "Tier 1 Average Power (mW)"
+    default 50
+    help
+        Tier 1 (rest/sleep) average power consumption in mW.
+
+config SYNAPSE_T2_AVG_MW
+    int "Tier 2 Average Power (mW)"
+    default 100
+    help
+        Tier 2 (voluntary) average power consumption in mW.
+
+config SYNAPSE_SQI_MIN
+    int "Minimum PPG SQI (x1000)"
+    default 500
+    help
+        Minimum Signal Quality Index for motion gate (0.0-1.0, scaled by 1000).
+
+config SYNAPSE_MAP_MAX
+    int "Maximum Motion Artifact Probability (x1000)"
+    default 500
+    help
+        Maximum Motion Artifact Probability for motion gate (0.0-1.0, scaled by 1000).
+
+config SYNAPSE_REQUIRED_CONSECUTIVE_CLEAN
+    int "Required Consecutive Clean Windows for Motion Gate"
+    default 2
+    help
+        Number of consecutive clean SQI/MAP windows to arm motion gate.
+
+endmenu

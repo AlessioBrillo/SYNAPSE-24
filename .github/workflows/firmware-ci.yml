@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        variant: [esp32_head, esp32_forearm]
+        variant: [esp32_head, esp32_forearm, esp32_band]
       fail-fast: false
     timeout-minutes: 30
     steps:
@@ -39,7 +39,7 @@ jobs:
       - name: Configure project
         working-directory: firmware/${{ matrix.variant }}
         run: |
-          idf.py set-target ${{ matrix.target }}
+          idf.py set-target ${{ env.TARGET }}
           idf.py reconfigure
 
       - name: Build firmware
@@ -246,6 +246,7 @@ print('✓ Binary size regression check passed for all variants')
           required_files=(
             "firmware/esp32_head/README.md"
             "firmware/esp32_forearm/README.md"
+            "firmware/esp32_band/README.md"
           )
           for f in "${required_files[@]}"; do
             if [ ! -f "$f" ]; then

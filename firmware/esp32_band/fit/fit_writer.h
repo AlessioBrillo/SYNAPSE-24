@@ -23,7 +23,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
-#include "synapse_ble_gatt.h"  // For synapse_feature_stream_t
+#include "ble_gatt_server.h"  // For synapse_feature_stream_t
 
 #ifdef __cplusplus
 extern "C" {

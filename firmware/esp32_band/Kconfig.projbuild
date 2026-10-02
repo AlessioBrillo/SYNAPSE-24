@@ -1,0 +1,60 @@
+# Synapse Band v1 - Project-level Kconfig
+# Firmware version, hardware version, and feature flags
+
+config SYNAPSE_FIRMWARE_VERSION
+    string "Firmware version string"
+    default "1.0.0"
+    help
+        Firmware version reported via Device Information Service and OTA.
+
+config SYNAPSE_HARDWARE_VERSION
+    string "Hardware version string"
+    default "band-v1.0"
+    help
+        Hardware version (PCB revision) reported via Device Information Service.
+
+menu "Synapse Band Features"
+
+config SYNAPSE_FEATURE_GPS
+    bool "Enable GPS (MAX-M10S)"
+    default y
+    help
+        Enable GPS tracking via UART. Required for sport sessions.
+
+config SYNAPSE_FEATURE_TEMPERATURE
+    bool "Enable skin temperature (TMP117)"
+    default y
+    help
+        Enable TMP117 I2C temperature sensor for skin/core temp estimation.
+
+config SYNAPSE_FEATURE_FIT_STORAGE
+    bool "Enable FIT file storage on LittleFS"
+    default y
+    help
+        Enable FIT writer with LittleFS backend for session recording.
+
+config SYNAPSE_FEATURE_PROVISIONING
+    bool "Enable BLE provisioning (WiFi + Cloud + mTLS)"
+    default y
+    help
+        Enable provisioning flow via BLE GATT for WiFi credentials, cloud URL, and device certificates.
+
+config SYNAPSE_FEATURE_OTA
+    bool "Enable OTA updates with Ed25519 verification"
+    default y
+    help
+        Enable signed OTA firmware updates with automatic rollback on 3 failed boots.
+
+config SYNAPSE_FEATURE_EDGE_AI
+    bool "Enable Edge AI (Stress Triage + Motion Classifier)"
+    default y
+    help
+        Enable TFLM inference for stress triage (3-class) and motion classification.
+
+config SYNAPSE_FEATURE_POWER_MONITOR
+    bool "Enable power budget monitoring"
+    default y
+    help
+        Enable battery ADC monitoring and tier affordability checks.
+
+endmenu
