@@ -3,7 +3,7 @@
  * @brief Synapse Band v1 - FIT File Writer (LittleFS)
  * 
  * Writes valid FIT files compatible with Garmin Connect, Strava, Averyn, etc.
- * Uses LittleFS for wear-leveling on SPI flash.
+ * Uses SPIFFS on the 'storage' partition (built-in IDF component).
  * FIT Profile: 21.138.00 (SDK 21.138.00)
  * 
  * Developer Data Fields (Synapse Custom - flat scalars only per FIT spec):

@@ -64,13 +64,6 @@ add_link_options(
     -Wl,--print-memory-usage
 )
 
-target_include_directories(${TARGET_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/main
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/sensors
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/scheduler
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/sync
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/ble
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/triage
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/power
-)
+# NOTE: include dirs are provided by main/idf_component_register INCLUDE_DIRS.
+# Do NOT use target_include_directories(${TARGET_NAME} ...) here: ESP-IDF names
+# the app target "${PROJECT_NAME}.elf", so the bare project name is not a target.

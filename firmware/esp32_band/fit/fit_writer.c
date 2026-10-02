@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
-#include "esp_littlefs.h"
+#include "esp_spiffs.h"
 #include "fit_writer.h"
 
 static const char *TAG = "SYNAPSE_FIT";
@@ -93,19 +93,19 @@ static void write_record_definition(void) {
 
 esp_err_t synapse_fit_init(void) {
     if (g_initialized) return ESP_OK;
-    esp_vfs_littlefs_conf_t conf = {
+    esp_vfs_spiffs_conf_t conf = {
         .base_path = BASE_PATH,
         .partition_label = "storage",
+        .max_files = 8,
         .format_if_mount_failed = true,
-        .dont_mount = false,
     };
-    esp_err_t ret = esp_vfs_littlefs_register(&conf);
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "LittleFS mount failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(ret));
         return ret;
     }
     size_t total = 0, used = 0;
-    esp_littlefs_info(conf.partition_label, &total, &used);
+    esp_spiffs_info(conf.partition_label, &total, &used);
     ESP_LOGI(TAG, "FIT storage mounted: total=%u used=%u", (unsigned)total, (unsigned)used);
     memset(&g_session, 0, sizeof(g_session));
     g_initialized = true;
