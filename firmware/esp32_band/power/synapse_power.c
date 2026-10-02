@@ -7,10 +7,12 @@
 
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/adc.h"
-#include "esp_adc_cal.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "synapse_power.h"
@@ -19,8 +21,9 @@
 static const char *TAG = "SYNAPSE_POWER";
 
 static synapse_power_status_t g_status = {0};
-static esp_adc_cal_characteristics_t *g_adc_chars = NULL;
-static int g_bat_adc_channel = ADC1_CHANNEL_3;
+static adc_oneshot_unit_handle_t g_adc_handle = NULL;
+static adc_cali_handle_t g_cali_handle = NULL;
+static adc_channel_t g_bat_adc_channel = ADC_CHANNEL_3; // ADC1 CH3 = GPIO4 on ESP32-S3
 static float g_voltage_divider = 2.0f;
 static bool g_charging = false;
 static bool g_initialized = false;
@@ -54,20 +57,34 @@ esp_err_t synapse_power_init(void) {
     // Load hardware config
     synapse_hw_config_t hw_cfg;
     ESP_ERROR_CHECK(synapse_config_get(&hw_cfg));
-    g_bat_adc_channel = hw_cfg.bat_adc_channel;
+    g_bat_adc_channel = (adc_channel_t)hw_cfg.bat_adc_channel;
     g_voltage_divider = hw_cfg.bat_voltage_divider;
-    
-    // Initialize ADC
-    ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));
-    ESP_ERROR_CHECK(adc1_config_channel_atten(g_bat_adc_channel, ADC_ATTEN_DB_11));
-    
-    // Calibrate ADC
-    g_adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
-    if (!g_adc_chars) {
-        ESP_LOGE(TAG, "Failed to allocate ADC characteristics");
-        return ESP_ERR_NO_MEM;
+
+    // Initialize ADC oneshot unit
+    adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&unit_cfg, &g_adc_handle));
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc_handle, g_bat_adc_channel, &chan_cfg));
+
+    // ADC calibration (line fitting; falls back to raw scaling if eFuse missing)
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    esp_err_t cali_ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &g_cali_handle);
+    if (cali_ret != ESP_OK) {
+        ESP_LOGW(TAG, "ADC calibration not available (%s), using raw scaling",
+                 esp_err_to_name(cali_ret));
+        g_cali_handle = NULL;
     }
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, g_adc_chars);
     
     // Initialize status from config
     g_status.battery_capacity_mah = hw_cfg.hub_battery_mah;
@@ -209,27 +226,41 @@ void synapse_power_set_charging(bool charging) {
 }
 
 uint16_t synapse_power_read_battery_mv(void) {
-    if (!g_initialized) return 0;
-    
-    uint32_t adc_reading = 0;
+    if (!g_initialized || !g_adc_handle) return 0;
+
+    int adc_raw = 0;
     const int samples = 64;
+    int acc = 0;
     for (int i = 0; i < samples; i++) {
-        adc_reading += adc1_get_raw(g_bat_adc_channel);
+        if (adc_oneshot_read(g_adc_handle, g_bat_adc_channel, &adc_raw) == ESP_OK) {
+            acc += adc_raw;
+        }
     }
-    adc_reading /= samples;
-    
-    uint32_t voltage_mv = esp_adc_cal_raw_to_voltage(adc_reading, g_adc_chars);
+    acc /= samples;
+
+    int voltage_mv = 0;
+    if (g_cali_handle) {
+        if (adc_cali_raw_to_voltage(g_cali_handle, acc, &voltage_mv) != ESP_OK) {
+            voltage_mv = (acc * 3300) / 4095; // fallback raw scaling
+        }
+    } else {
+        voltage_mv = (acc * 3300) / 4095; // fallback raw scaling
+    }
     return (uint16_t)(voltage_mv * g_voltage_divider);
 }
 
 esp_err_t synapse_power_deinit(void) {
     if (!g_initialized) return ESP_OK;
-    
-    if (g_adc_chars) {
-        free(g_adc_chars);
-        g_adc_chars = NULL;
+
+    if (g_cali_handle) {
+        adc_cali_delete_scheme_line_fitting(g_cali_handle);
+        g_cali_handle = NULL;
     }
-    
+    if (g_adc_handle) {
+        adc_oneshot_del_unit(g_adc_handle);
+        g_adc_handle = NULL;
+    }
+
     g_initialized = false;
     ESP_LOGI(TAG, "Power management deinitialized");
     return ESP_OK;
