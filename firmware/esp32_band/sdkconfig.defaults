@@ -74,6 +74,3 @@ CONFIG_SPIFFS_CACHE_SIZE=2048
 
 # UART for GPS
 CONFIG_UART_ISR_IN_IRAM=y
-
-# NVS encryption for provisioning credentials
-CONFIG_NVS_ENCRYPTION=y
