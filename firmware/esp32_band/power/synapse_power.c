@@ -74,12 +74,12 @@ esp_err_t synapse_power_init(void) {
     ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc_handle, g_bat_adc_channel, &chan_cfg));
 
     // ADC calibration (line fitting; falls back to raw scaling if eFuse missing)
-    adc_cali_line_fitting_config_t cali_cfg = {
+    adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id = ADC_UNIT_1,
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    esp_err_t cali_ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &g_cali_handle);
+    esp_err_t cali_ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &g_cali_handle);
     if (cali_ret != ESP_OK) {
         ESP_LOGW(TAG, "ADC calibration not available (%s), using raw scaling",
                  esp_err_to_name(cali_ret));
@@ -253,7 +253,7 @@ esp_err_t synapse_power_deinit(void) {
     if (!g_initialized) return ESP_OK;
 
     if (g_cali_handle) {
-        adc_cali_delete_scheme_line_fitting(g_cali_handle);
+        adc_cali_delete_scheme_curve_fitting(g_cali_handle);
         g_cali_handle = NULL;
     }
     if (g_adc_handle) {

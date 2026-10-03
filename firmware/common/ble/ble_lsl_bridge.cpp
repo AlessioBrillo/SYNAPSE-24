@@ -201,7 +201,7 @@ static void ble_lsl_on_sync(void) {
     int rc = ble_svc_gap_device_name_set("SYNAPSE-Tier0");
     assert(rc == 0);
 
-    ble_hs_id_infer_auto(0, &ble_hs_cfg.smp_io_cap);
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
 
     struct ble_gap_adv_params adv_params = {};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
@@ -210,7 +210,7 @@ static void ble_lsl_on_sync(void) {
     adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(200);
     adv_params.channel_map = 0;
 
-    rc = ble_gap_adv_start(BLE_HS_ID_APP, NULL, BLE_HS_FOREVER, &adv_params, ble_lsl_gap_event, NULL);
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &adv_params, ble_lsl_gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "Advertising start failed: %d", rc);
     } else {
@@ -220,6 +220,12 @@ static void ble_lsl_on_sync(void) {
 
 static void ble_lsl_on_reset(int reason) {
     ESP_LOGE(TAG, "NimBLE reset: %d", reason);
+}
+
+// NimBLE host task (textbook pattern: run the stack; sync_cb advertises)
+static void ble_lsl_host_task(void* arg) {
+    (void)arg;
+    nimble_port_run();
 }
 
 static void ble_lsl_update_conn_params(uint16_t conn_handle) {
@@ -276,7 +282,7 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
             if (event->conn_update.status == 0) {
                 s_bridge->conn_params_updated = true;
                 ESP_LOGI(TAG, "Connection parameters updated successfully: interval=%d (1.25ms units)",
-                         event->conn_update.conn_itvl);
+                         event->conn_update.itvl);
             } else {
                 ESP_LOGW(TAG, "Connection parameter update failed: %d", event->conn_update.status);
             }
@@ -342,7 +348,7 @@ esp_err_t ble_lsl_bridge_start(ble_lsl_bridge_t* bridge) {
     bridge->running = true;
 
     xTaskCreate(ble_lsl_notify_task_fn, "ble_notify", 4096, bridge, 5, &bridge->notify_task);
-    nimble_port_freertos_init(ble_lsl_on_sync);
+    nimble_port_freertos_init(ble_lsl_host_task);
 
     ESP_LOGI(TAG, "BLE LSL bridge started");
     return ESP_OK;

@@ -46,12 +46,12 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
         return err;
     }
 
-    adc_cali_line_fitting_config_t cali_cfg = {
+    adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id = ADC_UNIT_1,
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    if (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_ctx.cali_handle) != ESP_OK) {
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_ctx.cali_handle) != ESP_OK) {
         ESP_LOGW(TAG, "ADC calibration unavailable, using raw scaling");
         s_ctx.cali_handle = NULL;
     }
@@ -102,7 +102,7 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
 esp_err_t ecg_ad8232_deinit(void* user_ctx) {
     (void)user_ctx;
     if (s_ctx.cali_handle) {
-        adc_cali_delete_scheme_line_fitting(s_ctx.cali_handle);
+        adc_cali_delete_scheme_curve_fitting(s_ctx.cali_handle);
         s_ctx.cali_handle = NULL;
     }
     if (s_ctx.adc_handle) {
