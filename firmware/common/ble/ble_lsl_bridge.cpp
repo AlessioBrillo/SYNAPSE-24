@@ -281,8 +281,7 @@ static int ble_lsl_gap_event(struct ble_gap_event* event, void* arg) {
             if (!s_bridge) return 0;
             if (event->conn_update.status == 0) {
                 s_bridge->conn_params_updated = true;
-                ESP_LOGI(TAG, "Connection parameters updated successfully: interval=%d (1.25ms units)",
-                         event->conn_update.itvl);
+                ESP_LOGI(TAG, "Connection parameters updated successfully");
             } else {
                 ESP_LOGW(TAG, "Connection parameter update failed: %d", event->conn_update.status);
             }

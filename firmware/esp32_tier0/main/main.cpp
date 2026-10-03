@@ -41,7 +41,7 @@ static TaskHandle_t g_imu_feature_task = NULL;
 static TaskHandle_t g_clock_sync_task = NULL;
 
 static ecg_ad8232_config_t g_ecg_config = {
-    .adc_channel = ADC1_CHANNEL_0,
+    .adc_channel = ADC_CHANNEL_0,
     .gpio_drdy = GPIO_NUM_4,
     .vref_mv = 1100.0f,
     .gain = 6.0f

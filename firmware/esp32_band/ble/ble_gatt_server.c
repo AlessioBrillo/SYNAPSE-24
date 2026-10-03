@@ -220,9 +220,9 @@ static void gatts_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
     }
 
     case ESP_GATTS_ADD_CHAR_DESCR_EVT: {
-        if (param->add_descr.status != ESP_GATT_OK) break;
-        uint16_t svc = param->add_descr.service_handle;
-        uint16_t d = param->add_descr.attr_handle;
+        if (param->add_char_descr.status != ESP_GATT_OK) break;
+        uint16_t svc = param->add_char_descr.service_handle;
+        uint16_t d = param->add_char_descr.attr_handle;
         if (svc == hr_svc_handle && !hr_meas_cccd) {
             hr_meas_cccd = d;
             add_char16(svc, 0x2A38, ESP_GATT_PERM_READ, ESP_GATT_CHAR_PROP_BIT_READ,
