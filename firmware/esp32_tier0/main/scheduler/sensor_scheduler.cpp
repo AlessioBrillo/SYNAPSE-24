@@ -309,7 +309,7 @@ void sensor_task_fn(void* arg) {
     }
     // The scheduler pointer is stored in the global set during init.
     sensor_scheduler_t* scheduler = g_sensor_scheduler_ptr;
-    sensor_sample_t sample = {0};
+    sensor_sample_t sample = {};
     sample.type = config->type;
     TickType_t period_ticks = pdMS_TO_TICKS(1000 / config->sampling_rate_hz);
     TickType_t last_wake = xTaskGetTickCount();

@@ -19,8 +19,8 @@
 static const char* TAG = "ble_lsl_bridge";
 
 static ble_lsl_bridge_t* s_bridge = NULL;
-static uint16_t s_chr_handles[BLE_LSL_CHAR_MAX] = {0};
-static uint16_t s_ccc_handles[BLE_LSL_CHAR_MAX] = {0};
+static uint16_t s_chr_handles[BLE_LSL_CHAR_MAX] = {};
+static uint16_t s_ccc_handles[BLE_LSL_CHAR_MAX] = {};
 
 static const ble_uuid128_t gatt_svr_svc_uuid = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E);
 static const ble_uuid128_t gatt_svr_chr_uuid_ppg = BLE_UUID128_INIT(0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40, 0x6E);
@@ -203,7 +203,7 @@ static void ble_lsl_on_sync(void) {
 
     ble_hs_id_infer_auto(0, &ble_hs_cfg.smp_io_cap);
 
-    struct ble_gap_adv_params adv_params = {0};
+    struct ble_gap_adv_params adv_params = {};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(100);
@@ -223,7 +223,7 @@ static void ble_lsl_on_reset(int reason) {
 }
 
 static void ble_lsl_update_conn_params(uint16_t conn_handle) {
-    struct ble_gap_upd_params params = {0};
+    struct ble_gap_upd_params params = {};
     params.itvl_min = (uint16_t)(BLE_LSL_CONN_INTERVAL_MIN_MS * 1.25f);  // Convert ms to 1.25ms units
     params.itvl_max = (uint16_t)(BLE_LSL_CONN_INTERVAL_MAX_MS * 1.25f);
     params.latency = BLE_LSL_CONN_LATENCY;
@@ -414,7 +414,7 @@ esp_err_t ble_lsl_bridge_send_sync_marker(ble_lsl_bridge_t* bridge, uint32_t seq
 
     if (!bridge->notifications_enabled[BLE_LSL_CHAR_SYNC]) return ESP_OK;
 
-    sensor_sample_t sample = {0};
+    sensor_sample_t sample = {};
     sample.type = SENSOR_TYPE_MAX;
     sample.timestamp_us = hub_timestamp_us;
     sample.sequence = sequence;

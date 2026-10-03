@@ -6,42 +6,14 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-set(TARGET_NAME "synapse_head_tier0")
-set(ESP_IDF_VERSION_REQUIRED ">=5.0,<6.0")
-
-project(${TARGET_NAME} VERSION 0.1.0 LANGUAGES CXX)
-
-set(COMPONENT_REQUIRES
-    esp_wifi
-    esp_bt
-    nimble
-    driver
-    i2c
-    esp_timer
-    freertos
-    nvs_flash
-    esp_system
-    log
-    spi_flash
-    bootloader_support
-    esp_common
-    esp_rom
-    hal
-    soc
-    esp_hw_support
-    esp_partition
-    esp_pm
-    esp_netif
-    lwip
-    mbedtls
-    console
-    esp_console
-    linenoise
-)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ESP-IDF build system (must be included BEFORE project()).
+# This generates the "${PROJECT_NAME}.elf" app target from the 'main' component.
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(synapse_head_tier0)
 
 add_compile_options(
     -Wall
@@ -63,13 +35,6 @@ add_link_options(
     -Wl,--print-memory-usage
 )
 
-target_include_directories(${TARGET_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/main
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/sensors
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/scheduler
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/sync
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/ble
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/triage
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/power
-)
+# NOTE: include dirs are provided by main/idf_component_register INCLUDE_DIRS.
+# Do NOT use target_include_directories(<project-name> ...) here: ESP-IDF names
+# the app target "${PROJECT_NAME}.elf", so the bare project name is not a target.

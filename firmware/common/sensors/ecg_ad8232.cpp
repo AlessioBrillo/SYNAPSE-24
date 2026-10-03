@@ -1,19 +1,21 @@
 #include "ecg_ad8232.h"
 #include "esp_log.h"
-#include "driver/adc.h"
 #include "driver/gpio.h"
-#include "esp_adc_cal.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 static const char* TAG = "ecg_ad8232";
 
 typedef struct {
     ecg_ad8232_config_t config;
-    esp_adc_cal_characteristics_t adc_chars;
+    adc_oneshot_unit_handle_t adc_handle;
+    adc_cali_handle_t cali_handle;
     bool initialized;
     bool lead_off_detected;
 } ecg_ad8232_ctx_t;
 
-static ecg_ad8232_ctx_t s_ctx = {0};
+static ecg_ad8232_ctx_t s_ctx = {};
 
 esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -21,11 +23,38 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     s_ctx.config = *config;
     s_ctx.initialized = false;
     s_ctx.lead_off_detected = false;
+    s_ctx.adc_handle = NULL;
+    s_ctx.cali_handle = NULL;
 
-    adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(config->adc_channel, ADC_ATTEN_DB_11);
+    adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_ctx.adc_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ADC oneshot init failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, config->vref_mv, &s_ctx.adc_chars);
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    err = adc_oneshot_config_channel(s_ctx.adc_handle, (adc_channel_t)config->adc_channel, &chan_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ADC channel config failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_ctx.cali_handle) != ESP_OK) {
+        ESP_LOGW(TAG, "ADC calibration unavailable, using raw scaling");
+        s_ctx.cali_handle = NULL;
+    }
 
     if (config->gpio_drdy >= 0) {
         gpio_config_t io_conf = {
@@ -39,21 +68,31 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     }
 
     s_ctx.initialized = true;
-    ESP_LOGI(TAG, "AD8232 ECG initialized (ADC channel %d, Vref=%.1f mV, gain=%.1f)", config->adc_channel, config->vref_mv, config->gain);
+    ESP_LOGI(TAG, "AD8232 ECG initialized (ADC1 CH%d, gain=%.1f)", config->adc_channel, config->gain);
     return ESP_OK;
 }
 
 esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
     (void)user_ctx;
 
-    if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
+    if (!s_ctx.initialized || !s_ctx.adc_handle) return ESP_ERR_INVALID_STATE;
 
-    int raw = adc1_get_raw(s_ctx.config.adc_channel);
-    uint32_t voltage_mv = esp_adc_cal_raw_to_voltage(raw, &s_ctx.adc_chars);
+    int raw = 0;
+    esp_err_t err = adc_oneshot_read(s_ctx.adc_handle, (adc_channel_t)s_ctx.config.adc_channel, &raw);
+    if (err != ESP_OK) return err;
+
+    int voltage_mv = 0;
+    if (s_ctx.cali_handle) {
+        if (adc_cali_raw_to_voltage(s_ctx.cali_handle, raw, &voltage_mv) != ESP_OK) {
+            voltage_mv = (raw * 3300) / 4095;
+        }
+    } else {
+        voltage_mv = (raw * 3300) / 4095;
+    }
     float ecg_mv = (float)voltage_mv / s_ctx.config.gain;
 
     if (s_ctx.config.gpio_drdy >= 0) {
-        s_ctx.lead_off_detected = (gpio_get_level(s_ctx.config.gpio_drdy) == 1);
+        s_ctx.lead_off_detected = (gpio_get_level((gpio_num_t)s_ctx.config.gpio_drdy) == 1);
     }
 
     sample->data.ecg.voltage_mv = ecg_mv;
@@ -62,6 +101,14 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
 
 esp_err_t ecg_ad8232_deinit(void* user_ctx) {
     (void)user_ctx;
+    if (s_ctx.cali_handle) {
+        adc_cali_delete_scheme_curve_fitting(s_ctx.cali_handle);
+        s_ctx.cali_handle = NULL;
+    }
+    if (s_ctx.adc_handle) {
+        adc_oneshot_del_unit(s_ctx.adc_handle);
+        s_ctx.adc_handle = NULL;
+    }
     s_ctx.initialized = false;
     ESP_LOGI(TAG, "AD8232 ECG deinitialized");
     return ESP_OK;

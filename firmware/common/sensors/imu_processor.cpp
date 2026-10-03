@@ -5,7 +5,7 @@
 
 static const char* TAG = "imu_processor";
 
-static imu_processor_ctx_t s_ctx = {0};
+static imu_processor_ctx_t s_ctx = {};
 
 #define PI_VALUE 3.14159265359f
 
@@ -239,7 +239,7 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
         }
         
         // Compute features
-        imu_features_t features = {0};
+        imu_features_t features = {};
         features.timestamp_us = timestamp_us - ((int64_t)s_ctx.count / 2) * (1000000 / IMU_PROCESSOR_SAMPLE_RATE_HZ);
         
         // RMS acceleration and gyro

@@ -7,6 +7,7 @@
  */
 
 #include <string.h>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -14,15 +15,11 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "nvs_flash.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_gap_ble_api.h"
-#include "esp_gatts_api.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
-#include "synapse_ble_gatt.h"
-#include "synapse_fit.h"
+#include "ble_gatt_server.h"
+#include "fit_writer.h"
 #include "synapse_provisioning.h"
 #include "synapse_ota.h"
 #include "synapse_acquisition.h"

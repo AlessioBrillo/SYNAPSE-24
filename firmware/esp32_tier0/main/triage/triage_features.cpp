@@ -68,7 +68,7 @@ esp_err_t triage_features_compute_live(
     size_t start = available - count;  // most recent `count` samples
     sensor_sample_t imu_samples[IMU_RING_BUF_SIZE];
     for (size_t i = 0; i < count; i++) {
-        sensor_sample_t s = {0};
+        sensor_sample_t s = {};
         if (!sensor_ring_buffer_peek(&scheduler->buffers[SENSOR_TYPE_IMU], &s, start + i)) {
             memset(features_out, 0, sizeof(triage_features_t));
             return ESP_ERR_INVALID_SIZE;

@@ -5,7 +5,7 @@
 
 static const char* TAG = "ppg_processor";
 
-static ppg_processor_ctx_t s_ctx = {0};
+static ppg_processor_ctx_t s_ctx = {};
 
 #define PEAK_MIN_DISTANCE_SAMPLES  (PPG_PROCESSOR_SAMPLE_RATE_HZ * 60 / 180)  // 180 BPM max = 300ms min = ~25 samples at 50Hz
 #define PEAK_MAX_DISTANCE_SAMPLES  (PPG_PROCESSOR_SAMPLE_RATE_HZ * 60 / 30)   // 30 BPM min = 2000ms max = ~150 samples at 50Hz

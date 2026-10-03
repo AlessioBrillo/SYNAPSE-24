@@ -42,7 +42,7 @@ typedef struct {
     float mag_scale;
 } imu_icm20948_ctx_t;
 
-static imu_icm20948_ctx_t s_ctx = {0};
+static imu_icm20948_ctx_t s_ctx = {};
 
 static esp_err_t icm20948_select_bank(uint8_t bank) {
     return i2c_write_reg(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_BANK_SEL, bank);

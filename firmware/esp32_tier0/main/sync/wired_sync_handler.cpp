@@ -21,7 +21,7 @@ static void IRAM_ATTR wired_sync_isr_handler(void* arg) {
     
     // Store interval for averaging
     static int64_t last_timestamp = 0;
-    static float intervals[MAX_INTERVAL_SAMPLES] = {0};
+    static float intervals[MAX_INTERVAL_SAMPLES] = {};
     static uint8_t interval_idx = 0;
     
     if (last_timestamp > 0) {

@@ -84,7 +84,7 @@ void tearDown(void) {
 }
 
 void test_imu_processor_static_posture(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // 10 seconds of static data at 100Hz
     for (int i = 0; i < 10 * 100; i++) {
@@ -102,7 +102,7 @@ void test_imu_processor_static_posture(void) {
 }
 
 void test_imu_processor_walking_motion(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     for (int i = 0; i < 10 * 100; i++) {
         float ax, ay, az, gx, gy, gz;
@@ -119,7 +119,7 @@ void test_imu_processor_walking_motion(void) {
 }
 
 void test_imu_processor_running_motion(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     for (int i = 0; i < 10 * 100; i++) {
         float ax, ay, az, gx, gy, gz;
@@ -135,7 +135,7 @@ void test_imu_processor_running_motion(void) {
 }
 
 void test_imu_processor_spectral_entropy(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // Static: low entropy (periodic)
     for (int i = 0; i < 10 * 100; i++) {
@@ -162,7 +162,7 @@ void test_imu_processor_spectral_entropy(void) {
 }
 
 void test_imu_processor_output_rate(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     int output_count = 0;
     
     // 20 seconds of data
@@ -180,7 +180,7 @@ void test_imu_processor_output_rate(void) {
 }
 
 void test_imu_processor_rms_computation(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // Known signal: constant 0.5g on X axis
     for (int i = 0; i < 10 * 100; i++) {
@@ -199,7 +199,7 @@ void test_imu_processor_rms_computation(void) {
 }
 
 void test_imu_processor_gyro_rms(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // Known rotation: 0.1 rad/s on X axis
     for (int i = 0; i < 10 * 100; i++) {
@@ -216,7 +216,7 @@ void test_imu_processor_gyro_rms(void) {
 
 void test_imu_sleep_wake_classifier(void) {
     // Test the classifier directly with known feature values
-    imu_features_t sleep_features = {0};
+    imu_features_t sleep_features = {};
     sleep_features.motion_intensity = 0.01f;
     sleep_features.spectral_entropy = 0.1f;
     sleep_features.dominant_freq_hz = 0.2f;
@@ -225,7 +225,7 @@ void test_imu_sleep_wake_classifier(void) {
     float sleep_prob = imu_sleep_wake_classify(&sleep_features);
     TEST_ASSERT_GREATER_THAN(0.7f, sleep_prob);
     
-    imu_features_t wake_features = {0};
+    imu_features_t wake_features = {};
     wake_features.motion_intensity = 0.5f;
     wake_features.spectral_entropy = 0.8f;
     wake_features.dominant_freq_hz = 2.0f;
@@ -234,7 +234,7 @@ void test_imu_sleep_wake_classifier(void) {
     float wake_prob = imu_sleep_wake_classify(&wake_features);
     TEST_ASSERT_LESS_THAN(0.3f, wake_prob);
     
-    imu_features_t ambiguous_features = {0};
+    imu_features_t ambiguous_features = {};
     ambiguous_features.motion_intensity = 0.1f;
     ambiguous_features.spectral_entropy = 0.4f;
     ambiguous_features.dominant_freq_hz = 1.0f;
@@ -246,7 +246,7 @@ void test_imu_sleep_wake_classifier(void) {
 }
 
 void test_imu_processor_insufficient_data(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // Only 1 second of data
     for (int i = 0; i < 100; i++) {
@@ -261,7 +261,7 @@ void test_imu_processor_insufficient_data(void) {
 }
 
 void test_imu_processor_reset(void) {
-    imu_features_t features = {0};
+    imu_features_t features = {};
     
     // Fill buffer
     for (int i = 0; i < 10 * 100; i++) {
@@ -276,7 +276,7 @@ void test_imu_processor_reset(void) {
     // Reset
     imu_processor_reset();
     
-    imu_features_t features2 = {0};
+    imu_features_t features2 = {};
     imu_processor_get_latest(&features2);
     // After reset, motion_intensity should be 0 (uninitialized)
     TEST_ASSERT_EQUAL_FLOAT(0.0f, features2.motion_intensity);

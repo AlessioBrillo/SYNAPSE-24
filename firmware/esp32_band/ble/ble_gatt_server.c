@@ -1,449 +1,384 @@
 /**
  * @file ble_gatt_server.c
- * @brief Synapse Band v1 - BLE GATT Server Implementation
- * 
- * Implements:
- * - Standard Bluetooth SIG services (Heart Rate, RSC, CSC, Battery, Device Info)
- * - Custom Synapse Service (feature stream, device config, provisioning)
- * - GATT server initialization, registration, and notification handling
- * - Advertising management (provisioning vs normal mode)
- * - MTU-aware feature stream notifications
+ * @brief Synapse Band v1 - BLE GATT Server (NimBLE, ESP-IDF 5.x)
+ * Same stack as head/forearm/common. Standard: HR (0x180D), Battery (0x180F),
+ * Device Info (0x180A). Custom 128-bit Synapse service: feature stream (notify),
+ * device config (R/W), provisioning (W/N).
  */
 
 #include <string.h>
-#include <stdlib.h>
+#include <assert.h>
+#include "esp_log.h"
+#include "esp_nimble_hci.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/ble_gap.h"
+#include "host/util/util.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
 #include "ble_gatt_server.h"
 #include "ble_gatt_server_priv.h"
+#include "synapse_provisioning.h"
+#include "synapse_config.h"
 
-// ============================================================================
-// Static Definitions
-// ============================================================================
+static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static bool g_connected = false;
+static bool g_feat_subscribed = false;
+static bool g_prov_subscribed = false;
+static uint8_t g_feat_seq = 0;
+static uint16_t g_mtu = 23;
 
-// Custom Synapse Service handle
-static uint16_t g_synapse_service_handle = 0;
+static uint16_t s_feat_handle = 0;
+static uint16_t s_prov_handle = 0;
 
-// Characteristic handles for custom service
-static uint16_t g_feature_stream_handle = 0;
-static uint16_t g_device_config_handle = 0;
-static uint16_t g_provisioning_handle = 0;
+static uint8_t s_body_location = 1; // wrist
+static uint8_t s_batt_level = 100;
+static char s_mfr_name[32] = "Synapse";
+static char s_model_num[32] = "Band v1";
+static char s_fw_rev[32] = "1.0.0";
+static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
+static uint16_t s_cfg_len = 0;
 
-// Standard service handles
-static uint16_t g_hr_service_handle = 0;
-static uint16_t g_battery_service_handle = 0;
-static uint16_t g_device_info_service_handle = 0;
+// 128-bit UUIDs (little-endian byte order as in original spec)
+static const ble_uuid128_t SYN_SVC_UUID =
+    BLE_UUID128_INIT(0x5D, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
+                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+static const ble_uuid128_t FEAT_UUID =
+    BLE_UUID128_INIT(0x5E, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
+                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+static const ble_uuid128_t CFG_UUID =
+    BLE_UUID128_INIT(0x5F, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
+                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+static const ble_uuid128_t PROV_UUID =
+    BLE_UUID128_INIT(0x60, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
+                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
 
-// Indication notification state
-static bool g_ccd_feature_stream_configured = false;
-static bool g_ccd_device_config_configured = false;
-static bool g_ccd_provisioning_configured = false;
+// --- characteristic access callbacks -----------------------------------------
 
-// Feature stream data (last sample, updated by acquisition/FEA)
-static synapse_feature_stream_t g_last_feature_stream = {0};
+static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    // Notify-only characteristic
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-// Sequence counter for feature stream reassembly
-static uint8_t g_feature_stream_seq = 0;
+static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        int rc = os_mbuf_append(ctxt->om, s_cfg_buf, s_cfg_len);
+        return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        if (len > sizeof(s_cfg_buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        s_cfg_len = len;
+        os_mbuf_copydata(ctxt->om, 0, len, s_cfg_buf);
+        synapse_config_update_from_ble(s_cfg_buf, s_cfg_len);
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-// Current connection handle
-static uint16_t g_conn_handle = 0;
+static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        if (len < 4) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        uint8_t hdr[4];
+        os_mbuf_copydata(ctxt->om, 0, 4, hdr);
+        uint16_t data_len = hdr[2] | ((uint16_t)hdr[3] << 8);
+        uint8_t payload[240];
+        if (data_len > sizeof(payload)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (data_len) os_mbuf_copydata(ctxt->om, 4, data_len, payload);
+        synapse_provisioning_process_cmd(hdr[0], payload, data_len);
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-static const uint16_t g_primary_service_uuid = ESP_GATT_UUID_PRI_SERVICE;
-static const uint16_t g_characteristic_uuid = ESP_GATT_UUID_CHAR_DECLARE;
+static int body_loc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        os_mbuf_append(ctxt->om, &s_body_location, sizeof(s_body_location));
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-// ============================================================================
-// GATT Database Declaration - Embedded from gatt_db.csv
-// ============================================================================
+static int batt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        os_mbuf_append(ctxt->om, &s_batt_level, sizeof(s_batt_level));
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-// Generated by: uuidgen + manual assembly
-// Custom service: 53594E41-5053-452D-4241-4E44-A1B2C3D4E5F6 (little-endian bytes)
-// Features: 53594E41-5053-452D-4241-4E44-A1B2C3D4E5F7
-// Config:     53594E41-5053-452D-4241-4E44-A1B2C3D4E5F8  
-// Provisioning: 53594E41-5053-452D-4241-4E44-A1B2C3D4E5F9
+static int dis_str_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr;
+    const char *str = (const char *)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        os_mbuf_append(ctxt->om, str, strlen(str));
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
 
-static const esp_gatts_attr_t g_gatts_attr_tab[PROFILE_A_NUM_ATTRS] = {
-    // [0] ... Service 0: Heart Rate Service
-    [0] = {
-        .uuid_len = ESP_UUID_LEN_16,
-        .uuid = {.uuid16 = ESP_GATT_UUID_HEART_RATE_SERVICE},
-        .permission = (ESP_GATT_PERM_READ | ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_READ_AUTHENTICATED),
-        .max_len = ESP_GATT_ATTR_MAX_LEN,
-        .handle = ESP_GATT_HANDLE_INVALID,
+// --- GATT database ------------------------------------------------------------
+
+static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0x180D),
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A37),
+                .access_cb = feat_access,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A38),
+                .access_cb = body_loc_access,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {0},
+        },
     },
-    // ... [1] HR Measurement characteristic
-    // [2] ... Characteristic CCCD
-    // [3] ... Body Sensor Location
-    // ... and so on for all standard services ...
-    
-    // [N-4] ... Custom Synapse Service (primary)
-    // [N-3] ... Feature Stream characteristic
-    // [N-2] ... Device Config characteristic  
-    // [N-1] ... Provisioning characteristic
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0x180F),
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A19),
+                .access_cb = batt_access,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+            },
+            {0},
+        },
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = BLE_UUID16_DECLARE(0x180A),
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A29),
+                .access_cb = dis_str_access,
+                .arg = (void *)s_mfr_name,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A24),
+                .access_cb = dis_str_access,
+                .arg = (void *)s_model_num,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A26),
+                .access_cb = dis_str_access,
+                .arg = (void *)s_fw_rev,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {0},
+        },
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &SYN_SVC_UUID.u,
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = &FEAT_UUID.u,
+                .access_cb = feat_access,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = &CFG_UUID.u,
+                .access_cb = cfg_access,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+            },
+            {
+                .uuid = &PROV_UUID.u,
+                .access_cb = prov_access,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+            },
+            {0},
+        },
+    },
+    {0},
 };
 
-// ============================================================================
-// Custom Synapse Service 128-bit UUID
-// ============================================================================
-static const uint8_t g_synapse_service_uuid_128[16] = {
-    0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1, 0x7B, 0x4A,
-    0x9D, 0x8C, 0x1F, 0x0E, 0x5D, 0x4C, 0x3B, 0x2A
-};
+// --- GAP -----------------------------------------------------------------------
 
-// Custom characteristic UUIDs (128-bit, derived from service)
-static const uint8_t g_feature_stream_uuid_128[16] = {
-    0xF7, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1, 0x7B, 0x4A,
-    0x9D, 0x8C, 0x1F, 0x0E, 0x5E, 0x4C, 0x3B, 0x2A
-};
-
-static const uint8_t g_device_config_uuid_128[16] = {
-    0xF8, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1, 0x7B, 0x4A,
-    0x9D, 0x8C, 0x1F, 0x0E, 0x5F, 0x4C, 0x3B, 0x2A
-};
-
-static const uint8_t g_provisioning_uuid_128[16] = {
-    0xF9, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1, 0x7B, 0x4A,
-    0x9D, 0x8C, 0x1F, 0x0E, 0x60, 0x4C, 0x3B, 0x2A
-};
-
-// ============================================================================
-// Helper: Convert 16-bit UUID to 128-bit format for GATT registration
-// ============================================================================
-static void synapse_uuid_16_to_128(uint16_t uuid_16, uint8_t *uuid_128_out)
-{
-    // Use base 16-bit UUID + 16 reserved bytes pattern
-    // This maps standard SIG UUIDs to their 128-bit shadow format
-    memset(uuid_128_out, 0x00, 16);
-    uuid_128_out[0] = uuid_16 & 0xFF;
-    uuid_128_out[1] = (uuid_16 >> 8) & 0xFF;
-}
-
-// ============================================================================
-// GATTS Event Handler
-// ============================================================================
-static esp_err_t gatts_event_handler(esp_gatts_cb_event_t event,
-                                    esp_gatt_if_t gatts_if,
-                                    esp_ble_gatts_cb_param_t *param)
-{
-    switch (event) {
-    case ESP_GATTS_REG_EVT:
-        ESP_LOGD(TAG, "REG_EVT - Registering GATT services");
-        esp_ble_gatts_create_attr_tab(g_gatts_attr_tab, SVC_INST_ID, PROFILE_A_NUM_ATTRS, /*service_id*/ 0);
-        break;
-
-    case ESP_GATTS_READ_EVT:
-        // Handle read requests
-        break;
-
-    case ESP_GATTS_WRITE_EVT:
-        // Handle write requests - especially provisioning commands
-        {
-            if (param->write.handle == g_provisioning_handle) {
-                // Process provisioning command
-                synapse_prov_packet_t *packet = (synapse_prov_packet_t *)param->write.value;
-                synapse_provisioning_process_cmd(packet->cmd, packet->data, packet->data_len);
-            } else if (param->write.handle == g_device_config_handle) {
-                // Process device config update
-                synapse_config_update_from_ble(param->write.value, param->write.len);
-            }
+static int gap_event_cb(struct ble_gap_event *event, void *arg) {
+    (void)arg;
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            g_conn_handle = event->connect.conn_handle;
+            g_connected = true;
+            g_feat_seq = 0;
+            ESP_LOGI(BLE_TAG, "Connected handle=%d", g_conn_handle);
+        } else {
+            ESP_LOGW(BLE_TAG, "Connection failed: %d", event->connect.status);
+            synapse_ble_gatt_start_advertising_normal();
         }
-        break;
-
-    case ESP_GATTS_EXEC_WRITE_EVT:
-        // Handle prepared writes
-        break;
-
-    case ESP_GATTS_MTU_EVT:
-        ESP_LOGD(TAG, "MTU updated: %d", param->mtu.mtu);
-        break;
-
-    case ESP_GATTS_CONF_EVT:
-        // Confirmation of INDICATION
-        break;
-
-    case ESP_GATTS_START_EVT:
-        // Service start/stop complete
-        break;
-
-    case ESP_GATTS_STOP_EVT:
-        break;
-
-    case ESP_GATTS_CONNECT_EVT:
-        ESP_LOGD(TAG, "CONNECT_EVT - conn_id: %d", param->connect.conn_id);
-        g_conn_handle = param->connect.conn_id;
-        g_feature_stream_seq = 0;  // Reset sequence on new connection
-        // Enable notifications on our characteristics
-        esp_ble_gatt_set_attr_table(g_conn_handle, /*...*/);
-        break;
-
-    case ESP_GATTS_DISCONNECT_EVT:
-        ESP_LOGD(TAG, "DISCONNECT_EVT - reason: %d", param->disconnect.reason);
-        g_conn_handle = 0;
-        // Restart advertising in provisioning mode if not provisioned
-        if (!synapse_provisioning_is_complete()) {
-            synapse_ble_gatt_start_advertising_provisioning();
+        return 0;
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(BLE_TAG, "Disconnected reason=%d", event->disconnect.reason);
+        g_connected = false;
+        g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        g_feat_subscribed = false;
+        g_prov_subscribed = false;
+        if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
+        else synapse_ble_gatt_start_advertising_normal();
+        return 0;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        ESP_LOGI(BLE_TAG, "Subscribe attr=%d notify=%d",
+                 event->subscribe.attr_handle, event->subscribe.cur_notify);
+        if (event->subscribe.attr_handle == s_feat_handle) {
+            g_feat_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == s_prov_handle) {
+            g_prov_subscribed = event->subscribe.cur_notify;
         }
-        break;
-
-    case ESP_GATTS_CREAT_ATTR_EVT:
-        if (param->create.status == ESP_GATT_OK) {
-            ESP_LOGD(TAG, "ATTR_CREATED - handle: %d", param->create.handle);
-            // Map handles for our characteristics
-            // [PROFILE_A_IDX_SERVICE_0] = Heart Rate Service handle
-            // [PROFILE_A_IDX_CHAR_0]  = HR Measurement handle
-            // etc.
-            // Custom service handles are at the end of the attr tab
-        }
-        break;
-
-    case ESP_GATTS_REG_FOR_NOTIFY_EVT:
-        // Client started/notified us
-        break;
-
+        return 0;
+    case BLE_GAP_EVENT_MTU:
+        g_mtu = event->mtu.value;
+        return 0;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        ESP_LOGI(BLE_TAG, "Advertising complete");
+        return 0;
     default:
-        break;
+        return 0;
     }
+}
+
+static void start_advertising_impl(const char *name) {
+    struct ble_hs_adv_fields fields = {0};
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.name = (uint8_t *)name;
+    fields.name_len = strlen(name);
+    fields.name_is_complete = 1;
+    static const ble_uuid16_t svc_uuid = BLE_UUID16_INIT(0x180D);
+    fields.uuids16 = (ble_uuid16_t[]){svc_uuid};
+    fields.num_uuids16 = 1;
+    fields.uuids16_is_complete = 1;
+    ble_gap_adv_set_fields(&fields);
+
+    struct ble_gap_adv_params adv_params = {0};
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(32);
+    adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(64);
+    ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
+                      &adv_params, gap_event_cb, NULL);
+    ESP_LOGI(BLE_TAG, "Advertising started (%s)", name);
+}
+
+static void on_sync(void) {
+    int rc = ble_svc_gap_device_name_set("SYNAPSE-BAND");
+    assert(rc == 0);
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    if (!synapse_provisioning_is_complete()) start_advertising_impl("SYNAPSE-BAND");
+    else start_advertising_impl("SYNAPSE-BAND");
+}
+
+static void on_reset(int reason) {
+    ESP_LOGE(BLE_TAG, "NimBLE reset: %d", reason);
+}
+
+static void host_task_fn(void *arg) {
+    (void)arg;
+    nimble_port_run();
+}
+
+// --- public API ------------------------------------------------------------------
+
+esp_err_t synapse_ble_gatt_init(void) {
+    esp_nimble_hci_init();
+    nimble_port_init();
+
+    ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.reset_cb = on_reset;
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
+    int rc = ble_gatts_count_cfg(gatt_svr_svcs);
+    if (rc != 0) {
+        ESP_LOGE(BLE_TAG, "GATT count cfg failed: %d", rc);
+        return ESP_FAIL;
+    }
+    rc = ble_gatts_add_svcs(gatt_svr_svcs);
+    if (rc != 0) {
+        ESP_LOGE(BLE_TAG, "GATT add svcs failed: %d", rc);
+        return ESP_FAIL;
+    }
+
+    s_feat_handle = ble_gatts_find_chr(&SYN_SVC_UUID.u, &FEAT_UUID.u, NULL, NULL);
+    s_prov_handle = ble_gatts_find_chr(&SYN_SVC_UUID.u, &PROV_UUID.u, NULL, NULL);
+    ESP_LOGI(BLE_TAG, "BLE GATT init OK (NimBLE) feat=%d prov=%d", s_feat_handle, s_prov_handle);
+
+    nimble_port_freertos_init(host_task_fn);
     return ESP_OK;
 }
 
-// ============================================================================
-// BLE GATT Server Initialization
-// ============================================================================
-esp_err_t synapse_ble_gatt_init(void)
-{
-    esp_err_t ret;
-
-    // Initialize BLE host stack
-    esp_ble_gatts_config_t gatts_cfg = {
-        .gatts_if = ESP_GATT_IF_NONE,
-        .max_attr_len = 512,
-        .prep_mtu_req = 512,
-        .profile_conf = 0,
-    };
-    ret = esp_ble_gatts_config(&gatts_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(BLE_TAG, "GATTS config failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Register GATT callback
-    esp_ble_gatts_cb_t cb = {.event_handler = gatts_event_handler};
-    ret = esp_ble_gatts_register_callback(cb);
-    if (ret != ESP_OK) {
-        ESP_LOGE(BLE_TAG, "GATTS register callback failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Register GATT services (standard + custom)
-    ret = esp_ble_gatts_app_register(ESP_SPP_MODE);  // Using SPP mode for simplicity
-    if (ret != ESP_OK) {
-        ESP_LOGE(BLE_TAG, "GATTS app register failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Configure GATTS attribute table
-    // The attr tab is already defined in gatts_event_handler registration
-    // We just need to ensure it's properly set up
-
-    ESP_LOGI(BLE_TAG, "BLE GATT Server initialized successfully");
-    return ESP_OK;
+void synapse_ble_gatt_start_advertising_provisioning(void) {
+    if (ble_hs_synced()) start_advertising_impl("SYNAPSE-BAND");
 }
 
-// ============================================================================
-// Advertising Management
-// ============================================================================
-void synapse_ble_gatt_start_advertising_provisioning(void)
-{
-    ESP_LOGI(BLE_TAG, "Starting provisioning advertising mode");
-
-    // Set advertising data with custom service UUID
-    esp_ble_adv_data_t adv_data = {
-        .set_scan_rsp = false,
-        .include_name = ESP_BLE_ADV_INCLUDE_NAME,
-        .include_txpower = true,
-        .min_interval = 0x20,  // 20ms
-        .max_interval = 0x40,  // 40ms
-        .appearance = 0x00,
-        .manufacturer_len = 0,
-        .p_manufacturer_data = NULL,
-        .p_scan_rsp_data = NULL,
-        .service_uuid_len = 16,  // 128-bit UUID
-        .p_service_uuid = g_synapse_service_uuid_128,
-        .service_uuid_is_16 = false,
-    };
-
-    // Set scan response data (optional - could include device info)
-    esp_ble_adv_data_t scan_rsp = {
-        .set_scan_rsp = true,
-        .include_name = false,
-        .include_txpower = false,
-        .min_interval = 0x20,
-        .max_interval = 0x40,
-        .appearance = 0x00,
-        .manufacturer_len = 0,
-        .p_manufacturer_data = NULL,
-        .p_scan_rsp_data = NULL,
-        .service_uuid_len = 0,
-        .p_service_uuid = NULL,
-        .service_uuid_is_16 = false,
-    };
-
-    esp_ble_gatts_set_scan_rsp_data(false, &scan_rsp);
-    esp_ble_gatts_set_adv_data(true, &adv_data, &scan_rsp);
-
-    // Start advertising
-    esp_ble_gap_start_advertising(&adv_params_provisioning);
+void synapse_ble_gatt_start_advertising_normal(void) {
+    if (ble_hs_synced()) start_advertising_impl("SYNAPSE-BAND");
 }
 
-void synapse_ble_gatt_start_advertising_normal(void)
-{
-    ESP_LOGI(BLE_TAG, "Starting normal advertising mode");
-
-    esp_ble_adv_data_t adv_data = {
-        .set_scan_rsp = false,
-        .include_name = ESP_BLE_ADV_INCLUDE_NAME,
-        .include_txpower = true,
-        .min_interval = 0x20,
-        .max_interval = 0x40,
-        .appearance = 0x180,  // Wrist wearable
-        .manufacturer_len = 0,
-        .p_manufacturer_data = NULL,
-        .p_scan_rsp_data = NULL,
-        .service_uuid_len = 16,
-        .p_service_uuid = g_synapse_service_uuid_128,
-        .service_uuid_is_16 = false,
-    };
-
-    esp_ble_adv_t adv_params = {
-        .adv_int_min = 0x20,
-        .adv_int_max = 0x40,
-        .adv_type = ADV_TYPE_IND,
-        .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-        .channel_map = ADV_CH_ALL,
-        .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-    };
-
-    esp_ble_gatts_set_adv_data(true, &adv_data, NULL);
-    esp_ble_gap_start_advertising(&adv_params);
+void synapse_ble_gatt_process_events(void) {
 }
 
-// ============================================================================
-// Characteristic Notification/Indication
-// ============================================================================
-esp_err_t synapse_ble_gatt_notify_features(const synapse_feature_stream_t *feature)
-{
-    if (g_conn_handle == 0) {
-        ESP_LOGW(BLE_TAG, "Cannot notify: not connected");
-        return ESP_ERR_INVALID_STATE;
+esp_err_t synapse_ble_gatt_notify_features(const synapse_feature_stream_t *feature) {
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (!g_feat_subscribed || s_feat_handle == 0) return ESP_ERR_INVALID_STATE;
+    synapse_feature_stream_t p = *feature;
+    p.sequence = g_feat_seq++;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&p, sizeof(p));
+    if (!om) return ESP_ERR_NO_MEM;
+    int rc = ble_gatts_notify_custom(g_conn_handle, s_feat_handle, om);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t synapse_ble_gatt_notify_provisioning(const synapse_prov_packet_t *packet) {
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (!g_prov_subscribed || s_prov_handle == 0) return ESP_ERR_INVALID_STATE;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(packet, sizeof(*packet));
+    if (!om) return ESP_ERR_NO_MEM;
+    int rc = ble_gatts_notify_custom(g_conn_handle, s_prov_handle, om);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
+}
+
+bool synapse_ble_gatt_is_connected(void) {
+    return g_connected;
+}
+
+uint16_t synapse_ble_gatt_get_mtu(void) {
+    return g_mtu;
+}
+
+void synapse_ble_gatt_set_device_info(const char *m, const char *model, const char *s,
+                                      const char *fw, const char *hw) {
+    if (m) {
+        strncpy(s_mfr_name, m, sizeof(s_mfr_name) - 1);
+        s_mfr_name[sizeof(s_mfr_name) - 1] = '\0';
     }
-
-    if (!g_ccd_feature_stream_configured) {
-        ESP_LOGW(BLE_TAG, "Cannot notify: feature stream not subscribed");
-        return ESP_ERR_INVALID_STATE;
+    if (model) {
+        strncpy(s_model_num, model, sizeof(s_model_num) - 1);
+        s_model_num[sizeof(s_model_num) - 1] = '\0';
     }
-
-    // Pack feature data into the compact format
-    synapse_feature_stream_t packed = *feature;
-    packed.sequence = g_feature_stream_seq++;
-    
-    // The packed structure is already the right size (20 bytes)
-    // We need to split if > MTU-3, but 20 bytes fits in any MTU >= 23
-
-    // Send notification via GATTS
-    esp_ble_gatts_send_indicate(g_conn_handle, g_feature_stream_handle,
-                               sizeof(synapse_feature_stream_t),
-                               (uint8_t *)&packed,
-                               false);  // false = notify (not indicate, for reliability)
-
-    return ESP_OK;
-}
-
-esp_err_t synapse_ble_gatt_notify_provisioning(const synapse_prov_packet_t *packet)
-{
-    if (g_conn_handle == 0) {
-        return ESP_ERR_INVALID_STATE;
+    if (fw) {
+        strncpy(s_fw_rev, fw, sizeof(s_fw_rev) - 1);
+        s_fw_rev[sizeof(s_fw_rev) - 1] = '\0';
     }
-
-    if (!g_ccd_provisioning_configured) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    return esp_ble_gatts_send_indicate(g_conn_handle, g_provisioning_handle,
-                                      sizeof(synapse_prov_packet_t),
-                                      (uint8_t *)packet,
-                                      false);
+    ESP_LOGI(BLE_TAG, "DIS set: %s %s S:%s FW:%s HW:%s", s_mfr_name, s_model_num,
+             s ? s : "?", s_fw_rev, hw ? hw : "?");
 }
 
-// ============================================================================
-// Device Info Management
-// ============================================================================
-void synapse_ble_gatt_set_device_info(const char *manufacturer, const char *model,
-                                       const char *serial, const char *fw_rev,
-                                       const char *hw_rev)
-{
-    // Write Device Info characteristic values
-    if (g_device_info_service_handle != ESP_GATT_HANDLE_INVALID) {
-        // Manufacturer name string
-        esp_attr_t attr;
-        // ... write manufacturer, model, serial, firmware, hardware rev
-        // These are long strings so may need multiple writes or the Device Info service
-        // has characteristic handles for each field
-    }
-}
-
-void synapse_ble_gatt_update_battery(uint8_t level, bool charging)
-{
-    // Update Battery Level characteristic
-    // Also update the feature stream battery field
-    if (g_last_feature_stream.battery_level != level || 
-        g_last_feature_stream.charging != charging) {
-        
-        g_last_feature_stream.battery_level = level;
-        g_last_feature_stream.charging = charging;
-        
-        // Notify connected clients
-        if (g_conn_handle != 0) {
-            synapse_ble_gatt_notify_features(&g_last_feature_stream);
-        }
-    }
-}
-
-// ============================================================================
-// Connection State
-// ============================================================================
-bool synapse_ble_gatt_is_connected(void)
-{
-    return g_conn_handle != 0;
-}
-
-uint16_t synapse_ble_gatt_get_mtu(void)
-{
-    // Return negotiated MTU (minimum of what was exchanged during connection)
-    // Default conservative value
-    return 23;  // Safe minimum for BLE 5.0 with 185-byte payload
-}
-
-// ============================================================================
-// Process Periodic Events (from main loop)
-// ============================================================================
-void synapse_ble_gatt_process_events(void)
-{
-    // Handle any pending GATTS operations
-    // Check for incoming writes, reads, etc.
-    // This is called from the main FreeRTOS loop
-}
-
-// ============================================================================
-// CRC calculation for provisioning CSR (for verification)
-// ============================================================================
-static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
-{
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i] << 8;
-        for (int j = 0; j < 8; j++) {
-            if (crc & 0x8000)
-                crc = (crc << 1) ^ 0x1021;
-            else
-                crc <<= 1;
-        }
-    }
-    return crc;
+void synapse_ble_gatt_update_battery(uint8_t level, bool charging) {
+    (void)charging;
+    s_batt_level = level;
 }

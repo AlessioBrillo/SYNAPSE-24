@@ -21,7 +21,7 @@ static void IRAM_ATTR wired_sync_isr_handler(void* arg) {
     
     // Store interval for averaging
     static int64_t last_timestamp = 0;
-    static float intervals[MAX_INTERVAL_SAMPLES] = {0};
+    static float intervals[MAX_INTERVAL_SAMPLES] = {};
     static uint8_t interval_idx = 0;
     
     if (last_timestamp > 0) {
@@ -54,7 +54,7 @@ esp_err_t synapse_wired_sync_init(synapse_wired_sync_t* sync, synapse_sync_role_
     if (!sync) return ESP_ERR_INVALID_ARG;
     
     memset(sync, 0, sizeof(synapse_wired_sync_t));
-    sync->gpio_pin = SYNAPSE_WIRED_SYNC_GPIO;
+    sync->gpio_pin = (gpio_num_t)SYNAPSE_WIRED_SYNC_GPIO;
     sync->role = role;
     sync->pulse_width_us = SYNAPSE_WIRED_SYNC_PULSE_WIDTH_US;
     sync->pull_up = SYNAPSE_WIRED_SYNC_PULL_UP;

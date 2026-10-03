@@ -19,8 +19,8 @@ esp_err_t clock_sync_init(clock_sync_t* sync) {
     sync->initialized = true;
     sync->model_ref_time_us = esp_timer_get_time();
     
-    ESP_LOGI(TAG, "Clock sync initialized (exchange=%dms, drift_update=%ds)", 
-             sync->exchange_interval_ms, sync->drift_update_interval_s);
+    ESP_LOGI(TAG, "Clock sync initialized (exchange=%lums, drift_update=%lus)",
+             (unsigned long)sync->exchange_interval_ms, (unsigned long)sync->drift_update_interval_s);
     return ESP_OK;
 }
 
@@ -31,7 +31,7 @@ esp_err_t clock_sync_pod_send_request(clock_sync_t* sync, int64_t* send_timestam
     sync->next_sequence++;
 
     // Record the request so pod_receive_reply can match it later.
-    clock_sync_entry_t entry = {0};
+    clock_sync_entry_t entry = {};
     entry.sequence = sync->next_sequence;
     entry.pod_send_us = *send_timestamp_us;
     sync->history[sync->head] = entry;
@@ -139,8 +139,8 @@ static esp_err_t clock_sync_update_drift_model(clock_sync_t* sync, int64_t ref_t
     sync->model_ref_time_us = ref_time_us;
     sync->model_valid = true;
     
-    ESP_LOGI(TAG, "Drift model updated: a=%.3f ppm/s, b=%" PRId64 " us (n=%d)", 
-             sync->drift_a_ppm_per_sec, sync->drift_b_us, valid);
+    ESP_LOGI(TAG, "Drift model updated: a=%.3f ppm/s, b=%" PRId64 " us (n=%d)",
+             sync->drift_a_ppm_per_sec, (int64_t)sync->drift_b_us, valid);
     
     return ESP_OK;
 }

@@ -42,13 +42,17 @@ typedef struct {
     float mag_scale;
 } imu_icm20948_ctx_t;
 
-static imu_icm20948_ctx_t s_ctx = {0};
+static imu_icm20948_ctx_t s_ctx = {};
+
+static esp_err_t i2c_write_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t value);
+static esp_err_t i2c_read_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t* value);
+static esp_err_t i2c_read_multi(i2c_port_t port, int addr, uint8_t reg, uint8_t* data, size_t len);
 
 static esp_err_t icm20948_select_bank(uint8_t bank) {
     return i2c_write_reg(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_BANK_SEL, bank);
 }
 
-static esp_err_t i2c_write_reg(int port, int addr, uint8_t reg, uint8_t value) {
+static esp_err_t i2c_write_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -60,7 +64,7 @@ static esp_err_t i2c_write_reg(int port, int addr, uint8_t reg, uint8_t value) {
     return ret;
 }
 
-static esp_err_t i2c_read_reg(int port, int addr, uint8_t reg, uint8_t* value) {
+static esp_err_t i2c_read_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t* value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -74,7 +78,7 @@ static esp_err_t i2c_read_reg(int port, int addr, uint8_t reg, uint8_t* value) {
     return ret;
 }
 
-static esp_err_t i2c_read_multi(int port, int addr, uint8_t reg, uint8_t* data, size_t len) {
+static esp_err_t i2c_read_multi(i2c_port_t port, int addr, uint8_t reg, uint8_t* data, size_t len) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -120,12 +124,12 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
 
     i2c_config_t i2c_conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = GPIO_NUM_21,
-        .scl_io_num = GPIO_NUM_22,
+        .sda_io_num = (s_ctx.config.sda_gpio_num >= 0) ? s_ctx.config.sda_gpio_num : SYNAPSE_I2C_SDA_GPIO_DEFAULT,
+        .scl_io_num = (s_ctx.config.scl_gpio_num >= 0) ? s_ctx.config.scl_gpio_num : SYNAPSE_I2C_SCL_GPIO_DEFAULT,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 400000
     };
+    i2c_conf.master.clk_speed = 400000;
     esp_err_t err = i2c_param_config(config->i2c_port, &i2c_conf);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C param config failed: %s", esp_err_to_name(err));

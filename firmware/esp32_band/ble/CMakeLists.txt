@@ -1,5 +1,4 @@
-idf_component_register(SRCS "ble_gatt_server.c" "gatt_db.c"
+idf_component_register(SRCS "ble_gatt_server.c"
                     INCLUDE_DIRS "."
-                    REQUIRES esp_ble freesp_gatts freesp_gattc freesp_bt
-                    PRIV_REQUIRES freesp_gatt_common
-                    EMBED_FILES "gatt_db.csv")
+                    REQUIRES bt nvs_flash provisioning config
+                    PRIV_REQUIRES)

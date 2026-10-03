@@ -37,14 +37,14 @@ ESP32-S3 DevKitC-1                    Sensor Breakouts
 │  GPIO 39                ├──────────▶│ AD8232 LO+ (lead-off detect +)      │
 │  GPIO 34                ├──────────▶│ AD8232 LO- (lead-off detect -)      │
 │                         │           │ AD8232 VCC ─── 3V3                  │
-│  GPIO 21 (I2C SDA) ─────┼──────────▶│ MAX30102 SDA                        │
-│  GPIO 22 (I2C SCL) ─────┼──────────▶│ MAX30102 SCL                        │
+│  GPIO 8 (I2C SDA) ───────┼──────────▶│ MAX30102 SDA                        │
+│  GPIO 9 (I2C SCL) ───────┼──────────▶│ MAX30102 SCL                        │
 │                         │     ┌────▶│ MAX30102 INT ─── GPIO 5             │
 │                         │     │     │ MAX30102 VCC ─── 3V3                │
 │                         │     │     │ MAX30102 GND ─── GND                │
 │                         │     │     │                                     │
-│                         │     │     │ ICM-20948 SDA ─── GPIO 21 (shared)  │
-│                         │     │     │ ICM-20948 SCL ─── GPIO 22 (shared)  │
+│                         │     │     │ ICM-20948 SDA ─── GPIO 8 (shared)   │
+│                         │     │     │ ICM-20948 SCL ─── GPIO 9 (shared)   │
 │  GPIO 6                 ├─────┘     │ ICM-20948 INT ─── GPIO 6            │
 │                         │           │ ICM-20948 VCC ─── 3V3               │
 │                         │           │ ICM-20948 GND ─── GND               │
@@ -57,6 +57,8 @@ ESP32-S3 DevKitC-1                    Sensor Breakouts
 ```
 
 > **Wired Sync (Phase 2 Multi-Pod):** GPIO 27 is reserved for hardwired sync pulse between `forearm_hub` (hub role, output) and `head_pod` (pod role, input with interrupt). 10µs pulse at Tier 1 interval (10s) per Architecture.md §29. **Not used in Phase 1 single-pod bringup.**
+>
+> **I2C pins:** SDA=GPIO 8, SCL=GPIO 9 (shared MAX30102 + ICM-20948 + TMP117). ESP32-S3 has **no GPIO 22–25** (reserved for octal flash/PSRAM) — do not use the classic ESP32 21/22 pair.
 
 ### Electrode Placement (Forearm — Lead I Equivalent)
 
@@ -265,7 +267,7 @@ plt.show()
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| `ESP_ERR_NOT_FOUND` on MAX30102 PART_ID | I2C wiring wrong / pullups missing | Check SDA/SCL on GPIO 21/22; add 4.7kΩ pullups if breakout lacks them |
+| `ESP_ERR_NOT_FOUND` on MAX30102 PART_ID | I2C wiring wrong / pullups missing | Check SDA/SCL on GPIO 8/9; add 4.7kΩ pullups if breakout lacks them |
 | Wired sync not triggering (Phase 2) | GPIO 27 not connected / role mismatch | Verify forearm_hub→GPIO27(output) wired to head_pod→GPIO27(input); check `SYNAPSE_SYNC_ROLE_HUB` vs `SYNAPSE_SYNC_ROLE_POD` |
 | `ECG=0` samples, PPG/IMU working | AD8232 not powered / LO pins floating | Verify 3V3/GND on AD8232; tie LO+/LO- to GND if not using lead-off detect |
 | BLE not advertising | Antenna / flash config | Ensure `CONFIG_BT_ENABLED=y`; check `sdkconfig.defaults` has BLE enabled |

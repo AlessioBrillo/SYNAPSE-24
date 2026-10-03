@@ -5,12 +5,14 @@
 
 static const char* TAG = "ppg_processor";
 
-static ppg_processor_ctx_t s_ctx = {0};
+static ppg_processor_ctx_t s_ctx = {};
 
 #define PEAK_MIN_DISTANCE_SAMPLES  (PPG_PROCESSOR_SAMPLE_RATE_HZ * 60 / 180)  // 180 BPM max = 300ms min = ~25 samples at 50Hz
 #define PEAK_MAX_DISTANCE_SAMPLES  (PPG_PROCESSOR_SAMPLE_RATE_HZ * 60 / 30)   // 30 BPM min = 2000ms max = ~150 samples at 50Hz
 
 static inline float fast_sqrtf(float x) { return sqrtf(x); }
+
+#define Q_FACTOR 0.707f
 
 // IIR BiQuad filter coefficients (direct form I)
 typedef struct {
@@ -41,8 +43,6 @@ static void iir_biquad_design_bp(float f_low, float f_high, float sample_rate, i
     filt->y1 = 0.0f;
     filt->y2 = 0.0f;
 }
-
-#define Q_FACTOR 0.707f
 
 // 12-bit quantization: map float32 range [-1, 1] to [-2048, 2047]
 static inline int16_t quantize_12bit(float value) {
