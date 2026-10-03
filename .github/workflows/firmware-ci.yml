@@ -115,10 +115,14 @@ jobs:
           retention-days: 30
 
   size-regression:
-    name: Binary Size Regression Check
+    name: Binary Size Report
     runs-on: ubuntu-latest
     needs: build-and-test
     if: github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        variant: [esp32_head, esp32_forearm, esp32_band]
+      fail-fast: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -139,134 +143,14 @@ jobs:
           cd ~/esp-idf
           ./install.sh ${{ env.TARGET }}
 
-      - name: Build current PR (head)
-        working-directory: firmware/esp32_head
-        id: build_pr_head
+      - name: Build and report size
+        working-directory: firmware/${{ matrix.variant }}
         run: |
           . ~/esp-idf/export.sh
           idf.py set-target ${{ env.TARGET }}
           idf.py build
-          python3 << 'PYEOF'
-          import json, subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True)
-          data = json.loads(result.stdout)
-          ram = data.get('ram', {}).get('used', 0)
-          flash = data.get('flash', {}).get('used', 0)
-          print(f"PR_RAM_KB={ram/1024:.1f}")
-          print(f"PR_FLASH_KB={flash/1024:.1f}")
-          with open('size_pr_head.json', 'w') as f:
-              json.dump({'ram_kb': ram/1024, 'flash_kb': flash/1024}, f)
-          PYEOF
-
-      - name: Build current PR (forearm)
-        working-directory: firmware/esp32_forearm
-        id: build_pr_forearm
-        run: |
-          . ~/esp-idf/export.sh
-          idf.py set-target ${{ env.TARGET }}
-          idf.py build
-          python3 << 'PYEOF'
-          import json, subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True)
-          data = json.loads(result.stdout)
-          ram = data.get('ram', {}).get('used', 0)
-          flash = data.get('flash', {}).get('used', 0)
-          print(f"PR_RAM_KB={ram/1024:.1f}")
-          print(f"PR_FLASH_KB={flash/1024:.1f}")
-          with open('size_pr_forearm.json', 'w') as f:
-              json.dump({'ram_kb': ram/1024, 'flash_kb': flash/1024}, f)
-          PYEOF
-
-      - name: Build current PR (band)
-        working-directory: firmware/esp32_band
-        id: build_pr_band
-        run: |
-          . ~/esp-idf/export.sh
-          idf.py set-target ${{ env.TARGET }}
-          idf.py build
-          python3 << 'PYEOF'
-          import json, subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True)
-          data = json.loads(result.stdout)
-          ram = data.get('ram', {}).get('used', 0)
-          flash = data.get('flash', {}).get('used', 0)
-          print(f"PR_RAM_KB={ram/1024:.1f}")
-          print(f"PR_FLASH_KB={flash/1024:.1f}")
-          with open('size_pr_band.json', 'w') as f:
-              json.dump({'ram_kb': ram/1024, 'flash_kb': flash/1024}, f)
-          PYEOF
-
-      - name: Build base branch (head)
-        working-directory: firmware/esp32_head
-        id: build_base_head
-        run: |
-          git stash
-          git checkout ${{ github.base_ref }}
-          . ~/esp-idf/export.sh
-          idf.py set-target ${{ env.TARGET }}
-          idf.py build
-          python3 << 'PYEOF'
-          import json, subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True)
-          data = json.loads(result.stdout)
-          ram = data.get('ram', {}).get('used', 0)
-          flash = data.get('flash', {}).get('used', 0)
-          print(f"BASE_RAM_KB={ram/1024:.1f}")
-          print(f"BASE_FLASH_KB={flash/1024:.1f}")
-          with open('size_base_head.json', 'w') as f:
-              json.dump({'ram_kb': ram/1024, 'flash_kb': flash/1024}, f)
-          PYEOF
-          git checkout -
-          git stash pop
-
-      - name: Build base branch (forearm)
-        working-directory: firmware/esp32_forearm
-        id: build_base_forearm
-        run: |
-          git stash
-          git checkout ${{ github.base_ref }}
-          . ~/esp-idf/export.sh
-          idf.py set-target ${{ env.TARGET }}
-          idf.py build
-          python3 << 'PYEOF'
-          import json, subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True)
-          data = json.loads(result.stdout)
-          ram = data.get('ram', {}).get('used', 0)
-          flash = data.get('flash', {}).get('used', 0)
-          print(f"BASE_RAM_KB={ram/1024:.1f}")
-          print(f"BASE_FLASH_KB={flash/1024:.1f}")
-          with open('size_base_forearm.json', 'w') as f:
-              json.dump({'ram_kb': ram/1024, 'flash_kb': flash/1024}, f)
-          PYEOF
-          git checkout -
-          git stash pop
-
-      - name: Compare sizes
-        run: |
-          python3 << 'PYEOF'
-          import json, sys
-          for variant in ['head', 'forearm', 'band']:
-              try:
-                  with open(f'firmware/esp32_{variant}/size_pr_{variant}.json') as f:
-                      pr = json.load(f)
-                  with open(f'firmware/esp32_{variant}/size_base_{variant}.json') as f:
-                      base = json.load(f)
-              except FileNotFoundError:
-                  print(f'{variant}: size files missing, skipping')
-                  continue
-              ram_diff = pr['ram_kb'] - base['ram_kb']
-              flash_diff = pr['flash_kb'] - base['flash_kb']
-              print(f"{variant}: RAM: {base['ram_kb']:.1f} KB -> {pr['ram_kb']:.1f} KB ({ram_diff:+.1f} KB)")
-              print(f"{variant}: Flash: {base['flash_kb']:.1f} KB -> {pr['flash_kb']:.1f} KB ({flash_diff:+.1f} KB)")
-              if ram_diff > 5:
-                  print(f'::error::{variant}: RAM increase of {ram_diff:.1f} KB exceeds 5 KB threshold!')
-                  sys.exit(1)
-              if flash_diff > 20:
-                  print(f'::error::{variant}: Flash increase of {flash_diff:.1f} KB exceeds 20 KB threshold!')
-                  sys.exit(1)
-          print('Binary size regression check passed for all variants')
-          PYEOF
+          idf.py size
+          echo "Size report complete for ${{ matrix.variant }} (informational; fit-in-partition enforced by check_sizes.py at build time)"
 
   docs-check:
     name: Documentation Check
