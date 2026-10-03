@@ -139,8 +139,8 @@ static esp_err_t clock_sync_update_drift_model(clock_sync_t* sync, int64_t ref_t
     sync->model_ref_time_us = ref_time_us;
     sync->model_valid = true;
     
-    ESP_LOGI(TAG, "Drift model updated: a=%.3f ppm/s, b=%" PRId64 " us (n=%d)", 
-             sync->drift_a_ppm_per_sec, sync->drift_b_us, valid);
+    ESP_LOGI(TAG, "Drift model updated: a=%.3f ppm/s, b=%" PRId64 " us (n=%d)",
+             sync->drift_a_ppm_per_sec, (int64_t)sync->drift_b_us, valid);
     
     return ESP_OK;
 }
