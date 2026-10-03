@@ -20,7 +20,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 // TMP117 Register Addresses
 #define TMP117_REG_TEMP_RESULT    0x00
 #define TMP117_REG_CONFIGURATION  0x01
@@ -55,13 +54,7 @@ extern "C" {
 #define TMP117_I2C_ADDR_DEFAULT   0x48
 #define TMP117_TEMP_LSB_C         0.0078125f  // 7.8125 mC per LSB
 
-typedef struct {
-    int i2c_port;
-    int i2c_addr;
-    int gpio_alert;
-    uint16_t conversion_cycle_ms;
-    bool continuous_mode;
-} temp_tmp117_config_t;
+// temp_tmp117_config_t and temp_data_t come from synapse_sensor_types.h
 
 typedef struct {
     temp_tmp117_config_t config;

@@ -115,12 +115,12 @@ esp_err_t power_monitor_init(void) {
         };
         adc_oneshot_config_channel(s_state.adc_handle, SYNAPSE_BATTERY_ADC_PIN, &chan_cfg);
 
-        adc_cali_line_fitting_config_t cali_cfg = {
+        adc_cali_curve_fitting_config_t cali_cfg = {
             .unit_id = ADC_UNIT_1,
             .atten = ADC_ATTEN_DB_12,
             .bitwidth = ADC_BITWIDTH_12,
         };
-        err = adc_cali_create_scheme_line_fitting(&cali_cfg, &s_state.adc_cali_handle);
+        err = adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_state.adc_cali_handle);
         if (err == ESP_OK) {
             s_state.calibrated = true;
         }
@@ -342,7 +342,7 @@ uint16_t power_monitor_read_battery_mv(void) {
 
 void power_monitor_deinit(void) {
     if (s_state.adc_cali_handle) {
-        adc_cali_delete_scheme_line_fitting(s_state.adc_cali_handle);
+        adc_cali_delete_scheme_curve_fitting(s_state.adc_cali_handle);
     }
     if (s_state.adc_handle) {
         adc_oneshot_del_unit(s_state.adc_handle);
