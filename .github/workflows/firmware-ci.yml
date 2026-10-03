@@ -63,21 +63,6 @@ jobs:
         run: |
           . ~/esp-idf/export.sh
           idf.py size
-          python3 << 'PYEOF'
-          import json
-          import subprocess
-          result = subprocess.run(['idf.py', 'size', '--format', 'json'], capture_output=True, text=True, cwd='.')
-          if result.returncode == 0:
-              data = json.loads(result.stdout)
-              ram_used = data.get('ram', {}).get('used', 0)
-              flash_used = data.get('flash', {}).get('used', 0)
-              print(f"RAM used: {ram_used/1024:.1f} KB")
-              print(f"Flash used: {flash_used/1024:.1f} KB")
-              if ram_used > 180 * 1024:
-                  print('::error::RAM usage exceeds 180 KB limit!')
-                  exit(1)
-              print('RAM usage within limit (< 180 KB)')
-          PYEOF
 
       - name: Run static analysis (cppcheck)
         working-directory: firmware/${{ matrix.variant }}

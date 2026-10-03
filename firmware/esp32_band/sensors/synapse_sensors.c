@@ -74,24 +74,33 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     g_sensors.temp_config.continuous_mode = true;
 }
 
-// Sensor scheduler queue callback
-static void scheduler_queue_callback(sensor_sample_t *sample, void *user_ctx) {
-    synapse_sensors_t *sensors = (synapse_sensors_t *)user_ctx;
-    if (!sensors || !sensors->sample_queue) return;
-
-    synapse_sensor_sample_t full_sample = {0};
-    full_sample.base = *sample;
-    full_sample.base.timestamp_us = esp_timer_get_time();
-    
-    // Attach latest GPS/Temp data (non-blocking)
-    if (xSemaphoreTake(sensors->data_mutex, 0) == pdTRUE) {
-        full_sample.gps = sensors->latest_gps;
-        full_sample.temp = sensors->latest_temp;
-        xSemaphoreGive(sensors->data_mutex);
-    }
-
-    // Try to send to queue (non-blocking for real-time sensors)
-    xQueueSend(sensors->sample_queue, &full_sample, 0);
+// Scheduler-compatible wrappers (exact signature match, no casts)
+static void ecg_init_wrap(void *ctx) {
+    (void)ecg_ad8232_init((const ecg_ad8232_config_t *)ctx);
+}
+static void ecg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    (void)ecg_ad8232_read(sample, ctx);
+}
+static void ecg_deinit_wrap(void *ctx) {
+    (void)ecg_ad8232_deinit(ctx);
+}
+static void ppg_init_wrap(void *ctx) {
+    (void)ppg_max30102_init((const ppg_max30102_config_t *)ctx);
+}
+static void ppg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    (void)ppg_max30102_read(sample, ctx);
+}
+static void ppg_deinit_wrap(void *ctx) {
+    (void)ppg_max30102_deinit(ctx);
+}
+static void imu_init_wrap(void *ctx) {
+    (void)imu_icm20948_init((const imu_icm20948_config_t *)ctx);
+}
+static void imu_read_wrap(sensor_sample_t *sample, void *ctx) {
+    (void)imu_icm20948_read(sample, ctx);
+}
+static void imu_deinit_wrap(void *ctx) {
+    (void)imu_icm20948_deinit(ctx);
 }
 
 esp_err_t synapse_sensors_init(void) {
@@ -128,9 +137,9 @@ esp_err_t synapse_sensors_init(void) {
         .type = SENSOR_TYPE_ECG,
         .name = "ECG_AD8232",
         .sampling_rate_hz = 500,
-        .init = (sensor_init_fn_t)ecg_ad8232_init,
-        .read = (sensor_read_fn_t)ecg_ad8232_read,
-        .deinit = (sensor_deinit_fn_t)ecg_ad8232_deinit,
+        .init = ecg_init_wrap,
+        .read = ecg_read_wrap,
+        .deinit = ecg_deinit_wrap,
         .user_ctx = &g_sensors.ecg_config,
         .task_handle = NULL
     };
@@ -141,9 +150,9 @@ esp_err_t synapse_sensors_init(void) {
         .type = SENSOR_TYPE_PPG,
         .name = "PPG_MAX30102",
         .sampling_rate_hz = hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64,
-        .init = (sensor_init_fn_t)ppg_max30102_init,
-        .read = (sensor_read_fn_t)ppg_max30102_read,
-        .deinit = (sensor_deinit_fn_t)ppg_max30102_deinit,
+        .init = ppg_init_wrap,
+        .read = ppg_read_wrap,
+        .deinit = ppg_deinit_wrap,
         .user_ctx = &g_sensors.ppg_config,
         .task_handle = NULL
     };
@@ -154,9 +163,9 @@ esp_err_t synapse_sensors_init(void) {
         .type = SENSOR_TYPE_IMU,
         .name = "IMU_ICM20948",
         .sampling_rate_hz = hw_cfg.imu_accel_odr_hz,
-        .init = (sensor_init_fn_t)imu_icm20948_init,
-        .read = (sensor_read_fn_t)imu_icm20948_read,
-        .deinit = (sensor_deinit_fn_t)imu_icm20948_deinit,
+        .init = imu_init_wrap,
+        .read = imu_read_wrap,
+        .deinit = imu_deinit_wrap,
         .user_ctx = &g_sensors.imu_config,
         .task_handle = NULL
     };
@@ -259,7 +268,9 @@ esp_err_t synapse_sensors_get_temp(temp_data_t *temp) {
 
 esp_err_t synapse_sensors_get_stats(uint32_t *sample_counts, uint32_t *dropped_samples) {
     if (!g_sensors.initialized) return ESP_ERR_INVALID_STATE;
-    return sensor_scheduler_get_stats(&g_sensors.scheduler, sample_counts, dropped_samples);
+    if (!sample_counts || !dropped_samples) return ESP_ERR_INVALID_ARG;
+    sensor_scheduler_get_stats(&g_sensors.scheduler, sample_counts, dropped_samples);
+    return ESP_OK;
 }
 
 bool synapse_sensors_is_running(void) {
