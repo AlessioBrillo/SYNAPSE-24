@@ -66,15 +66,15 @@ static imu_icm20948_config_t g_imu_config = {
 };
 
 // Motion gate state (Architecture.md §74)
-static ppg_sqi_result_t g_latest_sqi = {0};
+static ppg_sqi_result_t g_latest_sqi = {};
 static int g_consecutive_clean = 0;
 static bool g_motion_gate_armed = false;
 
 static void triage_task_fn(void* arg) {
     (void)arg;
-    triage_input_t input = {0};
-    triage_output_t output = {0};
-    triage_features_t features = {0};
+    triage_input_t input = {};
+    triage_output_t output = {};
+    triage_features_t features = {};
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
@@ -345,8 +345,8 @@ static void main_task_fn(void* arg) {
 
     ESP_LOGI(TAG, "All subsystems started. Entering main loop...");
 
-    uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
-    uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
+    uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {};
+    uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {};
     TickType_t last_stats = xTaskGetTickCount();
     TickType_t last_wake = xTaskGetTickCount();
 

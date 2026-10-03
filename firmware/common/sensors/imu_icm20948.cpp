@@ -42,13 +42,17 @@ typedef struct {
     float mag_scale;
 } imu_icm20948_ctx_t;
 
-static imu_icm20948_ctx_t s_ctx = {0};
+static imu_icm20948_ctx_t s_ctx = {};
+
+static esp_err_t i2c_write_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t value);
+static esp_err_t i2c_read_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t* value);
+static esp_err_t i2c_read_multi(i2c_port_t port, int addr, uint8_t reg, uint8_t* data, size_t len);
 
 static esp_err_t icm20948_select_bank(uint8_t bank) {
     return i2c_write_reg(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_BANK_SEL, bank);
 }
 
-static esp_err_t i2c_write_reg(int port, int addr, uint8_t reg, uint8_t value) {
+static esp_err_t i2c_write_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -60,7 +64,7 @@ static esp_err_t i2c_write_reg(int port, int addr, uint8_t reg, uint8_t value) {
     return ret;
 }
 
-static esp_err_t i2c_read_reg(int port, int addr, uint8_t reg, uint8_t* value) {
+static esp_err_t i2c_read_reg(i2c_port_t port, int addr, uint8_t reg, uint8_t* value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -74,7 +78,7 @@ static esp_err_t i2c_read_reg(int port, int addr, uint8_t reg, uint8_t* value) {
     return ret;
 }
 
-static esp_err_t i2c_read_multi(int port, int addr, uint8_t reg, uint8_t* data, size_t len) {
+static esp_err_t i2c_read_multi(i2c_port_t port, int addr, uint8_t reg, uint8_t* data, size_t len) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);

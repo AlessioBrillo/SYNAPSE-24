@@ -5,7 +5,7 @@
 
 static const char* TAG = "ppg_sqi";
 
-static ppg_sqi_ctx_t s_ctx = {0};
+static ppg_sqi_ctx_t s_ctx = {};
 
 #define PPG_SQI_PERFUSION_WEIGHT    0.3f
 #define PPG_SQI_ENTROPY_WEIGHT      0.25f

@@ -9,7 +9,6 @@
  */
 
 #include "power_monitor.h"
-#include "driver/adc.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -59,7 +58,7 @@ typedef struct {
     bool initialized;
 } power_state_t;
 
-static power_state_t s_state = {0};
+static power_state_t s_state = {};
 
 // ============================================================================
 // HELPERS

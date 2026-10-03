@@ -35,7 +35,7 @@ typedef struct {
     bool fifo_enabled;
 } ppg_max30102_ctx_t;
 
-static ppg_max30102_ctx_t s_ctx = {0};
+static ppg_max30102_ctx_t s_ctx = {};
 
 static esp_err_t max30102_write_reg(uint8_t reg, uint8_t value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();

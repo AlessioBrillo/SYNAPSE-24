@@ -6,7 +6,6 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "driver/adc.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -79,7 +78,7 @@ static imu_icm20948_config_t g_imu_config = {
 };
 
 // Motion gate state (Architecture.md §74)
-static ppg_sqi_result_t g_latest_sqi = {0};
+static ppg_sqi_result_t g_latest_sqi = {};
 static int g_consecutive_clean = 0;
 static bool g_motion_gate_armed = false;
 
@@ -90,9 +89,9 @@ static int64_t g_last_rpeak_time = 0;
 
 static void triage_task_fn(void* arg) {
     (void)arg;
-    triage_input_t input = {0};
-    triage_output_t output = {0};
-    triage_features_t features = {0};
+    triage_input_t input = {};
+    triage_output_t output = {};
+    triage_features_t features = {};
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
@@ -134,7 +133,7 @@ static void ecg_rpeak_task_fn(void* arg) {
         if (!g_scheduler.running) continue;
 
         // Read ECG directly (bypassing scheduler for higher rate)
-        sensor_sample_t sample = {0};
+        sensor_sample_t sample = {};
         sample.type = SENSOR_TYPE_ECG;
         sample.timestamp_us = esp_timer_get_time();
         sample.sequence = 0;
@@ -398,8 +397,8 @@ static void main_task_fn(void* arg) {
 
     ESP_LOGI(TAG, "All subsystems started. Entering main loop...");
 
-    uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
-    uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {0};
+    uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS] = {};
+    uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS] = {};
     TickType_t last_stats = xTaskGetTickCount();
     TickType_t last_wake = xTaskGetTickCount();
 

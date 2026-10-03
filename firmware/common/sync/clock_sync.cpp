@@ -31,7 +31,7 @@ esp_err_t clock_sync_pod_send_request(clock_sync_t* sync, int64_t* send_timestam
     sync->next_sequence++;
 
     // Record the request so pod_receive_reply can match it later.
-    clock_sync_entry_t entry = {0};
+    clock_sync_entry_t entry = {};
     entry.sequence = sync->next_sequence;
     entry.pod_send_us = *send_timestamp_us;
     sync->history[sync->head] = entry;

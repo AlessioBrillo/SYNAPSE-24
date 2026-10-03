@@ -13,7 +13,7 @@ typedef struct {
     bool lead_off_detected;
 } ecg_ad8232_ctx_t;
 
-static ecg_ad8232_ctx_t s_ctx = {0};
+static ecg_ad8232_ctx_t s_ctx = {};
 
 esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     if (!config) return ESP_ERR_INVALID_ARG;

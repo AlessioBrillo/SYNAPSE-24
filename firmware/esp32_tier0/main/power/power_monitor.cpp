@@ -59,7 +59,7 @@ typedef struct {
     bool initialized;
 } power_state_t;
 
-static power_state_t s_state = {0};
+static power_state_t s_state = {};
 
 // ============================================================================
 // HELPERS

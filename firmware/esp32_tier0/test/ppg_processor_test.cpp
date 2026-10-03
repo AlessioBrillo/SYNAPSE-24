@@ -33,7 +33,7 @@ static float generate_ppg_sample(int sample_idx, float hr_bpm, float fs_hz, floa
 }
 
 static ppg_sqi_result_t make_good_sqi(void) {
-    ppg_sqi_result_t sqi = {0};
+    ppg_sqi_result_t sqi = {};
     sqi.sqi = 0.8f;
     sqi.perfusion_index = 2.5f;
     sqi.motion_artifact_prob = 0.1f;
@@ -42,7 +42,7 @@ static ppg_sqi_result_t make_good_sqi(void) {
 }
 
 static ppg_sqi_result_t make_bad_sqi(void) {
-    ppg_sqi_result_t sqi = {0};
+    ppg_sqi_result_t sqi = {};
     sqi.sqi = 0.2f;
     sqi.perfusion_index = 0.5f;
     sqi.motion_artifact_prob = 0.8f;
@@ -62,7 +62,7 @@ void tearDown(void) {
 void test_ppg_processor_hr_accuracy_60bpm(void) {
     // Generate 5 seconds of 60 BPM PPG at 64Hz
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     int computed_count = 0;
     
@@ -90,7 +90,7 @@ void test_ppg_processor_hr_accuracy_60bpm(void) {
 
 void test_ppg_processor_hr_accuracy_80bpm(void) {
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     for (int i = 0; i < samples; i++) {
@@ -106,7 +106,7 @@ void test_ppg_processor_hr_accuracy_80bpm(void) {
 
 void test_ppg_processor_hr_accuracy_120bpm(void) {
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     for (int i = 0; i < samples; i++) {
@@ -124,7 +124,7 @@ void test_ppg_processor_hrv_rmssd(void) {
     // Generate PPG with known RR interval variability
     // Simulate RMSSD ~30ms by adding controlled jitter
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     // Use fixed seed for reproducible jitter
@@ -149,7 +149,7 @@ void test_ppg_processor_hrv_rmssd(void) {
 
 void test_ppg_processor_motion_artifact_flag(void) {
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t bad_sqi = make_bad_sqi();
     
     for (int i = 0; i < samples; i++) {
@@ -165,7 +165,7 @@ void test_ppg_processor_motion_artifact_flag(void) {
 }
 
 void test_ppg_processor_insufficient_data(void) {
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     // Only 1 second of data (insufficient for 5s window)
@@ -186,7 +186,7 @@ void test_ppg_processor_insufficient_data(void) {
 
 void test_ppg_processor_snr_estimation(void) {
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     // Clean signal
@@ -216,7 +216,7 @@ void test_ppg_processor_snr_estimation(void) {
 
 void test_ppg_processor_output_rate(void) {
     const int samples = 10 * 64;  // 10 seconds
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     int output_count = 0;
     
@@ -235,7 +235,7 @@ void test_ppg_processor_output_rate(void) {
 
 void test_ppg_processor_reset(void) {
     const int samples = 5 * 64;
-    ppg_features_t features = {0};
+    ppg_features_t features = {};
     ppg_sqi_result_t sqi = make_good_sqi();
     
     // Fill buffer
@@ -252,7 +252,7 @@ void test_ppg_processor_reset(void) {
     ppg_processor_reset();
     
     // Should need to refill
-    ppg_features_t features2 = {0};
+    ppg_features_t features2 = {};
     ppg_processor_get_latest(&features2);
     TEST_ASSERT_FALSE(features2.valid);  // Reset clears valid flag
 }
