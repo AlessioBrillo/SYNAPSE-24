@@ -19,8 +19,8 @@ esp_err_t clock_sync_init(clock_sync_t* sync) {
     sync->initialized = true;
     sync->model_ref_time_us = esp_timer_get_time();
     
-    ESP_LOGI(TAG, "Clock sync initialized (exchange=%dms, drift_update=%ds)", 
-             sync->exchange_interval_ms, sync->drift_update_interval_s);
+    ESP_LOGI(TAG, "Clock sync initialized (exchange=%lums, drift_update=%lus)",
+             (unsigned long)sync->exchange_interval_ms, (unsigned long)sync->drift_update_interval_s);
     return ESP_OK;
 }
 

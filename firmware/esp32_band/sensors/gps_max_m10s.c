@@ -54,7 +54,6 @@ static bool parse_nav_pvt(const uint8_t *payload, gps_data_t *data) {
     
     // fixType (1), flags (1), flags2 (1), numSV (1)
     uint8_t fix_type = payload[20];
-    uint8_t flags = payload[21];
     uint8_t num_sv = payload[23];
     
     // lon (4), lat (4), height (4), hMSL (4) - in 1e-7 degrees and mm
@@ -119,7 +118,7 @@ static bool parse_nav_status(const uint8_t *payload, gps_data_t *data) {
 // Parser task
 static void gps_parser_task(void *arg) {
     gps_max_m10s_t *gps = &g_gps;
-    uint8_t *rx_buffer = malloc(gps->config.rx_buffer_size);
+    uint8_t *rx_buffer = malloc(gps->config.uart_rx_buffer_size);
     if (!rx_buffer) {
         ESP_LOGE(TAG, "Failed to allocate RX buffer");
         vTaskDelete(NULL);
@@ -129,7 +128,7 @@ static void gps_parser_task(void *arg) {
     ESP_LOGI(TAG, "GPS parser task started");
 
     while (gps->running) {
-        int len = uart_read_bytes((uart_port_t)gps->config.uart_port, rx_buffer, gps->config.rx_buffer_size - 1, pdMS_TO_TICKS(100));
+        int len = uart_read_bytes((uart_port_t)gps->config.uart_port, rx_buffer, gps->config.uart_rx_buffer_size - 1, pdMS_TO_TICKS(100));
         
         if (len > 0) {
             for (int i = 0; i < len; i++) {
@@ -279,7 +278,7 @@ esp_err_t gps_max_m10s_init(const gps_max_m10s_config_t *config) {
     ESP_ERROR_CHECK(uart_param_config((uart_port_t)config->uart_port, &uart_cfg));
     ESP_ERROR_CHECK(uart_set_pin((uart_port_t)config->uart_port, config->tx_gpio, config->rx_gpio, 
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)config->uart_port, config->rx_buffer_size * 2, 
+    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)config->uart_port, config->uart_rx_buffer_size * 2, 
                                          0, 0, NULL, 0));
     
     // Create mutex
