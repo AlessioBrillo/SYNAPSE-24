@@ -20,6 +20,14 @@ extern "C" {
 #define PPG_PROCESSOR_WINDOW_SAMPLES  (PPG_PROCESSOR_WINDOW_SEC * PPG_PROCESSOR_SAMPLE_RATE_HZ)
 #define PPG_PROCESSOR_MIN_PEAKS       3
 
+// IIR BiQuad filter coefficients & state (Direct Form I)
+typedef struct {
+    float b0, b1, b2;  // Feedforward coefficients
+    float a1, a2;      // Feedback coefficients
+    float x1, x2;      // Previous inputs
+    float y1, y2;      // Previous outputs
+} iir_biquad_t;
+
 // PPG Feature output structure (compressed for BLE transmission)
 typedef struct {
     float hr_bpm;                 // Heart rate in BPM
@@ -52,7 +60,10 @@ typedef struct {
     // Output decimation
     int samples_since_output;
     int output_every;  // 64Hz / 10Hz = 6.4 -> alternate 6/7
-    
+
+    // IIR filter state
+    iir_biquad_t filt;
+
     // Cached latest features
     ppg_features_t last_features;
 } ppg_processor_ctx_t;

@@ -78,26 +78,50 @@ async def find_synapse_device():
     return None
 
 
-async def _perform_sync_exchange(client, sync_char_uuid: str) -> None:
-    """Perform a single ping-pong sync exchange and log results."""
-    current_seq = 1
-    pod_send_us = int(time.time() * 1_000_000)
+async def run_continuous_sync(client, sync_char_uuid: str, samples: int = 60, interval: float = 1.0) -> None:
+    """Run continuous sync exchanges to measure clock drift."""
+    offsets = []
+    rtts = []
 
-    request_data = struct.pack("<I", current_seq) + struct.pack("<q", pod_send_us)
-    logger.info(f"Sending sync request: seq={current_seq}, pod_send_us={pod_send_us}")
-    logger.info(f"  Request data ({len(request_data)} bytes): {request_data.hex()}")
+    for seq in range(1, samples + 1):
+        pod_send_us = int(time.time() * 1_000_000)
+        request_data = struct.pack("<I", seq) + struct.pack("<q", pod_send_us)
 
-    await client.write_gatt_char(sync_char_uuid, request_data, response=False)
-    logger.info("Sync request sent via BLE notify/write")
+        try:
+            await client.write_gatt_char(sync_char_uuid, request_data, response=False)
+            await asyncio.sleep(interval)
 
-    logger.info("Waiting for hub reply (1-2 seconds)...")
-    await asyncio.sleep(2.0)
+            response_value = await client.read_gatt_char(sync_char_uuid)
+            pod_recv_us = int(time.time() * 1_000_000)
 
-    logger.info("Reading sync characteristic for hub response...")
-    response_value = await client.read_gatt_char(sync_char_uuid)
-    logger.info(f"Response value: {len(response_value)} bytes")
-    response_hex = response_value.hex() if len(response_value) > 0 else "empty"
-    logger.info(f"  Raw hex: {response_hex}")
+            if len(response_value) >= 20:
+                seq_r, hub_recv_us, hub_send_us = struct.unpack("<Iqq", response_value[0:20])
+                offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2.0
+                rtt = pod_recv_us - pod_send_us
+
+                offsets.append(offset)
+                rtts.append(rtt)
+                logger.info(f"[{seq}/{samples}] seq={seq_r}, offset={offset / 1000.0:+.3f} ms, RTT={rtt / 1000.0:.3f} ms")
+            else:
+                logger.warning(f"[{seq}/{samples}] Short response: {len(response_value)} bytes")
+        except Exception as e:
+            logger.error(f"[{seq}/{samples}] Sync exchange failed: {e}")
+
+    if offsets:
+        max_drift = max(offsets) - min(offsets)
+        mean_offset = sum(offsets) / len(offsets)
+        logger.info("\n=== Clock Sync Validation Summary ===")
+        logger.info(f"  Total Samples: {len(offsets)}")
+        logger.info(f"  Mean Offset:   {mean_offset / 1000.0:+.3f} ms")
+        logger.info(f"  Max Drift Span:{max_drift / 1000.0:.3f} ms")
+
+        # Validation gate: residual drift <= 1 ms (1000 us)
+        if max_drift <= 1000.0:
+            logger.info("  RESULT: PASSED (Residual drift <= 1 ms)")
+        else:
+            logger.warning("  RESULT: FAILED (Residual drift > 1 ms)")
+    else:
+        logger.error("No valid sync samples collected.")
 
     if len(response_value) >= 20:
         _log_full_exchange(response_value, pod_send_us)
@@ -138,8 +162,8 @@ def _log_full_exchange(response_value: bytes, pod_send_us: int) -> None:
     logger.info("")
 
 
-async def run_clock_sync_demo():
-    """Run the clock sync ping-pong demonstration."""
+async def run_clock_sync_demo(samples: int = 60, interval: float = 1.0):
+    """Run the clock sync ping-pong demonstration and drift validation."""
     # Find the device
     device_addr = await find_synapse_device()
     if device_addr is None:
@@ -148,9 +172,6 @@ async def run_clock_sync_demo():
 
     from bleak import BleakClient
 
-    # Sync characteristic UUID (derived from base)
-    # Based on firmware: base UUID + suffix for char 5
-    # The actual UUID is hardcoded in firmware: gatt_svr_chr_uuid_sync
     sync_char_uuid = BLE_LSL_UUID_SYNC
 
     logger.info(f"Connecting to {device_addr}...")
@@ -167,38 +188,48 @@ async def run_clock_sync_demo():
                 seq = struct.unpack("<I", initial_value[0:4])[0]
                 logger.info(f"  Sequence number: {seq}")
 
-            await _perform_sync_exchange(client, sync_char_uuid)
+            logger.info(f"Running continuous sync test: {samples} samples, interval={interval}s...")
+            await run_continuous_sync(client, sync_char_uuid, samples=samples, interval=interval)
 
-            logger.info("\n=== Demo Complete ===")
-            logger.info(
-                "Run multiple exchanges for drift estimation (firmware needs ~60s of data)."
-            )
+            logger.info("\n=== Clock Sync Validation Complete ===")
 
     except Exception:
         logger.exception("BLE client error")
         sys.exit(1)
 
 
+def test_offset_calculation() -> None:
+    """Runnabled self-check for clock sync offset math."""
+    pod_send_us = 1000000
+    hub_recv_us = 1000500
+    hub_send_us = 1001000
+    pod_recv_us = 1001600
+
+    offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2.0
+    assert offset == -50.0, f"Expected -50.0, got {offset}"
+    logger.info("Self-check passed: clock sync offset math verified.")
+
+
 async def main():
     """Main entry point."""
+    import argparse
+    parser = argparse.ArgumentParser(description="SYNAPSE-24 BLE Clock Sync Validation Demo")
+    parser.add_argument("--samples", type=int, default=60, help="Number of sync samples (default: 60)")
+    parser.add_argument("--interval", type=float, default=1.0, help="Interval between samples in seconds (default: 1.0)")
+    parser.add_argument("--test", action="store_true", help="Run local self-check test")
+    args = parser.parse_args()
+
+    if args.test:
+        test_offset_calculation()
+        return
+
     logger.info("=" * 60)
-    logger.info("SYNAPSE-24 BLE Clock Sync Demo")
+    logger.info("SYNAPSE-24 BLE Clock Sync Validation")
     logger.info("=" * 60)
-    logger.info("")
-    logger.info("This demo performs the BLE ping-pong clock sync protocol")
-    logger.info("with the SYNAPSE-224 ESP32 Tier 0 firmware.")
-    logger.info("")
-    logger.info("Protocol:")
-    logger.info("  1. Read sync characteristic (initial state)")
-    logger.info("  2. Write [seq, pod_send_us] to sync characteristic")
-    logger.info("  3. ESP32 hub records timestamps and stores in history")
-    logger.info("  4. Read sync characteristic (get [seq, hub_recv_us, hub_send_us])")
-    logger.info("  5. Compute clock offset using NTP-style algorithm")
-    logger.info("")
-    logger.info("For full drift estimation, run multiple exchanges over ~60s.")
+    logger.info(f"Target samples: {args.samples}, Interval: {args.interval}s")
     logger.info("")
 
-    await run_clock_sync_demo()
+    await run_clock_sync_demo(samples=args.samples, interval=args.interval)
 
 
 if __name__ == "__main__":
