@@ -1,0 +1,79 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "creationInfo": {
+    "creators": [
+      "Tool: SYNAPSE-24 Corporate Compliance Generator"
+    ],
+    "created": "2026-10-05T00:00:00Z"
+  },
+  "name": "SYNAPSE-24-SBOM",
+  "dataLicense": "CC0-1.0",
+  "documentNamespace": "https://github.com/AlessioBrillo/SYNAPSE-24/spdx/sbom-v1",
+  "packages": [
+    {
+      "name": "synapse24",
+      "SPDXID": "SPDXRef-Package-Synapse24",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/AlessioBrillo/SYNAPSE-24",
+      "licenseConcluded": "AGPL-3.0-or-later",
+      "licenseDeclared": "AGPL-3.0-or-later",
+      "copyrightText": "Copyright (c) 2025 Alessio Brillo and Contributors"
+    },
+    {
+      "name": "numpy",
+      "SPDXID": "SPDXRef-Package-NumPy",
+      "versionInfo": "1.26.0",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause"
+    },
+    {
+      "name": "scipy",
+      "SPDXID": "SPDXRef-Package-SciPy",
+      "versionInfo": "1.11.0",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause"
+    },
+    {
+      "name": "pandas",
+      "SPDXID": "SPDXRef-Package-Pandas",
+      "versionInfo": "2.1.0",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause"
+    },
+    {
+      "name": "pylsl",
+      "SPDXID": "SPDXRef-Package-PyLSL",
+      "versionInfo": "1.16.0",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT"
+    },
+    {
+      "name": "neurokit2",
+      "SPDXID": "SPDXRef-Package-NeuroKit2",
+      "versionInfo": "0.2.6",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT"
+    },
+    {
+      "name": "tensorflow",
+      "SPDXID": "SPDXRef-Package-TensorFlow",
+      "versionInfo": "2.15.0",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-Synapse24"
+    }
+  ]
+}
