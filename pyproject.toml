@@ -3,6 +3,9 @@ name = "synapse-24"
 version = "0.1.0"
 description = "24/7 multimodal bio-sensing wearable platform — Phase 0: Software & Public Data Foundation"
 readme = "README.md"
+# Dual-licensed: AGPL-3.0-or-later or commercial (see LICENSING.md). Table form keeps hatchling<1.27 working.
+license = { text = "AGPL-3.0-or-later" }
+classifiers = ["License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)"]
 requires-python = ">=3.11,<3.15"
 dependencies = [
     # Core scientific stack
@@ -14,7 +17,6 @@ dependencies = [
     "neurokit2>=0.2.9,<0.3",
     "mne>=1.8.0,<2.0",
     "biosppy>=2.2.0,<3.0",
-    "heartpy>=1.2.6,<2.0",
     "pyhrv>=0.5.0,<1.0",
     "yasa>=0.6.2,<1.0",
     "neurodsp>=2.3.0,<3.0",
@@ -147,7 +149,7 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["synapse24"]
-known-third-party = ["numpy", "scipy", "pandas", "sklearn", "neurokit2", "mne", "biosppy", "heartpy", "pyhrv", "yasa", "neurodsp", "wfdb", "pylsl", "pyxdf", "edfio", "brainflow", "tqdm", "requests", "yaml", "pydantic", "pydantic_settings"]
+known-third-party = ["numpy", "scipy", "pandas", "sklearn", "neurokit2", "mne", "biosppy", "pyhrv", "yasa", "neurodsp", "wfdb", "pylsl", "pyxdf", "edfio", "brainflow", "tqdm", "requests", "yaml", "pydantic", "pydantic_settings"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

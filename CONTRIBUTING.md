@@ -33,22 +33,15 @@ uv run ruff check .
 uv run mypy --package synapse24
 ```
 
-## Developer Certificate of Origin (DCO)
+## Licensing of Contributions
 
-To ensure clear intellectual property provenance under our dual-licensing model (AGPLv3 / Commercial), all contributions to SYNAPSE-24 are subject to the **Developer Certificate of Origin (DCO)**.
+SYNAPSE-24 is [dual-licensed](LICENSING.md) (AGPL-3.0-or-later and a commercial licence). That only works if the maintainer may relicense every contribution, so by submitting a contribution you agree that:
 
-By contributing to this project, you certify that:
-1. The contribution was created in whole or in part by you and you have the right to submit it under the project's license; or
-2. The contribution is based upon previous work that, to the best of your knowledge, is covered under an appropriate open-source license and you have the right under that license to submit that work; and
-3. You understand and agree that this project and the contribution are public and that a record of the contribution (including all personal information you submit with it) is maintained indefinitely and may be redistributed consistent with the project's licensing.
+1. **Origin** - you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/). Sign off every commit with `git commit -s`, which appends `Signed-off-by: Your Name <you@example.com>`.
+2. **Open-source licence** - your contribution is licensed to the project and its users under `AGPL-3.0-or-later`.
+3. **Relicensing right** - you grant the maintainer a perpetual, worldwide, non-exclusive, royalty-free, irrevocable licence to use, modify, sublicense and distribute your contribution under any licence terms, including proprietary commercial licences.
 
-To certify your DCO sign-off, add a `Signed-off-by` line to every git commit message:
-
-```
-git commit -m "feat(acquisition): add multi-pod sync marker handler
-
-Signed-off-by: Your Name <your.email@example.com>"
-```
+You keep the copyright in your contribution. Do not submit code you do not have the right to license this way (for example code from your employer, or copied from a project under an incompatible licence such as GPL-only code that cannot be combined with a commercial licence). Pull requests without a sign-off will not be merged.
 
 ## Branch Strategy
 
@@ -60,7 +53,7 @@ Signed-off-by: Your Name <your.email@example.com>"
 | Documentation | `docs/<short-description>` | Documentation updates |
 | Chore | `chore/<short-description>` | Maintenance tasks |
 
-**Main branch**: `main` (protected, requires PR review and CI pass)
+**Main branch**: `master` (changes land via pull request; CI must pass before merging)
 
 ## Commit Convention
 
@@ -71,7 +64,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 [optional body]
 
-[optional footer with Signed-off-by]
+[optional footer]
 ```
 
 ### Types
@@ -85,6 +78,16 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 - `perf`: Performance improvement
 - `ci`: CI/CD changes
 - `security`: Security-related changes
+
+### Examples
+
+```
+feat(ingestion): add WESAD surrogate dataset support
+fix(signal_quality): correct PPG SQI calculation for low perfusion
+refactor(edge_ai): simplify quantization config API
+docs(readme): update quickstart with uv commands
+test(acquisition): add tier transition integration tests
+```
 
 ## Pull Request Process
 
@@ -103,3 +106,150 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 3. **Update documentation** if you change public APIs or add features
 
 4. **Follow the architecture** defined in [Architecture.md](Architecture.md) and [Roadmap.md](Roadmap.md)
+
+### PR Checklist
+
+- [ ] Tests pass (including baseline validation where applicable)
+- [ ] Coverage ≥80% (line + branch)
+- [ ] Lint clean (`ruff check .`)
+- [ ] Format clean (`ruff format --check .`)
+- [ ] Type check clean (`mypy --package synapse24`)
+- [ ] Documentation updated (README, docstrings, type hints)
+- [ ] Conventional commit messages
+- [ ] No hardcoded secrets or credentials
+- [ ] Security review for new API endpoints or auth changes
+
+### Review Process
+
+1. CI must pass (lint, typecheck, tests, baseline validation)
+2. At least one maintainer review required
+3. Address all review comments
+4. Squash commits if requested
+5. Merge via "Squash and merge" to keep history clean
+
+## Issue Triage
+
+Issues are labeled with:
+
+| Label | Meaning |
+|-------|---------|
+| `bug` | Something isn't working |
+| `enhancement` | New feature or improvement |
+| `documentation` | Documentation needs update |
+| `good first issue` | Good for newcomers |
+| `help wanted` | Extra attention needed |
+| `priority: high` | Blocking or critical |
+| `priority: medium` | Important but not blocking |
+| `priority: low` | Nice to have |
+| `area: ingestion` | Dataset ingestion pipelines |
+| `area: signal_quality` | Signal quality metrics |
+| `area: edge_ai` | Edge AI / TinyML |
+| `area: acquisition` | Tier state machine, hardware |
+| `area: lsl_xdf` | Synchronization, XDF I/O |
+
+## Architecture Alignment
+
+All changes must align with the governing documents:
+
+- **Architecture.md**: Decoupled sensor/hub, tiered acquisition (T0/T1/T2), edge triage, energy budgets
+- **Roadmap.md**: Phase-based execution, public dataset validation, LSL sync, Edge Impulse/TFLM pipeline
+
+If a change affects architecture, update both documents and include the ADR (Architecture Decision Record) in the PR.
+
+## Testing Standards
+
+### Test Types
+
+1. **Unit Tests** (`tests/test_*.py`): Individual functions, pure logic
+2. **Integration Tests**: Pipeline tests with mocked external dependencies
+3. **Baseline Validation**: Tests against published benchmarks (WESAD, MIT-BIH, Sleep-EDF)
+
+### Coverage Requirements
+
+- Minimum 80% line + branch coverage
+- Critical paths (signal quality, tier transitions, XDF I/O): aim for 95%+
+- New modules: add tests before or alongside implementation
+
+### Running Tests
+
+```bash
+# All tests with coverage
+uv run pytest --cov=src --cov-fail-under=80
+
+# Specific module
+uv run pytest tests/test_signal_quality.py -v
+
+# With coverage report
+uv run pytest --cov=src --cov-report=html
+
+# Skip slow/integration tests
+uv run pytest -m "not slow and not integration"
+```
+
+## Security
+
+- **Never commit secrets** (API keys, tokens, passwords)
+- Use environment variables for configuration
+- Report security vulnerabilities privately, following the [Security Policy](SECURITY.md)
+- Do not commit personal or health data; see [PRIVACY.md](PRIVACY.md)
+- Do not add dependencies licensed under GPL/LGPL/AGPL without maintainer approval, and update [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) when `uv.lock` changes
+
+## Coding Standards
+
+### Python Style
+
+- Follow [PEP 8](https://pep8.org/) via Ruff
+- Type hints required for all public functions (strict mypy)
+- Google-style docstrings for public APIs
+- Maximum line length: 100 characters
+- Use `pathlib.Path` for filesystem operations
+- Prefer `numpy.typing.NDArray` for array type hints
+
+### Imports
+
+```python
+# Standard library
+import json
+from pathlib import Path
+from typing import Any
+
+# Third party
+import numpy as np
+import numpy.typing as npt
+
+# Local
+from synapse24.signal_quality import QualityThresholds
+```
+
+### Error Handling
+
+- Use specific exceptions, not bare `except:`
+- Log errors with context, don't swallow silently
+- Validate inputs early with Pydantic or manual checks
+
+## Documentation
+
+- Update `README.md` for user-facing changes
+- Update `Architecture.md` / `Roadmap.md` for architectural changes
+- Docstrings for all public classes/functions
+- Type hints serve as inline documentation
+
+## Release Process
+
+Releases are automated via GitHub Actions on tag push:
+
+```bash
+# Create release (maintainers only)
+git tag -a v0.2.0 -m "Release v0.2.0: Add fNIRS ingestion pipeline"
+git push origin v0.2.0
+```
+
+Versioning follows [Semantic Versioning](https://semver.org/).
+
+## Questions?
+
+Open a [Discussion](https://github.com/AlessioBrillo/SYNAPSE-24/discussions) or check existing issues.
+
+---
+
+*SYNAPSE-24 — Maximizing physiological data quality, quantity, and diversity for pattern recognition.*

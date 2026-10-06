@@ -1,79 +1,788 @@
 {
-  "SPDXID": "SPDXRef-DOCUMENT",
   "spdxVersion": "SPDX-2.3",
-  "creationInfo": {
-    "creators": [
-      "Tool: SYNAPSE-24 Corporate Compliance Generator"
-    ],
-    "created": "2026-10-05T00:00:00Z"
-  },
-  "name": "SYNAPSE-24-SBOM",
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://github.com/AlessioBrillo/SYNAPSE-24/spdx/sbom-v1",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "synapse-24-direct-dependencies",
+  "documentNamespace": "https://github.com/AlessioBrillo/SYNAPSE-24/spdx/4243c9c7-c814-4a11-9f0e-063fc9c811bb",
+  "creationInfo": {
+    "created": "2026-10-06T00:00:00Z",
+    "creators": [
+      "Tool: manual inventory from uv.lock and PyPI metadata"
+    ],
+    "comment": "Direct dependencies only; transitive dependencies are in uv.lock. Not a substitute for a CI-generated SBOM."
+  },
   "packages": [
     {
-      "name": "synapse24",
-      "SPDXID": "SPDXRef-Package-Synapse24",
-      "versionInfo": "1.0.0",
-      "downloadLocation": "https://github.com/AlessioBrillo/SYNAPSE-24",
-      "licenseConcluded": "AGPL-3.0-or-later",
+      "name": "synapse-24",
+      "SPDXID": "SPDXRef-Package-synapse-24",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "git+https://github.com/AlessioBrillo/SYNAPSE-24",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
       "licenseDeclared": "AGPL-3.0-or-later",
-      "copyrightText": "Copyright (c) 2025 Alessio Brillo and Contributors"
+      "copyrightText": "Copyright (c) 2025 Alessio Brillo and contributors"
     },
     {
       "name": "numpy",
-      "SPDXID": "SPDXRef-Package-NumPy",
-      "versionInfo": "1.26.0",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "BSD-3-Clause",
-      "licenseDeclared": "BSD-3-Clause"
+      "SPDXID": "SPDXRef-Package-numpy",
+      "versionInfo": "1.26.4",
+      "downloadLocation": "https://pypi.org/project/numpy/1.26.4/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/numpy@1.26.4"
+        }
+      ]
     },
     {
       "name": "scipy",
-      "SPDXID": "SPDXRef-Package-SciPy",
-      "versionInfo": "1.11.0",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "BSD-3-Clause",
-      "licenseDeclared": "BSD-3-Clause"
+      "SPDXID": "SPDXRef-Package-scipy",
+      "versionInfo": "1.17.1",
+      "downloadLocation": "https://pypi.org/project/scipy/1.17.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/scipy@1.17.1"
+        }
+      ]
     },
     {
       "name": "pandas",
-      "SPDXID": "SPDXRef-Package-Pandas",
-      "versionInfo": "2.1.0",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "BSD-3-Clause",
-      "licenseDeclared": "BSD-3-Clause"
+      "SPDXID": "SPDXRef-Package-pandas",
+      "versionInfo": "2.3.3",
+      "downloadLocation": "https://pypi.org/project/pandas/2.3.3/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pandas@2.3.3"
+        }
+      ]
     },
     {
-      "name": "pylsl",
-      "SPDXID": "SPDXRef-Package-PyLSL",
-      "versionInfo": "1.16.0",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT"
+      "name": "scikit-learn",
+      "SPDXID": "SPDXRef-Package-scikit-learn",
+      "versionInfo": "1.9.0",
+      "downloadLocation": "https://pypi.org/project/scikit-learn/1.9.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/scikit-learn@1.9.0"
+        }
+      ]
     },
     {
       "name": "neurokit2",
-      "SPDXID": "SPDXRef-Package-NeuroKit2",
-      "versionInfo": "0.2.6",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT"
+      "SPDXID": "SPDXRef-Package-neurokit2",
+      "versionInfo": "0.2.12",
+      "downloadLocation": "https://pypi.org/project/neurokit2/0.2.12/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/neurokit2@0.2.12"
+        }
+      ]
     },
     {
-      "name": "tensorflow",
-      "SPDXID": "SPDXRef-Package-TensorFlow",
+      "name": "mne",
+      "SPDXID": "SPDXRef-Package-mne",
+      "versionInfo": "1.12.1",
+      "downloadLocation": "https://pypi.org/project/mne/1.12.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mne@1.12.1"
+        }
+      ]
+    },
+    {
+      "name": "biosppy",
+      "SPDXID": "SPDXRef-Package-biosppy",
+      "versionInfo": "2.2.4",
+      "downloadLocation": "https://pypi.org/project/biosppy/2.2.4/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/biosppy@2.2.4"
+        }
+      ],
+      "licenseComments": "PyPI classifier: BSD License"
+    },
+    {
+      "name": "pyhrv",
+      "SPDXID": "SPDXRef-Package-pyhrv",
+      "versionInfo": "0.5.0",
+      "downloadLocation": "https://pypi.org/project/pyhrv/0.5.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pyhrv@0.5.0"
+        }
+      ],
+      "licenseComments": "PyPI classifier: BSD License"
+    },
+    {
+      "name": "yasa",
+      "SPDXID": "SPDXRef-Package-yasa",
+      "versionInfo": "0.7.0",
+      "downloadLocation": "https://pypi.org/project/yasa/0.7.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/yasa@0.7.0"
+        }
+      ]
+    },
+    {
+      "name": "neurodsp",
+      "SPDXID": "SPDXRef-Package-neurodsp",
+      "versionInfo": "2.3.0",
+      "downloadLocation": "https://pypi.org/project/neurodsp/2.3.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/neurodsp@2.3.0"
+        }
+      ]
+    },
+    {
+      "name": "wfdb",
+      "SPDXID": "SPDXRef-Package-wfdb",
+      "versionInfo": "4.3.1",
+      "downloadLocation": "https://pypi.org/project/wfdb/4.3.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/wfdb@4.3.1"
+        }
+      ]
+    },
+    {
+      "name": "pylsl",
+      "SPDXID": "SPDXRef-Package-pylsl",
+      "versionInfo": "1.18.2",
+      "downloadLocation": "https://pypi.org/project/pylsl/1.18.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pylsl@1.18.2"
+        }
+      ]
+    },
+    {
+      "name": "pyxdf",
+      "SPDXID": "SPDXRef-Package-pyxdf",
+      "versionInfo": "1.16.8",
+      "downloadLocation": "https://pypi.org/project/pyxdf/1.16.8/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pyxdf@1.16.8"
+        }
+      ]
+    },
+    {
+      "name": "edfio",
+      "SPDXID": "SPDXRef-Package-edfio",
+      "versionInfo": "0.4.16",
+      "downloadLocation": "https://pypi.org/project/edfio/0.4.16/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/edfio@0.4.16"
+        }
+      ]
+    },
+    {
+      "name": "brainflow",
+      "SPDXID": "SPDXRef-Package-brainflow",
+      "versionInfo": "5.22.2",
+      "downloadLocation": "https://pypi.org/project/brainflow/5.22.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/brainflow@5.22.2"
+        }
+      ],
+      "licenseComments": "Licence not declared in package metadata"
+    },
+    {
+      "name": "tqdm",
+      "SPDXID": "SPDXRef-Package-tqdm",
+      "versionInfo": "4.70.0",
+      "downloadLocation": "https://pypi.org/project/tqdm/4.70.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0 AND MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tqdm@4.70.0"
+        }
+      ],
+      "licenseComments": "MPL-2.0 is file-level copyleft; unmodified use"
+    },
+    {
+      "name": "requests",
+      "SPDXID": "SPDXRef-Package-requests",
+      "versionInfo": "2.34.2",
+      "downloadLocation": "https://pypi.org/project/requests/2.34.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/requests@2.34.2"
+        }
+      ]
+    },
+    {
+      "name": "pyyaml",
+      "SPDXID": "SPDXRef-Package-pyyaml",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "https://pypi.org/project/pyyaml/6.0.3/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pyyaml@6.0.3"
+        }
+      ]
+    },
+    {
+      "name": "pydantic",
+      "SPDXID": "SPDXRef-Package-pydantic",
+      "versionInfo": "2.13.5",
+      "downloadLocation": "https://pypi.org/project/pydantic/2.13.5/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pydantic@2.13.5"
+        }
+      ]
+    },
+    {
+      "name": "pydantic-settings",
+      "SPDXID": "SPDXRef-Package-pydantic-settings",
       "versionInfo": "2.15.0",
-      "downloadLocation": "NOASSERTION",
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0"
+      "downloadLocation": "https://pypi.org/project/pydantic-settings/2.15.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pydantic-settings@2.15.0"
+        }
+      ]
+    },
+    {
+      "name": "tensorflow-cpu",
+      "SPDXID": "SPDXRef-Package-tensorflow-cpu",
+      "versionInfo": "2.16.2",
+      "downloadLocation": "https://pypi.org/project/tensorflow-cpu/2.16.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tensorflow-cpu@2.16.2"
+        }
+      ],
+      "licenseComments": "Per PyPI classifier (not installed locally)"
+    },
+    {
+      "name": "pytest",
+      "SPDXID": "SPDXRef-Package-pytest",
+      "versionInfo": "8.4.2",
+      "downloadLocation": "https://pypi.org/project/pytest/8.4.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest@8.4.2"
+        }
+      ]
+    },
+    {
+      "name": "pytest-cov",
+      "SPDXID": "SPDXRef-Package-pytest-cov",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "https://pypi.org/project/pytest-cov/5.0.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest-cov@5.0.0"
+        }
+      ]
+    },
+    {
+      "name": "pytest-xdist",
+      "SPDXID": "SPDXRef-Package-pytest-xdist",
+      "versionInfo": "3.8.0",
+      "downloadLocation": "https://pypi.org/project/pytest-xdist/3.8.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest-xdist@3.8.0"
+        }
+      ]
+    },
+    {
+      "name": "pytest-mock",
+      "SPDXID": "SPDXRef-Package-pytest-mock",
+      "versionInfo": "3.15.1",
+      "downloadLocation": "https://pypi.org/project/pytest-mock/3.15.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest-mock@3.15.1"
+        }
+      ]
+    },
+    {
+      "name": "hypothesis",
+      "SPDXID": "SPDXRef-Package-hypothesis",
+      "versionInfo": "6.167.1",
+      "downloadLocation": "https://pypi.org/project/hypothesis/6.167.1/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/hypothesis@6.167.1"
+        }
+      ],
+      "licenseComments": "Dev only; not distributed"
+    },
+    {
+      "name": "ruff",
+      "SPDXID": "SPDXRef-Package-ruff",
+      "versionInfo": "0.16.5",
+      "downloadLocation": "https://pypi.org/project/ruff/0.16.5/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/ruff@0.16.5"
+        }
+      ]
+    },
+    {
+      "name": "mypy",
+      "SPDXID": "SPDXRef-Package-mypy",
+      "versionInfo": "1.20.2",
+      "downloadLocation": "https://pypi.org/project/mypy/1.20.2/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mypy@1.20.2"
+        }
+      ]
+    },
+    {
+      "name": "pre-commit",
+      "SPDXID": "SPDXRef-Package-pre-commit",
+      "versionInfo": "3.8.0",
+      "downloadLocation": "https://pypi.org/project/pre-commit/3.8.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pre-commit@3.8.0"
+        }
+      ]
+    },
+    {
+      "name": "types-requests",
+      "SPDXID": "SPDXRef-Package-types-requests",
+      "versionInfo": "2.33.0.20260712",
+      "downloadLocation": "https://pypi.org/project/types-requests/2.33.0.20260712/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/types-requests@2.33.0.20260712"
+        }
+      ]
+    },
+    {
+      "name": "types-pyyaml",
+      "SPDXID": "SPDXRef-Package-types-pyyaml",
+      "versionInfo": "6.0.12.20260815",
+      "downloadLocation": "https://pypi.org/project/types-pyyaml/6.0.12.20260815/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/types-pyyaml@6.0.12.20260815"
+        }
+      ]
+    },
+    {
+      "name": "types-tqdm",
+      "SPDXID": "SPDXRef-Package-types-tqdm",
+      "versionInfo": "4.70.0.20260827",
+      "downloadLocation": "https://pypi.org/project/types-tqdm/4.70.0.20260827/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/types-tqdm@4.70.0.20260827"
+        }
+      ]
+    },
+    {
+      "name": "esptool",
+      "SPDXID": "SPDXRef-Package-esptool",
+      "versionInfo": "4.12.0",
+      "downloadLocation": "https://pypi.org/project/esptool/4.12.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "GPL-2.0-or-later",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/esptool@4.12.0"
+        }
+      ],
+      "licenseComments": "Run as an external CLI via subprocess; never imported or redistributed"
+    },
+    {
+      "name": "bleak",
+      "SPDXID": "SPDXRef-Package-bleak",
+      "versionInfo": "0.22.3",
+      "downloadLocation": "https://pypi.org/project/bleak/0.22.3/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/bleak@0.22.3"
+        }
+      ]
     }
   ],
   "relationships": [
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-Synapse24"
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-numpy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-scipy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pandas"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-scikit-learn"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-neurokit2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-mne"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-biosppy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pyhrv"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-yasa"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-neurodsp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-wfdb"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pylsl"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pyxdf"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-edfio"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-brainflow"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-tqdm"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-requests"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pyyaml"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pydantic"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pydantic-settings"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-synapse-24",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-tensorflow-cpu"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pytest",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pytest-cov",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pytest-xdist",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pytest-mock",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-hypothesis",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ruff",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-mypy",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pre-commit",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-types-requests",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-types-pyyaml",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-types-tqdm",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-esptool",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-bleak",
+      "relationshipType": "DEV_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-synapse-24"
     }
   ]
 }

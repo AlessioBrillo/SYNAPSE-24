@@ -1,26 +1,24 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-We actively support and release security patches for the following versions of SYNAPSE-24:
+SYNAPSE-24 is pre-1.0 (`0.x`). Security fixes are applied to the latest commit on `master` only.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.x     | :white_check_mark: |
-| < 1.0   | :x:                |
+## Reporting a vulnerability
 
-## Reporting a Vulnerability
+**Do not open a public issue containing vulnerability details.**
 
-We take the security of SYNAPSE-24—especially concerning biosignal telemetry, embedded device firmware, and user privacy—very seriously. 
+1. Preferred: use GitHub's **Security → Report a vulnerability** on this repository (private advisory).
+2. If that option is not available, open a public issue titled **"Security contact request"** with *no technical details*; the maintainer will move the conversation to a private channel.
 
-If you discover a security vulnerability, please **do not open a public GitHub issue**. Instead, please report it privately via email:
+Please include affected component (firmware / `src/synapse24` / scripts), version or commit, reproduction steps and impact.
 
-- **Email:** security@synapse24.io
-- **PGP Key:** Available upon request for encrypted communications.
+## What to expect
 
-Please include:
-- A description of the vulnerability and potential impact.
-- Steps or proof-of-concept code to reproduce the issue.
-- Any suggested remediations.
+This is a small-maintainer project; there is no contractual SLA. We aim to acknowledge reports within 7 days and to agree a disclosure date with the reporter, typically within 90 days of the report.
 
-We will acknowledge receipt within 48 hours and provide regular updates as we investigate and develop a patch.
+## Scope
+
+In scope: this repository's source code, firmware and build/CI configuration. Particularly relevant given the data handled (see [PRIVACY.md](PRIVACY.md)): BLE/Wi-Fi provisioning and OTA paths in `firmware/`, handling of recorded XDF/LSL data, and secrets in the repository.
+
+Out of scope: vulnerabilities in third-party dependencies that are not exploitable through SYNAPSE-24 (report those upstream), and physical attacks on prototype hardware.
