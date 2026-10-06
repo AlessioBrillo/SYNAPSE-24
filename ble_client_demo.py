@@ -78,7 +78,9 @@ async def find_synapse_device():
     return None
 
 
-async def run_continuous_sync(client, sync_char_uuid: str, samples: int = 60, interval: float = 1.0) -> None:
+async def run_continuous_sync(
+    client, sync_char_uuid: str, samples: int = 60, interval: float = 1.0
+) -> None:
     """Run continuous sync exchanges to measure clock drift."""
     offsets = []
     rtts = []
@@ -101,11 +103,13 @@ async def run_continuous_sync(client, sync_char_uuid: str, samples: int = 60, in
 
                 offsets.append(offset)
                 rtts.append(rtt)
-                logger.info(f"[{seq}/{samples}] seq={seq_r}, offset={offset / 1000.0:+.3f} ms, RTT={rtt / 1000.0:.3f} ms")
+                logger.info(
+                    f"[{seq}/{samples}] seq={seq_r}, offset={offset / 1000.0:+.3f} ms, RTT={rtt / 1000.0:.3f} ms"
+                )
             else:
                 logger.warning(f"[{seq}/{samples}] Short response: {len(response_value)} bytes")
-        except Exception as e:
-            logger.error(f"[{seq}/{samples}] Sync exchange failed: {e}")
+        except Exception:
+            logger.exception(f"[{seq}/{samples}] Sync exchange failed")
 
     if offsets:
         max_drift = max(offsets) - min(offsets)
@@ -213,9 +217,17 @@ def test_offset_calculation() -> None:
 async def main():
     """Main entry point."""
     import argparse
+
     parser = argparse.ArgumentParser(description="SYNAPSE-24 BLE Clock Sync Validation Demo")
-    parser.add_argument("--samples", type=int, default=60, help="Number of sync samples (default: 60)")
-    parser.add_argument("--interval", type=float, default=1.0, help="Interval between samples in seconds (default: 1.0)")
+    parser.add_argument(
+        "--samples", type=int, default=60, help="Number of sync samples (default: 60)"
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=1.0,
+        help="Interval between samples in seconds (default: 1.0)",
+    )
     parser.add_argument("--test", action="store_true", help="Run local self-check test")
     args = parser.parse_args()
 
