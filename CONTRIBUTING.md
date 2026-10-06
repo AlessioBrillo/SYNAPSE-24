@@ -33,6 +33,16 @@ uv run ruff check .
 uv run mypy --package synapse24
 ```
 
+## Licensing of Contributions
+
+SYNAPSE-24 is [dual-licensed](LICENSING.md) (AGPL-3.0-or-later and a commercial licence). That only works if the maintainer may relicense every contribution, so by submitting a contribution you agree that:
+
+1. **Origin** - you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/). Sign off every commit with `git commit -s`, which appends `Signed-off-by: Your Name <you@example.com>`.
+2. **Open-source licence** - your contribution is licensed to the project and its users under `AGPL-3.0-or-later`.
+3. **Relicensing right** - you grant the maintainer a perpetual, worldwide, non-exclusive, royalty-free, irrevocable licence to use, modify, sublicense and distribute your contribution under any licence terms, including proprietary commercial licences.
+
+You keep the copyright in your contribution. Do not submit code you do not have the right to license this way (for example code from your employer, or copied from a project under an incompatible licence such as GPL-only code that cannot be combined with a commercial licence). Pull requests without a sign-off will not be merged.
+
 ## Branch Strategy
 
 | Branch Type | Naming Convention | Purpose |
@@ -43,7 +53,7 @@ uv run mypy --package synapse24
 | Documentation | `docs/<short-description>` | Documentation updates |
 | Chore | `chore/<short-description>` | Maintenance tasks |
 
-**Main branch**: `main` (protected, requires PR review and CI pass)
+**Main branch**: `master` (changes land via pull request; CI must pass before merging)
 
 ## Commit Convention
 
@@ -180,8 +190,9 @@ uv run pytest -m "not slow and not integration"
 
 - **Never commit secrets** (API keys, tokens, passwords)
 - Use environment variables for configuration
-- Report security vulnerabilities privately to the maintainers
-- See [Security Policy](SECURITY.md) if it exists
+- Report security vulnerabilities privately, following the [Security Policy](SECURITY.md)
+- Do not commit personal or health data; see [PRIVACY.md](PRIVACY.md)
+- Do not add dependencies licensed under GPL/LGPL/AGPL without maintainer approval, and update [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) when `uv.lock` changes
 
 ## Coding Standards
 

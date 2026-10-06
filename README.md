@@ -4,6 +4,11 @@
 >
 > Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
 
+[![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](LICENSING.md)
+[![CI](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml/badge.svg)](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml)
+
+> **Research platform — not a medical device.** SYNAPSE-24 has no regulatory clearance and must not be used for diagnosis or clinical decisions. See [COMPLIANCE.md](COMPLIANCE.md) and [PRIVACY.md](PRIVACY.md).
+
 ## Architecture Overview
 
 This repository implements the **Phase 0** foundation per [Architecture.md](Architecture.md) and [Roadmap.md](Roadmap.md):
@@ -18,7 +23,7 @@ This repository implements the **Phase 0** foundation per [Architecture.md](Arch
 │  │ WESAD        │────────▶│ NeuroKit2        │    │ Edge Impulse     │    │
 │  │ (15 subjects,│         │ MNE-Python       │    │ TFLM Quantization│    │
 │  │  ECG/EDA/ACC)│         │ BioSPPy          │    │ ESP32 Deploy     │    │
-│  └──────────────┘         │ HeartPy/pyHRV    │    └──────────────────┘    │
+│  └──────────────┘         │ pyHRV            │    └──────────────────┘    │
 │  ┌──────────────┐         │ YASA (sleep)     │                            │
 │  │ MIT-BIH      │────────▶│                  │    Validation             │
 │  │ (48 records, │         │ Quality Metrics: │    ┌──────────────────┐    │
@@ -322,7 +327,18 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+SYNAPSE-24 is dual-licensed: **GNU AGPL v3.0 or later** ([LICENSE](LICENSE)) for open-source use, or a **commercial licence** for use without the AGPL obligations. See [LICENSING.md](LICENSING.md) for what that means and how to ask for a commercial licence.
+
+| Document | Purpose |
+|----------|---------|
+| [LICENSING.md](LICENSING.md) | Dual-licensing terms, commercial inquiries |
+| [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) · [docs/sbom.spdx.json](docs/sbom.spdx.json) | Dependency licences and SBOM |
+| [SECURITY.md](SECURITY.md) | Reporting vulnerabilities |
+| [PRIVACY.md](PRIVACY.md) | Biosignal / GDPR status and deployer duties |
+| [COMPLIANCE.md](COMPLIANCE.md) | Regulatory position (not a medical device) and gaps |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution rules, DCO sign-off and relicensing grant |
+
+Versions published before this change were released under the MIT License; see [LICENSING.md](LICENSING.md#earlier-releases).
 
 ---
 
