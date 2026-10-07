@@ -1,125 +1,89 @@
 #include "triage_features.h"
-#include "sensor_scheduler.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include <math.h>
 #include <string.h>
 
 static const char* TAG = "triage_features";
 
-#define IMU_RING_BUF_SIZE 32
+// 4 s sliding windows owned by this module, filled by the IMU/PPG feature tasks.
+static float s_imu[TRIAGE_IMU_WIN][6];
+static float s_bvp[TRIAGE_PPG_WIN];
+static int s_imu_head, s_imu_count;
+static int s_bvp_head, s_bvp_count;
+static triage_bvp_filter_t s_bvp_filter;  // PPG task only
+static bool s_inited;
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
-// Goertzel algorithm for dominant frequency estimation (integer-friendly)
-static float goertzel_magnitude(const float* signal, int n, float fs, float target_freq) {
-    if (n < 4) return 0.0f;
-    float omega = 2.0f * M_PI * target_freq / fs;
-    float coeff = 2.0f * cosf(omega);
-    float q1 = 0.0f, q2 = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float q0 = coeff * q1 - q2 + signal[i];
-        q2 = q1;
-        q1 = q0;
+// Linearised copies for the DSP (static: keeps the triage task stack small).
+static float s_imu_lin[TRIAGE_IMU_WIN * 6];
+static float s_bvp_lin[TRIAGE_PPG_WIN];
+
+esp_err_t triage_features_init(uint32_t imu_rate_hz, uint32_t ppg_rate_hz) {
+    if (imu_rate_hz != TRIAGE_IMU_FS_HZ || ppg_rate_hz != TRIAGE_PPG_FS_HZ) {
+        ESP_LOGE(TAG, "Rate mismatch: imu=%u ppg=%u, features need %d/%d Hz",
+                 (unsigned)imu_rate_hz, (unsigned)ppg_rate_hz, TRIAGE_IMU_FS_HZ, TRIAGE_PPG_FS_HZ);
+        return ESP_ERR_INVALID_ARG;
     }
-    float real = q1 - q2 * cosf(omega);
-    float imag = q2 * sinf(omega);
-    return sqrtf(real*real + imag*imag) / n;
+    portENTER_CRITICAL(&s_lock);
+    s_imu_head = s_imu_count = s_bvp_head = s_bvp_count = 0;
+    memset(&s_bvp_filter, 0, sizeof(s_bvp_filter));
+    s_inited = true;
+    portEXIT_CRITICAL(&s_lock);
+    return ESP_OK;
 }
 
-// Approximate spectral entropy using 4-band power ratios (MCU-friendly)
-static float spectral_entropy_approx(const float* signal, int n, float fs) {
-    if (n < 4) return 0.5f;
-    // Simple variance-based entropy proxy for MCU
-    float mean = 0.0f;
-    for (int i = 0; i < n; i++) mean += signal[i];
-    mean /= n;
-    
-    float var = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float diff = signal[i] - mean;
-        var += diff * diff;
-    }
-    var /= n;
-    
-    // Map variance to [0,1] entropy range (calibrated empirically)
-    // Higher variance -> more "noisy" -> higher entropy
-    return fminf(var * 100.0f, 1.0f);
+void triage_features_push_imu(float ax, float ay, float az, float gx, float gy, float gz) {
+    portENTER_CRITICAL(&s_lock);
+    float* row = s_imu[s_imu_head];
+    row[0] = ax; row[1] = ay; row[2] = az;
+    row[3] = gx; row[4] = gy; row[5] = gz;
+    s_imu_head = (s_imu_head + 1) % TRIAGE_IMU_WIN;
+    if (s_imu_count < TRIAGE_IMU_WIN) s_imu_count++;
+    portEXIT_CRITICAL(&s_lock);
 }
 
-esp_err_t triage_features_compute_live(
-    const void* imu_ring_buffer,
-    const void* ppg_ring_buffer,
-    triage_features_t* features_out
-) {
+void triage_features_push_ppg_ir(float ir) {
+    float bvp = triage_bvp_filter_step(&s_bvp_filter, ir);  // outside the lock: PPG task owns the filter
+    portENTER_CRITICAL(&s_lock);
+    s_bvp[s_bvp_head] = bvp;
+    s_bvp_head = (s_bvp_head + 1) % TRIAGE_PPG_WIN;
+    if (s_bvp_count < TRIAGE_PPG_WIN) s_bvp_count++;
+    portEXIT_CRITICAL(&s_lock);
+}
+
+esp_err_t triage_features_compute_live(triage_features_t* features_out) {
     if (!features_out) return ESP_ERR_INVALID_ARG;
+    if (!s_inited) return ESP_ERR_INVALID_STATE;
 
-    const sensor_scheduler_t* scheduler = (const sensor_scheduler_t*)imu_ring_buffer;
-    if (!scheduler) return ESP_ERR_INVALID_ARG;
-
-    // Peek (non-destructive) the most recent IMU samples.
-    // The coordinator task owns draining; triage must never pop.
-    size_t available = sensor_ring_buffer_available(&scheduler->buffers[SENSOR_TYPE_IMU]);
-    if (available < 10) {
-        memset(features_out, 0, sizeof(triage_features_t));
+    int n_imu, n_bvp;
+    portENTER_CRITICAL(&s_lock);
+    n_imu = s_imu_count;
+    n_bvp = s_bvp_count;
+    if (n_imu < TRIAGE_IMU_WIN) {  // wait for the full 4 s window the model was trained on
+        portEXIT_CRITICAL(&s_lock);
+        memset(features_out, 0, sizeof(*features_out));
         return ESP_ERR_INVALID_SIZE;
     }
+    // Oldest -> newest. When the buffer is full, head points at the oldest sample.
+    for (int i = 0; i < n_imu; i++) {
+        memcpy(&s_imu_lin[i * 6], s_imu[(s_imu_head + i) % TRIAGE_IMU_WIN], 6 * sizeof(float));
+    }
+    int bvp_start = (s_bvp_count < TRIAGE_PPG_WIN) ? 0 : s_bvp_head;
+    for (int i = 0; i < n_bvp; i++) {
+        s_bvp_lin[i] = s_bvp[(bvp_start + i) % TRIAGE_PPG_WIN];
+    }
+    portEXIT_CRITICAL(&s_lock);
 
-    size_t count = available > IMU_RING_BUF_SIZE ? IMU_RING_BUF_SIZE : available;
-    size_t start = available - count;  // most recent `count` samples
-    sensor_sample_t imu_samples[IMU_RING_BUF_SIZE];
-    for (size_t i = 0; i < count; i++) {
-        sensor_sample_t s = {};
-        if (!sensor_ring_buffer_peek(&scheduler->buffers[SENSOR_TYPE_IMU], &s, start + i)) {
-            memset(features_out, 0, sizeof(triage_features_t));
-            return ESP_ERR_INVALID_SIZE;
-        }
-        imu_samples[i] = s;
-    }
-    
-    // Compute features matching Python extract_triage_features_live()
-    float acc_x[IMU_RING_BUF_SIZE], acc_y[IMU_RING_BUF_SIZE], acc_z[IMU_RING_BUF_SIZE];
-    float gyro_x[IMU_RING_BUF_SIZE], gyro_y[IMU_RING_BUF_SIZE], gyro_z[IMU_RING_BUF_SIZE];
-    
-    for (int i = 0; i < count; i++) {
-        acc_x[i] = imu_samples[i].data.imu.ax;
-        acc_y[i] = imu_samples[i].data.imu.ay;
-        acc_z[i] = imu_samples[i].data.imu.az;
-        gyro_x[i] = imu_samples[i].data.imu.gx;
-        gyro_y[i] = imu_samples[i].data.imu.gy;
-        gyro_z[i] = imu_samples[i].data.imu.gz;
-    }
-    
-    // Features 0-11: ACC mean, std, entropy, dom_freq x 3 axes
-    // Features 12-23: GYRO mean, std, entropy, dom_freq x 3 axes
-    float* signals[6] = {acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z};
-    for (int s = 0; s < 6; s++) {
-        float mean_v = 0, std_v = 0, ent_v = 0, dom_v = 0;
-        for (int i = 0; i < count; i++) mean_v += signals[s][i];
-        mean_v /= count;
-        for (int i = 0; i < count; i++) {
-            float diff = signals[s][i] - mean_v;
-            std_v += diff * diff;
-        }
-        std_v = sqrtf(std_v / count);
-        ent_v = spectral_entropy_approx(signals[s], count, TRIAGE_LIVE_IMU_FS_HZ);
-        dom_v = goertzel_magnitude(signals[s], count, TRIAGE_LIVE_IMU_FS_HZ, 1.0f); // 1Hz target
-        
-        int base = s * 4;
-        features_out->features[base + 0] = mean_v;
-        features_out->features[base + 1] = std_v;
-        features_out->features[base + 2] = ent_v;
-        features_out->features[base + 3] = dom_v;
-    }
-    
-    // Features 24-25: PPG IR mean, std (from PPG ring buffer - stub for now)
-    // TODO: Implement PPG ring buffer read when PPG scheduler is integrated
-    features_out->features[24] = 0.0f;
-    features_out->features[25] = 0.0f;
-    
+    triage_features_from_window(s_imu_lin, n_imu, s_bvp_lin, n_bvp,
+                                (float)TRIAGE_IMU_FS_HZ, features_out->features);
     features_out->feature_count = TRIAGE_NUM_FEATURES;
     features_out->timestamp_us = esp_timer_get_time();
     return ESP_OK;
 }
+
 float triage_compute_motion_intensity(const triage_features_t* features) {
     if (!features) return 0.0f;
     // Combine standard deviation of Acc X, Y, Z (indices 1, 5, 9)

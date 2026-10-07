@@ -50,9 +50,7 @@ static void inference_task_fn(void *arg) {
         // ====================================================================
         // Stress Triage (uses IMU + PPG features)
         // ====================================================================
-        if (triage_features_compute_live(g_edge_ai.imu_ring_buffer, 
-                                         g_edge_ai.ppg_ring_buffer, 
-                                         &features) == ESP_OK) {
+        if (triage_features_compute_live(&features) == ESP_OK) {
             input.timestamp_us = features.timestamp_us;
             input.feature_count = features.feature_count;
             for (int i = 0; i < TRIAGE_NUM_FEATURES; i++) {
@@ -110,11 +108,8 @@ esp_err_t synapse_edge_ai_init(void) {
         return ret;
     }
     
-    // Get ring buffer pointers from sensor scheduler
-    // These are set after sensor_scheduler is initialized
-    // For now, we'll set them lazily in the inference task
-    g_edge_ai.imu_ring_buffer = NULL;
-    g_edge_ai.ppg_ring_buffer = NULL;
+    // Triage owns its sample window; the acquisition path must call
+    // triage_features_init() and triage_features_push_*() (follow-up: band wiring).
     
     memset(&g_edge_ai.latest_stress, 0, sizeof(stress_triage_t));
     memset(&g_edge_ai.latest_motion, 0, sizeof(motion_classifier_t));
@@ -128,20 +123,11 @@ esp_err_t synapse_edge_ai_run_stress_triage(stress_triage_t *result) {
     if (!result) return ESP_ERR_INVALID_ARG;
     if (!g_edge_ai.initialized) return ESP_ERR_INVALID_STATE;
     
-    // Get ring buffers from global scheduler (set in main after sensor init)
-    extern sensor_scheduler_t *g_sensor_scheduler_ptr;
-    if (g_sensor_scheduler_ptr) {
-        g_edge_ai.imu_ring_buffer = &g_sensor_scheduler_ptr->buffers[SENSOR_TYPE_IMU];
-        g_edge_ai.ppg_ring_buffer = &g_sensor_scheduler_ptr->buffers[SENSOR_TYPE_PPG];
-    }
-    
     triage_input_t input = {0};
     triage_output_t output = {0};
     triage_features_t features = {0};
     
-    if (triage_features_compute_live(g_edge_ai.imu_ring_buffer, 
-                                     g_edge_ai.ppg_ring_buffer, 
-                                     &features) != ESP_OK) {
+    if (triage_features_compute_live(&features) != ESP_OK) {
         return ESP_ERR_NOT_FINISHED;  // Not enough data
     }
     
