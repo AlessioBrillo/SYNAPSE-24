@@ -158,13 +158,13 @@ class TestLiveFeatureExtraction:
         assert abs(feats[20] - 30.0) < 0.1  # GYRO Z mean
 
     def test_live_ppg_bvp_features_indices_24_25(self):
-        """PPG IR -> BVP features at indices 24-25."""
+        """PPG IR -> band-passed BVP features at indices 24-25 (DC removed)."""
         imu_window = np.random.randn(20, 9) * 0.1
-        ppg_window = np.ones((10, 2)) * 1000  # IR = 1000
+        ppg_window = np.ones((10, 2)) * 1000  # constant IR -> no AC component
 
         feats = extract_triage_features_live(imu_window, ppg_window)
-        assert abs(feats[24] - 1000.0) < 1.0  # BVP mean
-        assert abs(feats[25]) < 1.0  # BVP std ~0
+        assert abs(feats[24]) < 1e-6  # BVP mean ~0
+        assert abs(feats[25]) < 1e-6  # BVP std ~0
 
     def test_live_no_ppg(self):
         """No PPG window should leave BVP features as zero."""

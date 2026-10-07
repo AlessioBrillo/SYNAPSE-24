@@ -15,6 +15,7 @@ idf_component_register(
         "../../common/sync/clock_sync.cpp"
         "../../common/triage/triage_inference.cpp"
         "../../common/triage/triage_features.cpp"
+        "../../common/triage/triage_dsp.c"
         "../../common/scheduler/sensor_scheduler.cpp"
         "../../common/power/power_monitor.cpp"
     INCLUDE_DIRS

@@ -83,7 +83,7 @@ static void triage_task_fn(void* arg) {
         if (!g_triage.initialized) continue;
 
         // Get features from ring buffers (matches Python extract_triage_features_live)
-        if (triage_features_compute_live(&g_scheduler, NULL, &features) != ESP_OK) {
+        if (triage_features_compute_live(&features) != ESP_OK) {
             continue;  // Not enough data
         }
 
@@ -168,6 +168,7 @@ static void ppg_feature_task_fn(void* arg) {
         sensor_sample_t sample;
         sensor_ring_buffer_t* ppg_rb = &g_scheduler.buffers[SENSOR_TYPE_PPG];
         while (sensor_ring_buffer_pop(ppg_rb, &sample)) {
+            triage_features_push_ppg_ir((float)sample.data.ppg.ir);
             ppg_sqi_result_t sqi;
             ppg_max30102_get_sqi(&sqi);
 
@@ -208,6 +209,8 @@ static void imu_feature_task_fn(void* arg) {
         sensor_sample_t sample;
         sensor_ring_buffer_t* imu_rb = &g_scheduler.buffers[SENSOR_TYPE_IMU];
         while (sensor_ring_buffer_pop(imu_rb, &sample)) {
+            triage_features_push_imu(sample.data.imu.ax, sample.data.imu.ay, sample.data.imu.az,
+                                     sample.data.imu.gx, sample.data.imu.gy, sample.data.imu.gz);
             imu_features_t features;
             esp_err_t ret = imu_processor_process_sample(
                 sample.data.imu.ax, sample.data.imu.ay, sample.data.imu.az,
@@ -295,6 +298,10 @@ static void main_task_fn(void* arg) {
     xTaskCreate(sensor_task_fn, "ppg_task", 4096, &ppg_sensor, 10, &ppg_task);
     xTaskCreate(sensor_task_fn, "imu_task", 4096, &imu_sensor, 10, &imu_task);
 
+    // Non-fatal: a rate change must not boot-loop a 24/7 wearable; triage just stays disabled.
+    if (triage_features_init(imu_sensor.sampling_rate_hz, ppg_sensor.sampling_rate_hz) != ESP_OK) {
+        ESP_LOGE(TAG, "Triage disabled: sensor rates must be 50 Hz (see triage_dsp.h)");
+    }
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ppg_sensor));
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &imu_sensor));
 

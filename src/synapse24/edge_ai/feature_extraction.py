@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import numpy.typing as npt
-from scipy.signal import welch
+from scipy.signal import butter, sosfilt, sosfilt_zi, welch
 from scipy.stats import entropy
 
 # Feature indices (must match firmware/triage_inference.cpp TRIAGE_NUM_FEATURES=26)
@@ -58,6 +58,20 @@ WRIST_BVP_FS = 64.0
 
 # Window duration for feature computation (seconds)
 WINDOW_DURATION_S = 4.0
+
+# Live hardware canonical rates (Phase 1 power decision); must match
+# firmware/common/triage/triage_dsp.h TRIAGE_IMU_FS_HZ / TRIAGE_PPG_FS_HZ.
+TRIAGE_IMU_FS_HZ = 50.0
+TRIAGE_PPG_FS_HZ = 50.0
+# WESAD wrist BVP is AC-coupled; live IR is band-passed into the same band
+# (mirrors kSos in firmware/common/triage/triage_dsp.c).
+BVP_SOS = butter(2, [0.5, 8.0], btype="bandpass", fs=TRIAGE_PPG_FS_HZ, output="sos")
+
+
+def bvp_from_ir(ir: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Band-pass raw PPG IR to a BVP-like AC signal, primed at ir[0] like the firmware."""
+    out: npt.NDArray[np.float64] = sosfilt(BVP_SOS, ir, zi=sosfilt_zi(BVP_SOS) * ir[0])[0]
+    return out
 
 
 def spectral_entropy(signal: npt.NDArray[np.float64], fs: float) -> float:
@@ -128,11 +142,12 @@ def extract_triage_features_live(
     imu_window: npt.NDArray[np.float64],
     ppg_window: npt.NDArray[np.float64] | None = None,
     ecg_window: npt.NDArray[np.float64] | None = None,
+    fs_imu: float = TRIAGE_IMU_FS_HZ,
 ) -> np.ndarray:
     """Extract 26 features from LIVE sensor streams (forearm hub only).
 
     DOMAIN ADAPTATION: WESAD model trained on CHEST ACC (700Hz) + WRIST ACC (32Hz) + WRIST BVP (64Hz).
-    Live hardware has FOREARM IMU (100Hz) + PPG (64Hz) + ECG (500Hz).
+    Live hardware has FOREARM IMU (50Hz) + PPG (50Hz) + ECG (500Hz).
     Mapping: IMU ACC -> Chest ACC features; IMU GYRO -> Wrist ACC features; PPG IR -> Wrist BVP features.
     """
     features = np.zeros(TRIAGE_NUM_FEATURES, dtype=np.float32)
@@ -141,7 +156,7 @@ def extract_triage_features_live(
     # Chest-like features from IMU ACC (features 0-11)
     for axis, sig in enumerate([imu_window[:, 0], imu_window[:, 1], imu_window[:, 2]]):
         base = axis * 4
-        mean_v, std_v, ent_v, dom_v = compute_axis_features(sig, 100.0)
+        mean_v, std_v, ent_v, dom_v = compute_axis_features(sig, fs_imu)
         features[base + 0] = mean_v
         features[base + 1] = std_v
         features[base + 2] = ent_v
@@ -149,14 +164,14 @@ def extract_triage_features_live(
     # Wrist-like features from IMU GYRO (features 12-23)
     for axis, sig in enumerate([imu_window[:, 3], imu_window[:, 4], imu_window[:, 5]]):
         base = 12 + axis * 4
-        mean_v, std_v, ent_v, dom_v = compute_axis_features(sig, 100.0)
+        mean_v, std_v, ent_v, dom_v = compute_axis_features(sig, fs_imu)
         features[base + 0] = mean_v
         features[base + 1] = std_v
         features[base + 2] = ent_v
         features[base + 3] = dom_v
     # BVP features from PPG IR (features 24-25)
     if ppg_window is not None and ppg_window.shape[0] > 0:
-        bvp_proxy = ppg_window[:, 1]
+        bvp_proxy = bvp_from_ir(ppg_window[:, 1])
         features[FEAT_WRIST_BVP_MEAN] = float(np.mean(bvp_proxy))
         features[FEAT_WRIST_BVP_STD] = float(np.std(bvp_proxy))
     return features
@@ -171,8 +186,8 @@ def extract_triage_features_from_lsl_streams(
     window_s: float = 4.0,
 ) -> np.ndarray:
     """Extract features from synchronized LSL streams (post-hoc analysis)."""
-    n_acc = int(window_s * 100)
-    n_ppg = int(window_s * 64)
+    n_acc = int(window_s * TRIAGE_IMU_FS_HZ)
+    n_ppg = int(window_s * TRIAGE_PPG_FS_HZ)
     acc_win = acc_stream[-n_acc:] if len(acc_stream) >= n_acc else acc_stream
     gyro_win = gyro_stream[-n_acc:] if len(gyro_stream) >= n_acc else gyro_stream
     ppg_win = ppg_stream[-n_ppg:] if len(ppg_stream) >= n_ppg else ppg_stream

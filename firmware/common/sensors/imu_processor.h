@@ -15,7 +15,9 @@ extern "C" {
 
 #define IMU_PROCESSOR_WINDOW_SEC      10
 #define IMU_PROCESSOR_OUTPUT_HZ       1
-#define IMU_PROCESSOR_SAMPLE_RATE_HZ  100
+#ifndef IMU_PROCESSOR_SAMPLE_RATE_HZ
+#define IMU_PROCESSOR_SAMPLE_RATE_HZ  50   // forearm/head; band overrides to match its Kconfig ODR
+#endif
 #define IMU_PROCESSOR_WINDOW_SAMPLES  (IMU_PROCESSOR_WINDOW_SEC * IMU_PROCESSOR_SAMPLE_RATE_HZ)
 
 // Sleep/wake classification thresholds (calibrated from literature)

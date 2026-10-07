@@ -66,10 +66,6 @@ typedef struct {
     stress_triage_t latest_stress;
     motion_classifier_t latest_motion;
     
-    // Feature extraction buffer
-    void *imu_ring_buffer;
-    void *ppg_ring_buffer;
-    
     bool initialized;
     bool models_loaded;
 } synapse_edge_ai_t;

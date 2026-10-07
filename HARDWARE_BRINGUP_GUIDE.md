@@ -215,7 +215,8 @@ OVERALL: PASS
 | IMU not found | ICM-20948 address / INT | Verify 0x68 on I2C0; GPIO6 interrupt |
 | Sync drift >10ms | BLE congestion / no markers | Reduce BLE interval; check wired sync GPIO27 |
 | Firmware build fails | ESP-IDF version mismatch | Use ESP-IDF v5.3+; `idf.py fullclean && idf.py build` |
-| `triage_features_compute_live` returns error | Ring buffer empty | Wait for IMU task to populate (≥10 samples) |
+| `triage_features_compute_live` returns `INVALID_SIZE` | 4 s IMU window not full yet | Wait ~4 s after boot; check IMU task calls `triage_features_push_imu` |
+| `triage_features_init` returns `INVALID_ARG` | IMU/PPG rate != 50 Hz | Features are defined at 50 Hz (`triage_dsp.h`); fix the sensor config |
 
 ---
 
