@@ -120,3 +120,11 @@ esp_err_t triage_features_compute_live(
     features_out->timestamp_us = esp_timer_get_time();
     return ESP_OK;
 }
+float triage_compute_motion_intensity(const triage_features_t* features) {
+    if (!features) return 0.0f;
+    // Combine standard deviation of Acc X, Y, Z (indices 1, 5, 9)
+    // Empirically, Acc std can be high. Let's normalize by a typical motion threshold.
+    float intensity = (features->features[1] + features->features[5] + features->features[9]) / 3.0f;
+    // Normalize to [0,1] assuming > 2.0g standard deviation is "high motion"
+    return fminf(intensity / 2.0f, 1.0f);
+}

@@ -1,4 +1,5 @@
 #include "imu_processor.h"
+#include "sensor_scheduler.h"
 #include "esp_log.h"
 #include <string.h>
 #include <math.h>
@@ -277,6 +278,12 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
         
         // Stationary detection: low motion intensity AND low tilt variance
         features.is_stationary = (features.motion_intensity < 0.05f) && (tilt_var < 2.0f);
+
+        // Motion-Gated Adaptive Acquisition: Adjust PPG sampling rate based on motion
+        if (g_sensor_scheduler_ptr) {
+            uint32_t new_rate = features.is_stationary ? 64 : 16;  // Drop to 16Hz if moving, keep nominal 64Hz if stationary
+            sensor_scheduler_set_rate(g_sensor_scheduler_ptr, SENSOR_TYPE_PPG, new_rate);
+        }
         
         s_ctx.last_features = features;
         if (features_out) *features_out = features;

@@ -23,6 +23,8 @@ esp_err_t triage_features_compute_live(
     triage_features_t* features_out
 );
 
+float triage_compute_motion_intensity(const triage_features_t* features);
+
 #ifdef __cplusplus
 }
 #endif

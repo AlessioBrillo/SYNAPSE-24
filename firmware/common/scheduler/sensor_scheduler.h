@@ -62,6 +62,7 @@ typedef struct {
     bool running;
     uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS];
     uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS];
+    volatile uint32_t rates_hz[SENSOR_SCHEDULER_MAX_SENSORS];
 } sensor_scheduler_t;
 
 typedef void (*sensor_read_fn_t)(sensor_sample_t* sample, void* user_ctx);
@@ -84,6 +85,7 @@ esp_err_t sensor_scheduler_register_sensor(sensor_scheduler_t* scheduler, const 
 esp_err_t sensor_scheduler_start(sensor_scheduler_t* scheduler);
 esp_err_t sensor_scheduler_stop(sensor_scheduler_t* scheduler);
 esp_err_t sensor_scheduler_deinit(sensor_scheduler_t* scheduler);
+esp_err_t sensor_scheduler_set_rate(sensor_scheduler_t* scheduler, sensor_type_t type, uint32_t rate_hz);
 
 bool sensor_ring_buffer_push(sensor_ring_buffer_t* rb, const sensor_sample_t* sample);
 bool sensor_ring_buffer_pop(sensor_ring_buffer_t* rb, sensor_sample_t* sample);

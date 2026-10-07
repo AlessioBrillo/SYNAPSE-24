@@ -96,7 +96,17 @@ esp_err_t sensor_scheduler_register_sensor(sensor_scheduler_t* scheduler, const 
     }
 
     scheduler->sensor_tasks[config->type] = *config->task_handle;
+    scheduler->rates_hz[config->type] = config->sampling_rate_hz;
     ESP_LOGI(TAG, "Registered sensor: %s (type=%d, rate=%" PRIu32 " Hz)", config->name, config->type, config->sampling_rate_hz);
+    return ESP_OK;
+}
+
+esp_err_t sensor_scheduler_set_rate(sensor_scheduler_t* scheduler, sensor_type_t type, uint32_t rate_hz) {
+    if (!scheduler || type >= SENSOR_SCHEDULER_MAX_SENSORS || rate_hz == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    scheduler->rates_hz[type] = rate_hz;
+    ESP_LOGI(TAG, "Sensor %d rate dynamically set to %" PRIu32 " Hz", type, rate_hz);
     return ESP_OK;
 }
 
@@ -311,13 +321,29 @@ void sensor_task_fn(void* arg) {
     sensor_scheduler_t* scheduler = g_sensor_scheduler_ptr;
     sensor_sample_t sample = {};
     sample.type = config->type;
-    TickType_t period_ticks = pdMS_TO_TICKS(1000 / config->sampling_rate_hz);
+
+    uint32_t current_rate = config->sampling_rate_hz;
+    if (scheduler) {
+        current_rate = scheduler->rates_hz[config->type];
+    }
+    if (current_rate == 0) current_rate = 1;
+
+    TickType_t period_ticks = pdMS_TO_TICKS(1000 / current_rate);
+    if (period_ticks == 0) period_ticks = 1;
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
         vTaskDelayUntil(&last_wake, period_ticks);
 
         if (!scheduler || !scheduler->running) continue;
+
+        // Check if rate changed dynamically
+        uint32_t latest_rate = scheduler->rates_hz[config->type];
+        if (latest_rate != 0 && latest_rate != current_rate) {
+            current_rate = latest_rate;
+            period_ticks = pdMS_TO_TICKS(1000 / current_rate);
+            if (period_ticks == 0) period_ticks = 1;
+        }
 
         sample.timestamp_us = get_time_us();
         sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
