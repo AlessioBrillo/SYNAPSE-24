@@ -34,6 +34,20 @@ XDF_CHUNK_TAGS = {
 
 
 @dataclass(frozen=True)
+class StreamCapability:
+    """Machine-readable stream capability descriptor."""
+
+    stream_type: str
+    units: str
+    sampling_rate: float
+    quality_metrics: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> str:
+        """Serialize capability to JSON."""
+        return json.dumps(self.__dict__)
+
+
+@dataclass(frozen=True)
 class StreamConfig:
     """Immutable stream configuration for XDF export."""
 
@@ -51,6 +65,7 @@ class StreamConfig:
     software: str = "synapse24"
     version: str = "0.1.0"
     metadata: dict[str, Any] = field(default_factory=dict)
+    capability: StreamCapability | None = None
 
     def __post_init__(self) -> None:
         """Set default values for optional fields."""
@@ -99,6 +114,11 @@ def create_stream_info(config: StreamConfig) -> StreamInfo:
         meta = info.desc().append_child("metadata")
         for key, value in config.metadata.items():
             meta.append_child_value(key, str(value))
+
+    # Capability descriptor
+    if config.capability:
+        cap = info.desc().append_child("capability")
+        cap.append_child_value("descriptor", config.capability.to_json())
 
     return info
 
