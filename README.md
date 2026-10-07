@@ -4,10 +4,10 @@
 >
 > Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
 
-[![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](LICENSING.md)
+[![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](compliance/LICENSING.md)
 [![CI](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml/badge.svg)](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml)
 
-> **Research platform — not a medical device.** SYNAPSE-24 has no regulatory clearance and must not be used for diagnosis or clinical decisions. See [COMPLIANCE.md](COMPLIANCE.md) and [PRIVACY.md](PRIVACY.md).
+> **Research platform — not a medical device.** SYNAPSE-24 has no regulatory clearance and must not be used for diagnosis or clinical decisions. See [COMPLIANCE.md](compliance/COMPLIANCE.md) and [PRIVACY.md](compliance/PRIVACY.md).
 
 ## Architecture Overview
 
@@ -327,18 +327,18 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 
 ## License
 
-SYNAPSE-24 is dual-licensed: **GNU AGPL v3.0 or later** ([LICENSE](LICENSE)) for open-source use, or a **commercial licence** for use without the AGPL obligations. See [LICENSING.md](LICENSING.md) for what that means and how to ask for a commercial licence.
+SYNAPSE-24 is dual-licensed: **GNU AGPL v3.0 or later** ([LICENSE](LICENSE)) for open-source use, or a **commercial licence** for use without the AGPL obligations. See [LICENSING.md](compliance/LICENSING.md) for what that means and how to ask for a commercial licence.
 
 | Document | Purpose |
 |----------|---------|
-| [LICENSING.md](LICENSING.md) | Dual-licensing terms, commercial inquiries |
-| [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) · [docs/sbom.spdx.json](docs/sbom.spdx.json) | Dependency licences and SBOM |
-| [SECURITY.md](SECURITY.md) | Reporting vulnerabilities |
-| [PRIVACY.md](PRIVACY.md) | Biosignal / GDPR status and deployer duties |
-| [COMPLIANCE.md](COMPLIANCE.md) | Regulatory position (not a medical device) and gaps |
+| [LICENSING.md](compliance/LICENSING.md) | Dual-licensing terms, commercial inquiries |
+| [THIRD-PARTY-LICENSES.md](compliance/THIRD-PARTY-LICENSES.md) · [docs/sbom.spdx.json](docs/sbom.spdx.json) | Dependency licences and SBOM |
+| [SECURITY.md](compliance/SECURITY.md) | Reporting vulnerabilities |
+| [PRIVACY.md](compliance/PRIVACY.md) | Biosignal / GDPR status and deployer duties |
+| [COMPLIANCE.md](compliance/COMPLIANCE.md) | Regulatory position (not a medical device) and gaps |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution rules, DCO sign-off and relicensing grant |
 
-Versions published before this change were released under the MIT License; see [LICENSING.md](LICENSING.md#earlier-releases).
+Versions published before this change were released under the MIT License; see [LICENSING.md](compliance/LICENSING.md#earlier-releases).
 
 ---
 
