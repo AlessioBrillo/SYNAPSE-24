@@ -10,15 +10,15 @@ static const char* TAG = "triage_features";
 
 // 4 s sliding windows owned by this module, filled by the IMU/PPG feature tasks.
 static float s_imu[TRIAGE_IMU_WIN][6];
-static float s_bvp[TRIAGE_PPG_WIN];
+static float s_ir[TRIAGE_PPG_WIN];  // raw IR; band-passed per window to match Python exactly
 static int s_imu_head, s_imu_count;
-static int s_bvp_head, s_bvp_count;
-static triage_bvp_filter_t s_bvp_filter;  // PPG task only
-static bool s_inited;
+static int s_ir_head, s_ir_count;
+static bool s_inited, s_busy;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Linearised copies for the DSP (static: keeps the triage task stack small).
 static float s_imu_lin[TRIAGE_IMU_WIN * 6];
+static float s_ir_lin[TRIAGE_PPG_WIN];
 static float s_bvp_lin[TRIAGE_PPG_WIN];
 
 esp_err_t triage_features_init(uint32_t imu_rate_hz, uint32_t ppg_rate_hz) {
@@ -28,8 +28,8 @@ esp_err_t triage_features_init(uint32_t imu_rate_hz, uint32_t ppg_rate_hz) {
         return ESP_ERR_INVALID_ARG;
     }
     portENTER_CRITICAL(&s_lock);
-    s_imu_head = s_imu_count = s_bvp_head = s_bvp_count = 0;
-    memset(&s_bvp_filter, 0, sizeof(s_bvp_filter));
+    s_imu_head = s_imu_count = s_ir_head = s_ir_count = 0;
+    s_busy = false;
     s_inited = true;
     portEXIT_CRITICAL(&s_lock);
     return ESP_OK;
@@ -46,41 +46,50 @@ void triage_features_push_imu(float ax, float ay, float az, float gx, float gy, 
 }
 
 void triage_features_push_ppg_ir(float ir) {
-    float bvp = triage_bvp_filter_step(&s_bvp_filter, ir);  // outside the lock: PPG task owns the filter
     portENTER_CRITICAL(&s_lock);
-    s_bvp[s_bvp_head] = bvp;
-    s_bvp_head = (s_bvp_head + 1) % TRIAGE_PPG_WIN;
-    if (s_bvp_count < TRIAGE_PPG_WIN) s_bvp_count++;
+    s_ir[s_ir_head] = ir;
+    s_ir_head = (s_ir_head + 1) % TRIAGE_PPG_WIN;
+    if (s_ir_count < TRIAGE_PPG_WIN) s_ir_count++;
     portEXIT_CRITICAL(&s_lock);
+}
+
+// Copies a ring (oldest -> newest) into dst as at most two contiguous memcpy.
+static void ring_linearise(float* dst, const float* ring, int head, int win, int row) {
+    size_t tail_rows = (size_t)(win - head);
+    memcpy(dst, ring + (size_t)head * row, tail_rows * row * sizeof(float));
+    memcpy(dst + tail_rows * row, ring, (size_t)head * row * sizeof(float));
 }
 
 esp_err_t triage_features_compute_live(triage_features_t* features_out) {
     if (!features_out) return ESP_ERR_INVALID_ARG;
     if (!s_inited) return ESP_ERR_INVALID_STATE;
 
-    int n_imu, n_bvp;
     portENTER_CRITICAL(&s_lock);
-    n_imu = s_imu_count;
-    n_bvp = s_bvp_count;
-    if (n_imu < TRIAGE_IMU_WIN) {  // wait for the full 4 s window the model was trained on
+    // Both windows must be full: the model was trained on complete 4 s IMU and BVP windows.
+    if (s_busy) {  // DSP + linearised scratch are shared; never run two computes at once
+        portEXIT_CRITICAL(&s_lock);
+        return ESP_ERR_NOT_FINISHED;
+    }
+    if (s_imu_count < TRIAGE_IMU_WIN || s_ir_count < TRIAGE_PPG_WIN) {
         portEXIT_CRITICAL(&s_lock);
         memset(features_out, 0, sizeof(*features_out));
         return ESP_ERR_INVALID_SIZE;
     }
-    // Oldest -> newest. When the buffer is full, head points at the oldest sample.
-    for (int i = 0; i < n_imu; i++) {
-        memcpy(&s_imu_lin[i * 6], s_imu[(s_imu_head + i) % TRIAGE_IMU_WIN], 6 * sizeof(float));
-    }
-    int bvp_start = (s_bvp_count < TRIAGE_PPG_WIN) ? 0 : s_bvp_head;
-    for (int i = 0; i < n_bvp; i++) {
-        s_bvp_lin[i] = s_bvp[(bvp_start + i) % TRIAGE_PPG_WIN];
-    }
+    s_busy = true;
+    // Full ring: head points at the oldest sample.
+    ring_linearise(s_imu_lin, &s_imu[0][0], s_imu_head, TRIAGE_IMU_WIN, 6);
+    ring_linearise(s_ir_lin, s_ir, s_ir_head, TRIAGE_PPG_WIN, 1);
     portEXIT_CRITICAL(&s_lock);
 
-    triage_features_from_window(s_imu_lin, n_imu, s_bvp_lin, n_bvp,
+    triage_bvp_from_ir(s_ir_lin, TRIAGE_PPG_WIN, s_bvp_lin);
+    triage_features_from_window(s_imu_lin, TRIAGE_IMU_WIN, s_bvp_lin, TRIAGE_PPG_WIN,
                                 (float)TRIAGE_IMU_FS_HZ, features_out->features);
     features_out->feature_count = TRIAGE_NUM_FEATURES;
     features_out->timestamp_us = esp_timer_get_time();
+
+    portENTER_CRITICAL(&s_lock);
+    s_busy = false;
+    portEXIT_CRITICAL(&s_lock);
     return ESP_OK;
 }
 

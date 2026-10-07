@@ -26,10 +26,6 @@ FS = int(TRIAGE_IMU_FS_HZ)
 N = 4 * FS
 
 
-class _BvpFilter(ctypes.Structure):
-    _fields_ = [("z", (ctypes.c_double * 2) * 2), ("primed", ctypes.c_int)]
-
-
 @pytest.fixture(scope="module")
 def dsp(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     cc = next((p for p in map(shutil.which, ("gcc", "cc", "clang")) if p), None)
@@ -45,8 +41,8 @@ def dsp(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     )  # fmt: skip
     d = ctypes.CDLL(str(lib))
     fp = ctypes.POINTER(ctypes.c_float)
-    d.triage_bvp_filter_step.restype = ctypes.c_float
-    d.triage_bvp_filter_step.argtypes = [ctypes.POINTER(_BvpFilter), ctypes.c_float]
+    d.triage_bvp_from_ir.restype = None
+    d.triage_bvp_from_ir.argtypes = [fp, ctypes.c_int, fp]
     d.triage_features_from_window.restype = None
     d.triage_features_from_window.argtypes = [
         fp,
@@ -64,8 +60,9 @@ def _c_features(d: ctypes.CDLL, imu: np.ndarray, ir: np.ndarray | None) -> np.nd
     imu_c = np.ascontiguousarray(imu[:, :6], dtype=np.float32)
     bvp = np.zeros(0, dtype=np.float32)
     if ir is not None:
-        f = _BvpFilter()
-        bvp = np.array([d.triage_bvp_filter_step(f, float(v)) for v in ir], dtype=np.float32)
+        ir_c = np.ascontiguousarray(ir, dtype=np.float32)
+        bvp = np.zeros(len(ir_c), dtype=np.float32)
+        d.triage_bvp_from_ir(ir_c.ctypes.data_as(fp), len(ir_c), bvp.ctypes.data_as(fp))
     out = np.zeros(TRIAGE_NUM_FEATURES, dtype=np.float32)
     d.triage_features_from_window(
         imu_c.ctypes.data_as(fp), len(imu_c), bvp.ctypes.data_as(fp), len(bvp),
@@ -93,6 +90,9 @@ def _case(name: str) -> tuple[np.ndarray, np.ndarray | None]:
     elif name == "motion":
         imu = np.cumsum(rng.normal(0, 0.2, (N, 9)), axis=0)
         ir = 1e5 + np.cumsum(rng.normal(0, 20, N))
+    elif name == "ir_drift":  # slow DC wander + step: where a free-running filter would diverge
+        imu = rng.normal(0, 0.1, (N, 9))
+        ir = 1e5 + 2000 * t + 5000 * (t > 2) + 300 * np.sin(2 * np.pi * 1.1 * t)
     elif name == "partial_ppg":
         imu = rng.normal(0, 0.1, (N, 9))
         ir = 1e5 + 300 * np.sin(2 * np.pi * 1.0 * t[:50])
@@ -101,7 +101,7 @@ def _case(name: str) -> tuple[np.ndarray, np.ndarray | None]:
     return imu.astype(np.float32), None if ir is None else ir.astype(np.float32)
 
 
-@pytest.mark.parametrize("name", ["rest", "motion", "partial_ppg"])
+@pytest.mark.parametrize("name", ["rest", "motion", "ir_drift", "partial_ppg"])
 def test_c_matches_python(dsp: ctypes.CDLL, name: str) -> None:
     imu, ir = _case(name)
     np.testing.assert_allclose(

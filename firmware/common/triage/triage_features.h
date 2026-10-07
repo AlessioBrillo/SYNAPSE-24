@@ -24,7 +24,8 @@ esp_err_t triage_features_init(uint32_t imu_rate_hz, uint32_t ppg_rate_hz);
 void triage_features_push_imu(float ax, float ay, float az, float gx, float gy, float gz);
 void triage_features_push_ppg_ir(float ir);
 
-// ESP_ERR_INVALID_STATE before init, ESP_ERR_INVALID_SIZE until the 4 s IMU window is full.
+// ESP_ERR_INVALID_STATE before init, ESP_ERR_INVALID_SIZE until both 4 s windows are full,
+// ESP_ERR_NOT_FINISHED if another compute is running (DSP scratch is shared).
 esp_err_t triage_features_compute_live(triage_features_t* features_out);
 
 float triage_compute_motion_intensity(const triage_features_t* features);

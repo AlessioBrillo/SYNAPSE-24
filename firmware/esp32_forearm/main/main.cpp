@@ -346,7 +346,10 @@ static void main_task_fn(void* arg) {
     xTaskCreate(sensor_task_fn, "ppg_task", 4096, &ppg_sensor, 10, &ppg_task);
     xTaskCreate(sensor_task_fn, "imu_task", 4096, &imu_sensor, 10, &imu_task);
 
-    ESP_ERROR_CHECK(triage_features_init(imu_sensor.sampling_rate_hz, ppg_sensor.sampling_rate_hz));
+    // Non-fatal: a rate change must not boot-loop a 24/7 wearable; triage just stays disabled.
+    if (triage_features_init(imu_sensor.sampling_rate_hz, ppg_sensor.sampling_rate_hz) != ESP_OK) {
+        ESP_LOGE(TAG, "Triage disabled: sensor rates must be 50 Hz (see triage_dsp.h)");
+    }
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ecg_sensor));
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &ppg_sensor));
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_scheduler, &imu_sensor));

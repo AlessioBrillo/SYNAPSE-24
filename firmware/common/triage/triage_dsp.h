@@ -12,10 +12,9 @@ extern "C" {
 #define TRIAGE_IMU_WIN   (TRIAGE_IMU_FS_HZ * TRIAGE_WINDOW_S)
 #define TRIAGE_PPG_WIN   (TRIAGE_PPG_FS_HZ * TRIAGE_WINDOW_S)
 
-/* Zero-initialised == unprimed; first step primes to steady state (scipy sosfilt_zi * x0). */
-typedef struct { double z[2][2]; int primed; } triage_bvp_filter_t;
-
-float triage_bvp_filter_step(triage_bvp_filter_t* f, float ir);
+/* Band-pass raw PPG IR (0.5-8 Hz @ 50 Hz) into a BVP-like AC signal, primed at ir[0].
+ * Same as feature_extraction.bvp_from_ir(); applied per window so both sides agree exactly. */
+void triage_bvp_from_ir(const float* ir, int n, float* bvp_out);
 
 /* imu: n_imu x 6 row-major (ax,ay,az,gx,gy,gz), oldest first, n_imu <= TRIAGE_IMU_WIN.
  * bvp: already band-passed, oldest first. Mirrors extract_triage_features_live(). */
