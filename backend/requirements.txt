@@ -6,6 +6,7 @@ pydantic-settings>=2.3.0
 python-multipart>=0.0.6
 websockets>=12.0
 pylsl>=1.16
+pyserial>=3.5
 numpy>=1.26.0
 pyyaml>=6.0.1
 python-dotenv>=1.0.1
