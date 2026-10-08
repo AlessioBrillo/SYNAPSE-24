@@ -1,4 +1,6 @@
 #include "triage_features.h"
+#include "ppg_dsp.h"
+#include "ppg_processor.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -46,6 +48,12 @@ void triage_features_push_imu(float ax, float ay, float az, float gx, float gy, 
 }
 
 void triage_features_push_ppg_ir(float ir) {
+    if (!ppg_processor_rate_nominal()) {  // motion-gated rate: drop the window, never time-warp it
+        portENTER_CRITICAL(&s_lock);
+        s_ir_head = s_ir_count = 0;
+        portEXIT_CRITICAL(&s_lock);
+        return;
+    }
     portENTER_CRITICAL(&s_lock);
     s_ir[s_ir_head] = ir;
     s_ir_head = (s_ir_head + 1) % TRIAGE_PPG_WIN;
@@ -81,7 +89,7 @@ esp_err_t triage_features_compute_live(triage_features_t* features_out) {
     ring_linearise(s_ir_lin, s_ir, s_ir_head, TRIAGE_PPG_WIN, 1);
     portEXIT_CRITICAL(&s_lock);
 
-    triage_bvp_from_ir(s_ir_lin, TRIAGE_PPG_WIN, s_bvp_lin);
+    ppg_bvp_bandpass(s_ir_lin, TRIAGE_PPG_WIN, s_bvp_lin);
     triage_features_from_window(s_imu_lin, TRIAGE_IMU_WIN, s_bvp_lin, TRIAGE_PPG_WIN,
                                 (float)TRIAGE_IMU_FS_HZ, features_out->features);
     features_out->feature_count = TRIAGE_NUM_FEATURES;

@@ -7,38 +7,6 @@
 #endif
 #define WELCH_MAX_NPERSEG 256
 
-/* butter(2, [0.5, 8.0], 'bandpass', fs=50, output='sos') - mirrors feature_extraction.BVP_SOS */
-static const double kSos[2][6] = {
-    {0.1311064399, 0.2622128798, 0.1311064399, 1.0, -0.7424725561, 0.2971177674},
-    {1.0, -2.0, 1.0, 1.0, -1.9119834584, 0.9161853239},
-};
-/* sosfilt_zi(kSos) */
-static const double kZi[2][2] = {{0.8144092681, -0.1498230763}, {-0.945515708, 0.945515708}};
-
-/* DF-II transposed, identical recurrence to scipy.signal.sosfilt. Double: IR DC ~1e5 counts. */
-typedef struct { double z[2][2]; } bvp_filter_t;
-
-static float bvp_filter_step(bvp_filter_t* f, float ir) {
-    double x = ir;
-    for (int s = 0; s < 2; s++) {
-        const double* c = kSos[s];
-        double y = c[0] * x + f->z[s][0];
-        f->z[s][0] = c[1] * x - c[4] * y + f->z[s][1];
-        f->z[s][1] = c[2] * x - c[5] * y;
-        x = y;
-    }
-    return (float)x;
-}
-
-void triage_bvp_from_ir(const float* ir, int n, float* bvp_out) {
-    bvp_filter_t f;
-    for (int s = 0; s < 2; s++) {
-        f.z[s][0] = kZi[s][0] * (n > 0 ? ir[0] : 0.0f);
-        f.z[s][1] = kZi[s][1] * (n > 0 ? ir[0] : 0.0f);
-    }
-    for (int i = 0; i < n; i++) bvp_out[i] = bvp_filter_step(&f, ir[i]);
-}
-
 /* One-sided Welch PSD as scipy.signal.welch defaults: periodic Hann, nperseg=min(256,n),
  * 50% overlap, constant detrend, mean average. Density scale omitted: cancels in
  * entropy normalisation and argmax. Static scratch: NOT reentrant; triage_features.cpp serialises callers. */

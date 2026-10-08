@@ -128,9 +128,10 @@ config SYNAPSE_PPG_LED_CURRENT_GREEN
 
 config SYNAPSE_PPG_SAMPLE_RATE
     hex "PPG Sample Rate Register"
-    default 0x03
+    default 0x02
     help
         MAX30102 sample rate register. 0x02=50Hz, 0x03=64Hz, 0x04=100Hz.
+        On-device HR/HRV and edge triage are designed for 50 Hz (ppg_dsp.h).
 
 config SYNAPSE_PPG_PULSE_WIDTH
     hex "PPG Pulse Width Register"
@@ -179,13 +180,13 @@ config SYNAPSE_IMU_GYRO_FSR_DPS
 
 config SYNAPSE_IMU_ACCEL_ODR_HZ
     int "IMU Accelerometer ODR (Hz)"
-    default 100
+    default 50
     help
         Accelerometer output data rate in Hz.
 
 config SYNAPSE_IMU_GYRO_ODR_HZ
     int "IMU Gyroscope ODR (Hz)"
-    default 100
+    default 50
     help
         Gyroscope output data rate in Hz.
 

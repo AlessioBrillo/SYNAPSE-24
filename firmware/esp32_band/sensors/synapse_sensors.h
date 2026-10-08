@@ -97,7 +97,7 @@ esp_err_t synapse_sensors_deinit(void);
 /**
  * @brief Get latest sensor sample (non-blocking)
  * @param[out] sample Pointer to sample struct
- * @return ESP_OK if sample available, ESP_ERR_TIMEOUT if queue empty
+ * @return ESP_OK if sample available, ESP_ERR_NOT_FOUND if queue empty (gps/temp fields are zero)
  */
 esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample);
 

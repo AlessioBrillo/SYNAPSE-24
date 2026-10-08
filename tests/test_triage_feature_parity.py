@@ -7,10 +7,6 @@ extract_triage_features_live() on bit-identical float32 inputs.
 from __future__ import annotations
 
 import ctypes
-import os
-import shutil
-import subprocess
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -20,29 +16,22 @@ from synapse24.edge_ai.feature_extraction import (
     TRIAGE_NUM_FEATURES,
     extract_triage_features_live,
 )
+from tests.firmware_host import COMMON, build, load  # noqa: E402
 
-SRC = Path(__file__).resolve().parents[1] / "firmware" / "common" / "triage" / "triage_dsp.c"
 FS = int(TRIAGE_IMU_FS_HZ)
 N = 4 * FS
 
 
 @pytest.fixture(scope="module")
 def dsp(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
-    cc = next((p for p in map(shutil.which, ("gcc", "cc", "clang")) if p), None)
-    if cc is None:
-        if os.environ.get("CI"):
-            pytest.fail("no C compiler on CI; triage parity gate cannot run")
-        pytest.skip("no C compiler available")
-    lib = tmp_path_factory.mktemp("triage") / ("dsp.dll" if os.name == "nt" else "dsp.so")
-    subprocess.run(
-        [cc, "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
-         "-o", str(lib), str(SRC), "-lm"],
-        check=True,
-    )  # fmt: skip
-    d = ctypes.CDLL(str(lib))
+    lib = build(
+        tmp_path_factory.mktemp("triage"),
+        [COMMON / "triage" / "triage_dsp.c", COMMON / "sensors" / "ppg_dsp.c"],
+    )
+    d = load(lib)
     fp = ctypes.POINTER(ctypes.c_float)
-    d.triage_bvp_from_ir.restype = None
-    d.triage_bvp_from_ir.argtypes = [fp, ctypes.c_int, fp]
+    d.ppg_bvp_bandpass.restype = None
+    d.ppg_bvp_bandpass.argtypes = [fp, ctypes.c_int, fp]
     d.triage_features_from_window.restype = None
     d.triage_features_from_window.argtypes = [
         fp,
@@ -62,7 +51,7 @@ def _c_features(d: ctypes.CDLL, imu: np.ndarray, ir: np.ndarray | None) -> np.nd
     if ir is not None:
         ir_c = np.ascontiguousarray(ir, dtype=np.float32)
         bvp = np.zeros(len(ir_c), dtype=np.float32)
-        d.triage_bvp_from_ir(ir_c.ctypes.data_as(fp), len(ir_c), bvp.ctypes.data_as(fp))
+        d.ppg_bvp_bandpass(ir_c.ctypes.data_as(fp), len(ir_c), bvp.ctypes.data_as(fp))
     out = np.zeros(TRIAGE_NUM_FEATURES, dtype=np.float32)
     d.triage_features_from_window(
         imu_c.ctypes.data_as(fp), len(imu_c), bvp.ctypes.data_as(fp), len(bvp),
@@ -104,8 +93,13 @@ def _case(name: str) -> tuple[np.ndarray, np.ndarray | None]:
 @pytest.mark.parametrize("name", ["rest", "motion", "ir_drift", "partial_ppg"])
 def test_c_matches_python(dsp: ctypes.CDLL, name: str) -> None:
     imu, ir = _case(name)
-    np.testing.assert_allclose(
-        _c_features(dsp, imu, ir), _py_features(imu, ir), rtol=1e-4, atol=1e-4
+    atol = np.full(TRIAGE_NUM_FEATURES, 1e-4)
+    if ir is not None:  # BVP mean/std: float32 filter error scales with the input AC amplitude
+        atol[24:] = max(1e-4, 1e-6 * float(np.ptp(ir)))
+    c, py = _c_features(dsp, imu, ir), _py_features(imu, ir)
+    bad = np.abs(c - py) > atol + 1e-4 * np.abs(py)
+    assert not bad.any(), (
+        f"features {np.flatnonzero(bad)}: C={c[bad]} py={py[bad]} atol={atol[bad]}"
     )
 
 

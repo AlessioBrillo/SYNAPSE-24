@@ -16,6 +16,7 @@
 #include "triage_inference.h"
 #include "triage_features.h"
 #include "sensor_scheduler.h"
+#include "synapse_config.h"
 
 static const char *TAG = "SYNAPSE_EDGE_AI";
 
@@ -108,8 +109,16 @@ esp_err_t synapse_edge_ai_init(void) {
         return ret;
     }
     
-    // Triage owns its sample window; the acquisition path must call
-    // triage_features_init() and triage_features_push_*() (follow-up: band wiring).
+    // Triage owns its 4 s window, fed by synapse_signal_quality_process(). It only supports
+    // 50 Hz IMU/PPG; on other rates log and keep triage disabled rather than abort boot.
+    synapse_hw_config_t hw_cfg;
+    if (synapse_config_get(&hw_cfg) == ESP_OK) {
+        uint32_t ppg_hz = (hw_cfg.ppg_sample_rate == 0x02) ? 50 : 64;
+        if (triage_features_init((uint32_t)hw_cfg.imu_accel_odr_hz, ppg_hz) != ESP_OK) {
+            ESP_LOGE(TAG, "Stress triage disabled: need 50 Hz IMU/PPG (have imu=%d ppg=%u)",
+                     hw_cfg.imu_accel_odr_hz, (unsigned)ppg_hz);
+        }
+    }
     
     memset(&g_edge_ai.latest_stress, 0, sizeof(stress_triage_t));
     memset(&g_edge_ai.latest_motion, 0, sizeof(motion_classifier_t));

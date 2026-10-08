@@ -16,7 +16,7 @@ extern "C" {
 
 #define PPG_PROCESSOR_WINDOW_SEC      5
 #define PPG_PROCESSOR_OUTPUT_HZ       10
-#define PPG_PROCESSOR_SAMPLE_RATE_HZ  50   // Tier 0: 50 Hz (changed from 64)
+#define PPG_PROCESSOR_SAMPLE_RATE_HZ  50   // Tier 0: 50 Hz; ppg_dsp.h filter coefficients assume this
 #define PPG_PROCESSOR_WINDOW_SAMPLES  (PPG_PROCESSOR_WINDOW_SEC * PPG_PROCESSOR_SAMPLE_RATE_HZ)
 #define PPG_PROCESSOR_MIN_PEAKS       3
 
@@ -51,7 +51,7 @@ typedef struct {
     
     // Output decimation
     int samples_since_output;
-    int output_every;  // 64Hz / 10Hz = 6.4 -> alternate 6/7
+    int output_every;  // 50Hz / 10Hz = 5
     
     // Cached latest features
     ppg_features_t last_features;
@@ -60,12 +60,15 @@ typedef struct {
 // Initialize PPG processor
 esp_err_t ppg_processor_init(void);
 
-// Process PPG sample (called from PPG driver at 64Hz)
+// Process PPG sample (called from PPG driver at 50Hz)
 // Returns ESP_OK if features were computed this call, ESP_ERR_NOT_FINISHED otherwise
 esp_err_t ppg_processor_process_sample(float red, float ir, int64_t timestamp_us, const ppg_sqi_result_t* sqi, ppg_features_t* features_out);
 
 // Get latest computed features
 esp_err_t ppg_processor_get_latest(ppg_features_t* features_out);
+
+// True when the PPG scheduler rate equals PPG_PROCESSOR_SAMPLE_RATE_HZ (not motion-gated down)
+bool ppg_processor_rate_nominal(void);
 
 // Reset processor state
 esp_err_t ppg_processor_reset(void);
