@@ -189,7 +189,6 @@ module = [
     "tensorflow.*",
     "edgeimpulse.*",
     "sklearn.*",
-    "flatbuffers.*",
     "mne.*",
     "yasa.*",
 ]

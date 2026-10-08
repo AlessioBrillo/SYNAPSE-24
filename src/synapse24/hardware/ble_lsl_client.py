@@ -196,7 +196,7 @@ class SynapseBleClient:
 
     async def scan(self, timeout_s: float = 10.0) -> str | None:
         """Scan for a SYNAPSE device; return its address or ``None``."""
-        from bleak import BleakScanner  # type: ignore[import-not-found]
+        from bleak import BleakScanner
 
         devices = await BleakScanner.discover(timeout=timeout_s)
         filt = self.device_name_filter.upper()
@@ -210,17 +210,17 @@ class SynapseBleClient:
 
     async def sync_exchange(self, client: object, num_exchanges: int = 1) -> list[SyncExchange]:
         """Run ``num_exchanges`` ping-pong exchanges on an open BleakClient."""
-        from bleak import BleakClient  # type: ignore[import-not-found]
+        from bleak import BleakClient
 
         results: list[SyncExchange] = []
         ble_client = client  # typed as object to avoid hard bleak dependency
         for _ in range(num_exchanges):
             self._next_seq += 1
             pod_send = self.now_us()
-            await ble_client.write_gatt_char(  # type: ignore[attr-defined]
+            await ble_client.write_gatt_char(
                 GATT_CHAR_UUID_SYNC, pack_sync_request(self._next_seq, pod_send), response=False
             )
-            raw = bytes(await ble_client.read_gatt_char(GATT_CHAR_UUID_SYNC))  # type: ignore[attr-defined]
+            raw = bytes(await ble_client.read_gatt_char(GATT_CHAR_UUID_SYNC))
             pod_recv = self.now_us()
             seq, hub_recv, hub_send = unpack_sync_response(raw)
             results.append(
