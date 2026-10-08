@@ -21,6 +21,9 @@
 
 static const char *TAG = "SYNAPSE_SQ";
 
+// ppg_dsp / ppg_processor are designed for 50 Hz PPG; fail the build rather than report HR wrong by 64/50.
+_Static_assert(CONFIG_SYNAPSE_PPG_SAMPLE_RATE == 0x02, "SYNAPSE_PPG_SAMPLE_RATE must be 0x02 (50 Hz)");
+
 static ppg_quality_t g_latest_ppg_quality = {0};
 static ecg_quality_t g_latest_ecg_quality = {0};
 static imu_quality_t g_latest_imu_quality = {0};
@@ -60,18 +63,19 @@ esp_err_t synapse_signal_quality_process(const synapse_sensor_sample_t *sample) 
 
     // Feed the processors / triage window (nothing else did: they only exposed get_latest()).
     ppg_sqi_result_t feed_sqi = {0};
+    bool ppg_new = false, imu_new = false;  // processors emit 10 Hz / 1 Hz, not per sample
     switch (sample->base.type) {
     case SENSOR_TYPE_PPG:
         (void)ppg_max30102_get_sqi(&feed_sqi);
-        (void)ppg_processor_process_sample(sample->base.data.ppg.red, sample->base.data.ppg.ir,
-                                           sample->base.timestamp_us, &feed_sqi, NULL);
+        ppg_new = ppg_processor_process_sample(sample->base.data.ppg.red, sample->base.data.ppg.ir,
+                                               sample->base.timestamp_us, &feed_sqi, NULL) == ESP_OK;
         triage_features_push_ppg_ir(sample->base.data.ppg.ir);
         break;
     case SENSOR_TYPE_IMU:
-        (void)imu_processor_process_sample(sample->base.data.imu.ax, sample->base.data.imu.ay,
-                                           sample->base.data.imu.az, sample->base.data.imu.gx,
-                                           sample->base.data.imu.gy, sample->base.data.imu.gz,
-                                           sample->base.timestamp_us, NULL);
+        imu_new = imu_processor_process_sample(sample->base.data.imu.ax, sample->base.data.imu.ay,
+                                               sample->base.data.imu.az, sample->base.data.imu.gx,
+                                               sample->base.data.imu.gy, sample->base.data.imu.gz,
+                                               sample->base.timestamp_us, NULL) == ESP_OK;
         triage_features_push_imu(sample->base.data.imu.ax, sample->base.data.imu.ay,
                                  sample->base.data.imu.az, sample->base.data.imu.gx,
                                  sample->base.data.imu.gy, sample->base.data.imu.gz);
@@ -79,10 +83,11 @@ esp_err_t synapse_signal_quality_process(const synapse_sensor_sample_t *sample) 
     default:
         return ESP_OK;  // ECG (500 Hz) has no processor here; skip the aggregate update
     }
+    if (!ppg_new && !imu_new) return ESP_OK;  // keep quality timestamps honest: no new features
     
     // Process PPG quality
     ppg_sqi_result_t sqi_result;
-    if (ppg_max30102_get_sqi(&sqi_result) == ESP_OK) {
+    if (ppg_new && ppg_max30102_get_sqi(&sqi_result) == ESP_OK) {
         // Get PPG features from processor
         ppg_features_t ppg_feat;
         if (ppg_processor_get_latest(&ppg_feat) == ESP_OK && ppg_feat.valid) {
@@ -104,7 +109,7 @@ esp_err_t synapse_signal_quality_process(const synapse_sensor_sample_t *sample) 
     
     // Process IMU quality
     imu_features_t imu_feat;
-    if (imu_processor_get_latest(&imu_feat) == ESP_OK) {
+    if (imu_new && imu_processor_get_latest(&imu_feat) == ESP_OK) {
         if (xSemaphoreTake(g_quality_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             g_latest_imu_quality.motion_intensity = imu_feat.motion_intensity;
             g_latest_imu_quality.spectral_entropy = imu_feat.spectral_entropy;

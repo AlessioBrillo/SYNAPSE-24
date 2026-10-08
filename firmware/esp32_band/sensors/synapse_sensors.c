@@ -115,7 +115,7 @@ esp_err_t synapse_sensors_init(void) {
     populate_sensor_configs(&hw_cfg);
 
     // Create sample queue
-    g_sensors.sample_queue = xQueueCreate(64, sizeof(synapse_sensor_sample_t));
+    g_sensors.sample_queue = xQueueCreate(64, sizeof(sensor_sample_t)) /* scheduler enqueues plain sensor_sample_t */;
     if (!g_sensors.sample_queue) {
         ESP_LOGE(TAG, "Failed to create sample queue");
         return ESP_ERR_NO_MEM;
@@ -253,8 +253,13 @@ esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample) {
     if (!sample) return ESP_ERR_INVALID_ARG;
     if (!g_sensors.initialized || !g_sensors.sample_queue) return ESP_ERR_INVALID_STATE;
 
-    // xQueueReceive returns pdTRUE(1) on success: do not leak that as esp_err_t (1 != ESP_OK)
-    return xQueueReceive(g_sensors.sample_queue, sample, 0) == pdTRUE ? ESP_OK : ESP_ERR_NOT_FOUND;
+    // Items are sensor_sample_t (what the scheduler sends); GPS/temp stay zero here -
+    // use synapse_sensors_get_gps/get_temp. xQueueReceive returns pdTRUE(1), not ESP_OK.
+    sensor_sample_t base;
+    if (xQueueReceive(g_sensors.sample_queue, &base, 0) != pdTRUE) return ESP_ERR_NOT_FOUND;
+    memset(sample, 0, sizeof(*sample));
+    sample->base = base;
+    return ESP_OK;
 }
 
 esp_err_t synapse_sensors_get_gps(gps_data_t *gps) {

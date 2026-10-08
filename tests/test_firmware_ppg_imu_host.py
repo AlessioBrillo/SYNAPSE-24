@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.firmware_host import COMMON, ROOT, build
+from tests.firmware_host import COMMON, ROOT, build, load
 
 FS = 50
 HOST = ROOT / "tests" / "firmware_host"
@@ -75,7 +75,7 @@ def fw(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         c_sources=[COMMON / "sensors" / "ppg_dsp.c", HOST / "host_glue.c"],
         cpp_sources=[COMMON / "sensors" / "ppg_processor.cpp", COMMON / "sensors" / "imu_processor.cpp"],
     )  # fmt: skip
-    d = ctypes.CDLL(str(lib))
+    d = load(lib)
     d.ppg_dsp_analyse.argtypes = [fp, ctypes.c_int, ctypes.POINTER(DspResult)]
     d.ppg_processor_init.restype = ctypes.c_int
     d.ppg_processor_process_sample.restype = ctypes.c_int
@@ -89,6 +89,8 @@ def fw(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         ctypes.c_int64, ctypes.POINTER(ImuFeatures),
     ]  # fmt: skip
     d.host_last_ppg_rate.restype = ctypes.c_uint32
+    d.host_set_ppg_rate.argtypes = [ctypes.c_uint32]
+    d.host_set_ppg_rate.restype = None
     return d
 
 
@@ -151,7 +153,8 @@ def test_ppg_processor_streams_features_at_10hz(fw: ctypes.CDLL) -> None:
             if i >= 6 * FS and out.valid:  # window (5 s) full
                 hrs.append(out.hr_bpm)
     gaps = np.diff(emitted)
-    assert len(emitted) >= 190, len(emitted)  # ~10 Hz over 20 s
+    assert emitted[0] >= FS * 5 // 2 - 1  # nothing reported before the window is half full
+    assert len(emitted) >= 170, len(emitted)  # ~10 Hz from 2.5 s to 20 s
     assert set(gaps) == {5}, set(gaps)  # 50 Hz / 10 Hz, no stale 6/7 alternation
     assert len(hrs) > 100
     true_hr = 60.0 / np.mean(np.diff(beats))
@@ -184,3 +187,24 @@ def test_imu_processor_ring_order_before_fill(fw: ctypes.CDLL) -> None:
             got = out.acc_rms_x
     assert got is not None
     assert abs(got - 1.0) < 1e-3  # zero-padded wrap would give ~0.7
+
+
+def test_ppg_processor_ignores_motion_gated_rate(fw: ctypes.CDLL) -> None:
+    """At 16 Hz (motion gate) the 50 Hz DSP would time-warp the window: drop and restart."""
+    assert fw.ppg_processor_init() == 0
+    ir, _ = synth_ppg(12.0, seed=5)
+    sqi, out = PpgSqi(0.9, 2.0, 0.05, 0), PpgFeatures()
+
+    def ret(v: float, i: int) -> int:
+        return fw.ppg_processor_process_sample(
+            v, v, i * 20000, ctypes.byref(sqi), ctypes.byref(out)
+        )
+
+    fw.host_set_ppg_rate(16)
+    try:
+        assert all(ret(v, i) == 0x10B for i, v in enumerate(ir[:200]))  # NOT_FINISHED, never ESP_OK
+    finally:
+        fw.host_set_ppg_rate(50)
+    emitted = [i for i, v in enumerate(ir) if ret(v, i) == 0]
+    assert emitted
+    assert emitted[0] >= 125 - 1  # window restarted from empty after the gated period

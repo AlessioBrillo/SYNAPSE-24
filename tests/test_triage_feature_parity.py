@@ -16,7 +16,7 @@ from synapse24.edge_ai.feature_extraction import (
     TRIAGE_NUM_FEATURES,
     extract_triage_features_live,
 )
-from tests.firmware_host import COMMON, build  # noqa: E402
+from tests.firmware_host import COMMON, build, load  # noqa: E402
 
 FS = int(TRIAGE_IMU_FS_HZ)
 N = 4 * FS
@@ -28,7 +28,7 @@ def dsp(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         tmp_path_factory.mktemp("triage"),
         [COMMON / "triage" / "triage_dsp.c", COMMON / "sensors" / "ppg_dsp.c"],
     )
-    d = ctypes.CDLL(str(lib))
+    d = load(lib)
     fp = ctypes.POINTER(ctypes.c_float)
     d.ppg_bvp_bandpass.restype = None
     d.ppg_bvp_bandpass.argtypes = [fp, ctypes.c_int, fp]
@@ -93,8 +93,13 @@ def _case(name: str) -> tuple[np.ndarray, np.ndarray | None]:
 @pytest.mark.parametrize("name", ["rest", "motion", "ir_drift", "partial_ppg"])
 def test_c_matches_python(dsp: ctypes.CDLL, name: str) -> None:
     imu, ir = _case(name)
-    np.testing.assert_allclose(
-        _c_features(dsp, imu, ir), _py_features(imu, ir), rtol=1e-4, atol=1e-4
+    atol = np.full(TRIAGE_NUM_FEATURES, 1e-4)
+    if ir is not None:  # BVP mean/std: float32 filter error scales with the input AC amplitude
+        atol[24:] = max(1e-4, 1e-6 * float(np.ptp(ir)))
+    c, py = _c_features(dsp, imu, ir), _py_features(imu, ir)
+    bad = np.abs(c - py) > atol + 1e-4 * np.abs(py)
+    assert not bad.any(), (
+        f"features {np.flatnonzero(bad)}: C={c[bad]} py={py[bad]} atol={atol[bad]}"
     )
 
 

@@ -13,4 +13,6 @@ idf_component_register(SRCS "synapse_sensors.c" "gps_max_m10s.c" "temp_tmp117.c"
 # imu_processor must run at the real IMU ODR (Kconfig); triage needs 50 Hz (triage_features_init checks).
 if(DEFINED CONFIG_SYNAPSE_IMU_ACCEL_ODR_HZ)
     target_compile_definitions(${COMPONENT_LIB} PUBLIC IMU_PROCESSOR_SAMPLE_RATE_HZ=${CONFIG_SYNAPSE_IMU_ACCEL_ODR_HZ})
+else()
+    message(FATAL_ERROR "CONFIG_SYNAPSE_IMU_ACCEL_ODR_HZ undefined: imu_processor rate would silently default")
 endif()

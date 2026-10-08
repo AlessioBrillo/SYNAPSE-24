@@ -162,8 +162,8 @@ static float compute_tilt_angles(const float* ax, const float* ay, const float* 
     *tilt_z = atan2f(mean_ay, mean_ax) * 180.0f / PI_VALUE;
     
     // Compute tilt variance (stationarity indicator)
-    float tilt_x_vals[IMU_PROCESSOR_WINDOW_SAMPLES];
-    float tilt_y_vals[IMU_PROCESSOR_WINDOW_SAMPLES];
+    static float tilt_x_vals[IMU_PROCESSOR_WINDOW_SAMPLES];
+    static float tilt_y_vals[IMU_PROCESSOR_WINDOW_SAMPLES];
     for (size_t i = 0; i < count; i++) {
         float n = fast_sqrtf(ax[i]*ax[i] + ay[i]*ay[i] + az[i]*az[i]);
         if (n > 0.01f) {
@@ -195,6 +195,8 @@ float imu_sleep_wake_classify(const imu_features_t* features) {
     return fmaxf(0.0f, fminf(1.0f, prob));
 }
 
+// Window scratch is static (~18 KB would overflow the 4 KB feature/main task stacks);
+// this makes the processor single-caller, which is how every firmware uses it.
 esp_err_t imu_processor_process_sample(float ax, float ay, float az, 
                                        float gx, float gy, float gz,
                                        int64_t timestamp_us, imu_features_t* features_out) {
@@ -224,12 +226,12 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
         }
         
         // Reconstruct linear buffers from circular
-        float ax_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
-        float ay_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
-        float az_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
-        float gx_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
-        float gy_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
-        float gz_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float ax_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float ay_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float az_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float gx_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float gy_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float gz_lin[IMU_PROCESSOR_WINDOW_SAMPLES];
         
         // Oldest first: before the ring is full it starts at 0, not write_idx.
         size_t oldest = (s_ctx.count < IMU_PROCESSOR_WINDOW_SAMPLES) ? 0 : s_ctx.write_idx;
@@ -277,7 +279,7 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
                                              &features.tilt_x_deg, &features.tilt_y_deg, &features.tilt_z_deg);
         
         // Spectral entropy (on acceleration magnitude)
-        float acc_mag[IMU_PROCESSOR_WINDOW_SAMPLES];
+        static float acc_mag[IMU_PROCESSOR_WINDOW_SAMPLES];
         for (size_t i = 0; i < s_ctx.count; i++) {
             acc_mag[i] = fast_sqrtf(ax_lin[i]*ax_lin[i] + ay_lin[i]*ay_lin[i] + az_lin[i]*az_lin[i]);
         }

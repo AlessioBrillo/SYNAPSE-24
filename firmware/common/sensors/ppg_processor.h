@@ -67,6 +67,9 @@ esp_err_t ppg_processor_process_sample(float red, float ir, int64_t timestamp_us
 // Get latest computed features
 esp_err_t ppg_processor_get_latest(ppg_features_t* features_out);
 
+// True when the PPG scheduler rate equals PPG_PROCESSOR_SAMPLE_RATE_HZ (not motion-gated down)
+bool ppg_processor_rate_nominal(void);
+
 // Reset processor state
 esp_err_t ppg_processor_reset(void);
 

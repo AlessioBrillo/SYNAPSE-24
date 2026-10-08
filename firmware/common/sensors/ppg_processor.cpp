@@ -45,9 +45,20 @@ static esp_err_t compute_features(const float* ir_buffer, size_t count, int64_t 
     return ESP_OK;
 }
 
+bool ppg_processor_rate_nominal(void) {
+    // The motion gate drops PPG to 16 Hz while moving; the DSP is designed for 50 Hz.
+    return !g_sensor_scheduler_ptr ||
+           g_sensor_scheduler_ptr->rates_hz[SENSOR_TYPE_PPG] == PPG_PROCESSOR_SAMPLE_RATE_HZ;
+}
+
 esp_err_t ppg_processor_process_sample(float red, float ir, int64_t timestamp_us, const ppg_sqi_result_t* sqi, ppg_features_t* features_out) {
     if (!s_ctx.initialized) {
         ppg_processor_init();
+    }
+
+    if (!ppg_processor_rate_nominal()) {  // off-rate samples would time-warp the window
+        if (s_ctx.count) ppg_processor_reset();
+        return ESP_ERR_NOT_FINISHED;
     }
     
     // Add to circular buffer
@@ -77,9 +88,10 @@ esp_err_t ppg_processor_process_sample(float red, float ir, int64_t timestamp_us
         int64_t window_center_ts = timestamp_us - ((int64_t)s_ctx.count / 2) * (1000000 / PPG_PROCESSOR_SAMPLE_RATE_HZ);
         
         esp_err_t ret = compute_features(linear_ir, s_ctx.count, window_center_ts, sqi, &s_ctx.last_features);
-        if (ret == ESP_OK && features_out) {
-            *features_out = s_ctx.last_features;
+        if (ret != ESP_OK) {  // window not half full yet (INVALID_SIZE) or bad args: nothing written
+            return ret == ESP_ERR_INVALID_SIZE ? ESP_ERR_NOT_FINISHED : ret;
         }
+        if (features_out) *features_out = s_ctx.last_features;
         return ESP_OK;  // Features computed this call
     }
     
@@ -98,6 +110,6 @@ esp_err_t ppg_processor_reset(void) {
     memset(&s_ctx, 0, sizeof(ppg_processor_ctx_t));
     s_ctx.output_every = PPG_PROCESSOR_SAMPLE_RATE_HZ / PPG_PROCESSOR_OUTPUT_HZ;
     s_ctx.initialized = true;
-    ESP_LOGI(TAG, "PPG Processor reset");
+    ESP_LOGD(TAG, "PPG Processor reset");
     return ESP_OK;
 }

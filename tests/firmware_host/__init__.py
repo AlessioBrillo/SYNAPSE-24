@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import subprocess
@@ -59,3 +60,13 @@ def build(out_dir: Path, c_sources: list[Path], cpp_sources: list[Path] | None =
     linker = cxx if cpp_sources else cc
     subprocess.run([str(linker), "-shared", "-o", str(lib), *objs, "-lm"], check=True)  # noqa: S603
     return lib
+
+
+def load(lib: Path) -> ctypes.CDLL:
+    """Load the built library; OS policy blocks (e.g. Windows App Control) skip locally, fail on CI."""
+    try:
+        return ctypes.CDLL(str(lib))
+    except OSError as exc:
+        if os.environ.get("CI"):
+            raise
+        pytest.skip(f"cannot load freshly built library on this host: {exc}")
