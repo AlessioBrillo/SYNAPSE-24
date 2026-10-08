@@ -253,7 +253,8 @@ esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample) {
     if (!sample) return ESP_ERR_INVALID_ARG;
     if (!g_sensors.initialized || !g_sensors.sample_queue) return ESP_ERR_INVALID_STATE;
 
-    return xQueueReceive(g_sensors.sample_queue, sample, 0);
+    // xQueueReceive returns pdTRUE(1) on success: do not leak that as esp_err_t (1 != ESP_OK)
+    return xQueueReceive(g_sensors.sample_queue, sample, 0) == pdTRUE ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t synapse_sensors_get_gps(gps_data_t *gps) {

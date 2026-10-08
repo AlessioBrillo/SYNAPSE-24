@@ -134,6 +134,12 @@ void app_main(void)
     // 14. Main loop - runs acquisition FSM and handles events
     ESP_LOGI(TAG, "Entering main loop");
     while (1) {
+        // Drain the sensor queue into the on-device processors (bounded per tick)
+        synapse_sensor_sample_t sample;
+        for (int n = 0; n < 64 && synapse_sensors_get_sample(&sample) == ESP_OK; n++) {
+            synapse_signal_quality_process(&sample);
+        }
+
         // Handle acquisition FSM tick (T0/T1/T2 state machine)
         synapse_acquisition_tick();
 
