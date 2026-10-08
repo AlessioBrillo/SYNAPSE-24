@@ -1,4 +1,5 @@
 #include "triage_features.h"
+#include "ppg_dsp.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -81,7 +82,7 @@ esp_err_t triage_features_compute_live(triage_features_t* features_out) {
     ring_linearise(s_ir_lin, s_ir, s_ir_head, TRIAGE_PPG_WIN, 1);
     portEXIT_CRITICAL(&s_lock);
 
-    triage_bvp_from_ir(s_ir_lin, TRIAGE_PPG_WIN, s_bvp_lin);
+    ppg_bvp_bandpass(s_ir_lin, TRIAGE_PPG_WIN, s_bvp_lin);
     triage_features_from_window(s_imu_lin, TRIAGE_IMU_WIN, s_bvp_lin, TRIAGE_PPG_WIN,
                                 (float)TRIAGE_IMU_FS_HZ, features_out->features);
     features_out->feature_count = TRIAGE_NUM_FEATURES;

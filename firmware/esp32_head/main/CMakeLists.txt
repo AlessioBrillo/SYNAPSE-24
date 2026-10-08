@@ -7,6 +7,7 @@ idf_component_register(
         "../../common/sensors/ppg_max30102.cpp"
         "../../common/sensors/ppg_sqi.cpp"
         "../../common/sensors/ppg_processor.cpp"
+        "../../common/sensors/ppg_dsp.c"
         "../../common/sensors/imu_icm20948.cpp"
         "../../common/sensors/imu_processor.cpp"
         "../../common/ble/ble_lsl_bridge.cpp"
