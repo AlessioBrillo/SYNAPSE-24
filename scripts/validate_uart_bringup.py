@@ -37,17 +37,17 @@ def validate_uart_stream(port: str, baudrate: int, duration_s: float, output_dir
     logger.info("Opening serial port %s at %d baud...", port, baudrate)
     try:
         ser = serial.Serial(port, baudrate, timeout=1.0)
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to open serial port %s", port)
-        raise e
+        raise
 
     logger.info("Listening for sensor telemetry for %.1f seconds...", duration_s)
     start_time = time.time()
-    
+
     sample_counts = {"ECG": 0, "PPG": 0, "IMU": 0}
     last_timestamps = {"ECG": 0.0, "PPG": 0.0, "IMU": 0.0}
     jitters = {"ECG": [], "PPG": [], "IMU": []}
-    
+
     raw_lines_captured = 0
 
     try:
@@ -55,7 +55,7 @@ def validate_uart_stream(port: str, baudrate: int, duration_s: float, output_dir
             line = ser.readline()
             if not line:
                 continue
-            
+
             try:
                 decoded = line.decode("utf-8", errors="ignore").strip()
             except Exception:
@@ -65,7 +65,7 @@ def validate_uart_stream(port: str, baudrate: int, duration_s: float, output_dir
                 continue
 
             raw_lines_captured += 1
-            
+
             # Example parsing of ESP_LOG output or custom telemetry frames
             # e.g., "[I] [synapse_tier0] ECG: val=... time=..."
             if "ECG" in decoded:
