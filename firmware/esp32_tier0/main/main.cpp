@@ -241,14 +241,14 @@ static void clock_sync_task_fn(void* arg) {
     clock_sync_t* sync = (clock_sync_t*)arg;
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t period_ticks = pdMS_TO_TICKS(CLOCK_SYNC_EXCHANGE_INTERVAL_MS);  // 1Hz
-    
+
     ESP_LOGI(TAG, "Clock Sync Task started (1Hz exchange)");
-    
+
     while (1) {
         vTaskDelayUntil(&last_wake, period_ticks);
-        
+
         if (!g_ble_bridge.running || !ble_lsl_bridge_is_connected(&g_ble_bridge)) continue;
-        
+
         // Send sync request
         int64_t pod_send_us;
         if (clock_sync_pod_send_request(sync, &pod_send_us) == ESP_OK) {
@@ -257,6 +257,21 @@ static void clock_sync_task_fn(void* arg) {
             // For now, we just log - actual BLE write happens in ble_lsl_bridge
             ESP_LOGD(TAG, "Sync request sent: seq=%" PRIu32, sync->next_sequence);
         }
+    }
+}
+
+static void uart_debug_task_fn(void* arg) {
+    (void)arg;
+    while (1) {
+        // Simple raw output for bringup validation
+        // Format: TYPE,timestamp,val1,val2
+        // Example: ECG,123456,1024
+        // Example: PPG,123456,500,600
+        // Example: IMU,123456,1.0,0.5,0.2
+
+        // This task will be populated to read from ring buffers
+        // and output to UART at 921600 baud.
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
