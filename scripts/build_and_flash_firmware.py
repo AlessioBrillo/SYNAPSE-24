@@ -29,11 +29,16 @@ class FirmwareBuilder:
         firmware_dir: Path,
         build_dir: Path | None = None,
         target: str = "esp32s3",
+        build_variant: str = "band-core",
     ) -> None:
         self.firmware_dir = Path(firmware_dir).resolve()
         self.build_dir = Path(build_dir).resolve() if build_dir else self.firmware_dir / "build"
         self.target = target
-        self.bin_path = self.build_dir / "synapse_tier0.bin"
+        # "band-core" builds the smoke-kit rig (ECG+PPG+IMU); "band-full" adds
+        # GPS, temperature, FIT, provisioning and OTA. See
+        # docs/hardware/ESP-IDF_SETUP.md.
+        self.build_variant = build_variant
+        self.bin_path = self.build_dir / "synapse-band.bin"
         self.metadata_path = self.build_dir / "firmware_metadata.json"
 
     def check_esp_idf(self) -> bool:
@@ -84,6 +89,18 @@ class FirmwareBuilder:
         if verbose:
             cmd.append("-v")
 
+        # The variant selects sdkconfig.defaults.<variant> in addition to the
+        # base defaults. Passing SDKCONFIG_DEFAULTS replaces ESP-IDF's default
+        # list, so both files must be named explicitly.
+        env = os.environ.copy()
+        variant_file = self.firmware_dir / f"sdkconfig.defaults.{self.build_variant}"
+        if variant_file.is_file():
+            env["SDKCONFIG_DEFAULTS"] = f"sdkconfig.defaults.{self.build_variant};sdkconfig.defaults"
+            logger.info("Build variant: %s (%s)", self.build_variant, variant_file.name)
+        else:
+            env.pop("SDKCONFIG_DEFAULTS", None)
+            logger.info("Build variant: default (no sdkconfig.defaults.%s)", self.build_variant)
+
         logger.info("Building firmware...")
         start = time.time()
 
@@ -93,10 +110,11 @@ class FirmwareBuilder:
                 cwd=self.firmware_dir,
                 capture_output=not verbose,
                 text=True,
-                timeout=300,
+                timeout=600,
+                env=env,
             )
         except subprocess.TimeoutExpired:
-            logger.exception("Build timeout (5 min)")
+            logger.exception("Build timeout (10 min)")
             return False
 
         elapsed = time.time() - start
@@ -129,8 +147,9 @@ class FirmwareBuilder:
             sha256 = hashlib.sha256(f.read()).hexdigest()
 
         metadata = {
-            "firmware": "synapse_tier0",
-            "version": "0.1.0",
+            "firmware": "synapse_band",
+            "variant": self.build_variant,
+            "version": "1.0.0",
             "target": self.target,
             "bin_path": str(self.bin_path),
             "bin_size_bytes": bin_size,
@@ -142,17 +161,23 @@ class FirmwareBuilder:
                 "ecg_ad8232": True,
                 "ppg_max30102": True,
                 "imu_icm20948": True,
-                "ble_lsl_bridge": True,
+                "research_service_raw": True,
+                "feature_stream_consumer": True,
                 "triage_int8": True,
-                "ppg_sqi_100hz": True,
-                "wired_sync_gpio": 27,
                 "power_monitor": True,
+                "gps_max_m10s": self.build_variant == "band-full",
+                "temperature_tmp117": self.build_variant == "band-full",
+                "fit_storage": self.build_variant == "band-full",
+                "provisioning": self.build_variant == "band-full",
+                "ota": self.build_variant == "band-full",
             },
+            # Must match config/hardware.yaml sampling_rate.* (tools/check_contract.py)
             "sampling_rates": {
                 "ecg_hz": 500,
-                "ppg_hz": 64,
-                "imu_hz": 100,
+                "ppg_hz": 50,
+                "imu_hz": 50,
             },
+            "i2c": {"sda_gpio": 8, "scl_gpio": 9},
         }
 
         with open(self.metadata_path, "w") as f:
@@ -243,13 +268,19 @@ class FirmwareBuilder:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build and flash SYNAPSE-24 ESP32-S3 Tier 0 firmware"
+        description="Build and flash SYNAPSE-24 Synapse Band firmware (ESP32-S3)"
     )
     parser.add_argument(
         "--firmware-dir",
         type=Path,
-        default=Path("firmware/esp32_tier0"),
+        default=Path("firmware/esp32_band"),
         help="Path to ESP-IDF project directory",
+    )
+    parser.add_argument(
+        "--variant",
+        default="band-core",
+        choices=["band-core", "band-full"],
+        help="Build variant: band-core (smoke kit) or band-full (product)",
     )
     parser.add_argument("--target", default="esp32s3", help="Target chip")
     parser.add_argument("--port", default="COM3", help="Serial port for flash/monitor")
@@ -265,7 +296,9 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    builder = FirmwareBuilder(args.firmware_dir, target=args.target)
+    builder = FirmwareBuilder(
+        args.firmware_dir, target=args.target, build_variant=args.variant
+    )
 
     # Check ESP-IDF
     if not builder.check_esp_idf():

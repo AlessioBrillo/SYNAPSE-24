@@ -19,6 +19,7 @@
 #include "esp_partition.h"
 
 #include "ble_gatt_server.h"
+#include "ble_research_service.h"
 #include "fit_writer.h"
 #include "synapse_provisioning.h"
 #include "synapse_ota.h"
@@ -67,9 +68,17 @@ void app_main(void)
     }
 
     // 4. Initialize sensors (ECG, PPG, IMU, GPS, Temp)
+    //    band-core build: ECG + PPG + IMU only.
     ret = synapse_sensors_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Sensor init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    // 4b. Start acquisition so the research service has samples to forward.
+    ret = synapse_sensors_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Sensor start failed: %s", esp_err_to_name(ret));
         return;
     }
 
@@ -93,6 +102,15 @@ void app_main(void)
     ret = synapse_ble_gatt_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "BLE GATT init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    // 8b. Synapse Research Service: raw samples + on-device timestamps.
+    //     This is the dataset path (config/hardware.yaml -> raw_frame) and is
+    //     independent of the consumer feature stream registered above.
+    ret = synapse_research_service_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Research service init failed: %s", esp_err_to_name(ret));
         return;
     }
 
@@ -134,10 +152,13 @@ void app_main(void)
     // 14. Main loop - runs acquisition FSM and handles events
     ESP_LOGI(TAG, "Entering main loop");
     while (1) {
-        // Drain the sensor queue into the on-device processors (bounded per tick)
+        // Drain the sensor queue into the on-device processors AND the raw
+        // research stream. The research service never derives features; it
+        // forwards samples so the host can rebuild the full dataset.
         synapse_sensor_sample_t sample;
         for (int n = 0; n < 64 && synapse_sensors_get_sample(&sample) == ESP_OK; n++) {
-            synapse_signal_quality_process(&sample);
+            synapse_signal_quality_process(&sample.base);
+            synapse_research_service_submit(&sample.base);
         }
 
         // Handle acquisition FSM tick (T0/T1/T2 state machine)

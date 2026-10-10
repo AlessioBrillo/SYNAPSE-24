@@ -38,10 +38,35 @@ jobs:
       - name: Run MyPy type check
         run: uv run mypy --package synapse24 --config-file pyproject.toml
 
+  contract-check:
+    name: Hardware Contract Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Check hardware contract (rates, pins, UUIDs, codec)
+        run: uv run python tools/check_contract.py --verbose
+
+      - name: Toolchain report (informational, does not gate)
+        continue-on-error: true
+        run: uv run python tools/check_toolchain.py
+
   phase1-dry-run:
     name: Phase 1 Dry-Run Validation
     runs-on: ubuntu-latest
-    needs: lint-and-typecheck
+    needs: [lint-and-typecheck, contract-check]
     continue-on-error: true
     steps:
       - name: Checkout repository
@@ -96,6 +121,31 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  firmware-build:
+    name: Firmware Build (ESP-IDF)
+    runs-on: ubuntu-latest
+    needs: contract-check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build band-core (smoke kit rig)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3
+          target: esp32s3
+          path: firmware/esp32_band
+          command: |
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build
+
+      - name: Build band-full (product firmware)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3
+          target: esp32s3
+          path: firmware/esp32_band
+          command: idf.py build
 
   triage-model:
     name: Triage Model Training & Quantization
