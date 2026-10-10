@@ -1,0 +1,221 @@
+"""Host-side decoding of the Synapse Research Service BLE stream.
+
+Responsible for turning raw GATT notifications back into timestamped,
+per-channel numpy arrays, and for exposing them as LSL outlets so the rest of
+the pipeline (quality metrics, XDF recording, fusion) can treat live hardware
+exactly like a public dataset.
+
+Two things happen here that matter more than the parsing itself:
+
+1. **Sequence-gap detection.** The firmware counts frames it could not send
+   instead of silently dropping them, and this decoder watches for jumps in
+   the per-stream sequence number. A hole in a biosignal dataset is far more
+   dangerous than a recording that stops, so a gap is surfaced as a DropEvent
+   rather than smoothed over.
+
+2. **64-bit timeline reconstruction.** The pod's microsecond counter is only
+   32 bits wide and wraps every ~4295 s (~71 min). Frames carry the low 32
+   bits plus a wrap flag; :class:`DeviceClock` rebuilds a monotonic 64-bit
+   timeline so that a 24 h Tier-0 recording does not jump backwards.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from synapse24.hardware.raw_codec import (
+    HEADER_SIZE,
+    MAX_PAYLOAD,
+    STREAM_CHANNELS,
+    RawCodecError,
+    RawHeader,
+    RawStream,
+    decode_frame,
+)
+
+__all__ = [
+    "DropEvent",
+    "DeviceClock",
+    "ResearchStreamDecoder",
+    "TS_WRAP_US",
+]
+
+# The device microsecond counter wraps at 2^32 us (~4295 s).
+TS_WRAP_US = 1 << 32
+
+# Unit divisors applied by the firmware when quantising (see
+# synapse_research_unit_t in ble_research_service.h).
+UNIT_DIVISOR: dict[RawStream, float] = {
+    RawStream.ECG: 1000.0,  # uV
+    RawStream.PPG: 1.0,  # raw ADC counts
+    RawStream.ACC: 1000.0,  # mg
+    RawStream.GYRO: 1000.0,  # mrad/s
+    RawStream.MAG: 100.0,  # 0.01 uT
+    RawStream.TEMP: 1.0,  # 0.01 degC
+    RawStream.SYNC: 1.0,
+}
+
+# LSL stream names, from config/hardware.yaml.
+LSL_STREAM_NAMES: dict[RawStream, str] = {
+    RawStream.ECG: "SYNAPSE_ECG_T0",
+    RawStream.PPG: "SYNAPSE_PPG_T0",
+    RawStream.ACC: "SYNAPSE_ACC_T0",
+    RawStream.GYRO: "SYNAPSE_GYRO_T0",
+    RawStream.MAG: "SYNAPSE_MAG_T0",
+    RawStream.TEMP: "SYNAPSE_TEMP_T0",
+    RawStream.SYNC: "SYNAPSE_SYNC_T0",
+}
+
+
+@dataclass
+class DropEvent:
+    """A detected hole in the sample stream."""
+
+    stream: RawStream
+    expected_seq: int
+    received_seq: int
+    gap: int
+
+    def __str__(self) -> str:
+        return (
+            f"{self.stream.name}: sequence jumped {self.expected_seq} -> "
+            f"{self.received_seq} (gap of {self.gap} frame(s) lost in transit)"
+        )
+
+
+@dataclass
+class DeviceClock:
+    """Rebuilds a monotonic 64-bit device timeline from 32-bit frame stamps."""
+
+    wraps: int = 0
+    _last_low: int | None = None
+    _last_us: int = 0
+
+    def extend(self, timestamp_low: int, flags: int = 0) -> int:
+        """Convert a frame's low-32-bit stamp into a monotonic microsecond time."""
+        if self._last_low is not None:
+            # The firmware sets the wrap flag on the first frame after a roll;
+            # the numeric regression is a second, independent witness.
+            if flags & 0x01 or timestamp_low < self._last_low:
+                if timestamp_low < self._last_low:
+                    self.wraps += 1
+        candidate = (self.wraps << 32) | timestamp_low
+        if candidate <= self._last_us:
+            candidate = self._last_us + 1
+        self._last_low = timestamp_low
+        self._last_us = candidate
+        return candidate
+
+
+@dataclass
+class ResearchStreamDecoder:
+    """Accumulates decoded frames per stream and exposes numpy-friendly output."""
+
+    samples: dict[RawStream, list[np.ndarray]] = field(default_factory=dict)
+    timestamps: dict[RawStream, list[np.ndarray]] = field(default_factory=dict)
+    sequences: dict[RawStream, int] = field(default_factory=dict)
+    drops: list[DropEvent] = field(default_factory=list)
+    clock: DeviceClock = field(default_factory=DeviceClock)
+    frames_seen: int = 0
+    frames_rejected: int = 0
+
+    def feed(self, frame: bytes | bytearray) -> RawHeader:
+        """Decode one GATT notification and buffer its samples.
+
+        Returns:
+            The decoded header, even when the payload was rejected, so callers
+            can log or inspect malformed frames.
+
+        Raises:
+            RawCodecError: If the frame cannot be decoded at all (length or
+                version). Recoverable per-stream problems are recorded as
+                :class:`DropEvent` instead.
+        """
+        try:
+            header, samples = decode_frame(frame)
+        except RawCodecError:
+            self.frames_rejected += 1
+            raise
+
+        if header.sample_count and header.stream in STREAM_CHANNELS:
+            self._check_sequence(header)
+            self._buffer(header, samples)
+            self.frames_seen += 1
+        else:
+            self.frames_rejected += 1
+        return header
+
+    def _check_sequence(self, header: RawHeader) -> None:
+        previous = self.sequences.get(header.stream)
+        if previous is None:
+            self.sequences[header.stream] = header.sequence
+            return
+        # 16-bit sequence: detect a forward jump, tolerating the wrap itself.
+        delta = (header.sequence - previous) & 0xFFFF
+        if delta > 1:
+            self.drops.append(
+                DropEvent(
+                    stream=header.stream,
+                    expected_seq=(previous + 1) & 0xFFFF,
+                    received_seq=header.sequence,
+                    gap=int(delta - 1),
+                )
+            )
+        self.sequences[header.stream] = header.sequence
+
+    def _buffer(self, header: RawHeader, samples: np.ndarray) -> None:
+        channels = STREAM_CHANNELS.get(header.stream, 1)
+        if samples.size % channels:
+            self.frames_rejected += 1
+            return
+
+        first_us = self.clock.extend(header.timestamp_us, header.flags)
+        # Timestamps within a frame are not carried per sample; the frame
+        # stamp is the first sample's time. The stream's own rate (from
+        # hardware.yaml) is what the consumer uses to space them.
+        ts = np.arange(samples.size // channels, dtype=np.int64)
+        ts = first_us + ts
+
+        self.samples.setdefault(header.stream, []).append(
+            samples.astype(np.float64) / UNIT_DIVISOR.get(header.stream, 1.0)
+        )
+        self.timestamps.setdefault(header.stream, []).append(ts.astype(np.float64))
+
+    def arrays(self, stream: RawStream) -> tuple[np.ndarray, np.ndarray]:
+        """Return concatenated (samples, timestamps_us) for one stream."""
+        if stream not in self.samples:
+            empty = np.zeros(0, dtype=np.float64)
+            return empty, empty.copy()
+        return (
+            np.concatenate(self.samples[stream]),
+            np.concatenate(self.timestamps[stream]),
+        )
+
+    def drop_summary(self) -> dict[str, int]:
+        """Per-stream count of frames lost in transit."""
+        counts: dict[str, int] = {}
+        for event in self.drops:
+            counts[event.stream.name] = counts.get(event.stream.name, 0) + event.gap
+        return counts
+
+    def is_clean(self) -> bool:
+        """True when no frames were lost and none were rejected."""
+        return not self.drops and self.frames_rejected == 0
+
+    def estimated_bytes(self) -> int:
+        """Rough BLE payload volume, for checking the §55-62 budget."""
+        return self.frames_seen * MAX_PAYLOAD
+
+
+def validate_notification_size(payload: bytes) -> None:
+    """Reject payloads that could never have come from the research service."""
+    if len(payload) > MAX_PAYLOAD:
+        raise RawCodecError(
+            f"notification is {len(payload)} bytes, exceeds MTU-3 budget of {MAX_PAYLOAD}"
+        )
+    if len(payload) < HEADER_SIZE:
+        raise RawCodecError(
+            f"notification is {len(payload)} bytes, below the {HEADER_SIZE}-byte header"
+        )
