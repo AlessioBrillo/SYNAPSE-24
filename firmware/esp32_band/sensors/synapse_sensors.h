@@ -106,14 +106,18 @@ esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample);
  * @param[out] gps Pointer to GPS data struct
  * @return ESP_OK on success
  */
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
 esp_err_t synapse_sensors_get_gps(gps_data_t *gps);
+#endif
 
 /**
  * @brief Get latest temperature data (thread-safe)
  * @param[out] temp Pointer to temperature data struct
  * @return ESP_OK on success
  */
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
 esp_err_t synapse_sensors_get_temp(temp_data_t *temp);
+#endif
 
 /**
  * @brief Get sensor scheduler stats (sample counts, dropped samples)
@@ -142,7 +146,9 @@ esp_err_t synapse_sensors_set_enabled(sensor_type_t sensor_type, bool enable);
  * @param low_power true for low power mode (reduced update rate)
  * @return ESP_OK on success
  */
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
 esp_err_t synapse_sensors_set_gps_power_mode(bool low_power);
+#endif
 
 /**
  * @brief Poll GPS/Temp drivers and refresh cached aux data

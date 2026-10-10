@@ -1,0 +1,32 @@
+# Synapse Band v1 — band-core build profile (smoke kit bringup)
+#
+# Apply AFTER sdkconfig.defaults:
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults"
+#
+# Purpose: build only what the Phase 1 smoke kit actually contains
+# (ESP32-S3 + AD8232 ECG + MAX30102 PPG + ICM-20948 IMU), so that hardware
+# bringup does not block on sensors that have not been procured yet.
+# Everything disabled here is still available in the default band-full build.
+
+# Sensors not present in the smoke kit.
+CONFIG_SYNAPSE_FEATURE_GPS=n
+CONFIG_SYNAPSE_FEATURE_TEMPERATURE=n
+
+# Product-side features that are out of scope for the MVP vertical slice
+# (single pod, live end-to-end ECG+PPG+IMU -> BLE -> LSL -> XDF).
+CONFIG_SYNAPSE_FEATURE_FIT_STORAGE=n
+CONFIG_SYNAPSE_FEATURE_PROVISIONING=n
+CONFIG_SYNAPSE_FEATURE_OTA=n
+
+# Keep edge triage on-device: it is part of what the MVP demo must show.
+CONFIG_SYNAPSE_FEATURE_EDGE_AI=y
+CONFIG_SYNAPSE_FEATURE_POWER_MONITOR=y
+
+# Research raw-streaming service (Synapse Research Service). This is the
+# MVP critical path: raw samples + on-device timestamps, zero on-device
+# features, so the host owns the entire quality/fusion pipeline.
+CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE=y
+
+# Debug logging for bringup: the smoke-kit rig needs the I2C/BLE diagnostics.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y

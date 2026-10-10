@@ -60,6 +60,20 @@ config SYNAPSE_FEATURE_POWER_MONITOR
     help
         Enable battery ADC monitoring and tier affordability checks.
 
+config SYNAPSE_FEATURE_RESEARCH_SERVICE
+    bool "Enable Synapse Research Service (raw sample streaming)"
+    default y
+    help
+        Expose a second, host-facing GATT service that streams raw samples
+        (ECG/PPG/IMU) plus on-device timestamps, with zero on-device
+        features.
+
+        This is the dataset path: the project's asset is the multimodal raw
+        record (Architecture.md), so signal quality, HRV and fusion are
+        computed on the host. It is deliberately separate from the consumer
+        "feature stream" (HR/RR/SQI/stress) used by the Averyn product
+        integration, which carries features only.
+
 endmenu
 
 menu "Synapse Band Hardware Configuration"

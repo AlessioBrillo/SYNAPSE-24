@@ -83,5 +83,9 @@ CONFIG_ESP_ERR_TO_NAME_LOOKUP=y
 CONFIG_SPIFFS_CACHE=y
 CONFIG_SPIFFS_CACHE_SIZE=2048
 
+# In-ear/aux flags consumed by Synapse Research Service
+# Raw sample streams (ECG/PPG/IMU) + on-device timestamps, no on-device features.
+CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE=y
+
 # UART for GPS
 CONFIG_UART_ISR_IN_IRAM=y
