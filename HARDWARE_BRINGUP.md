@@ -27,7 +27,7 @@
 
 ## 2. Wiring Diagram — Forearm Hub (Tier 0 Pod)
 
-### Pin Mapping (matches `config/hardware.yaml` + `firmware/esp32_tier0/main/main.cpp`)
+### Pin Mapping (matches `config/hardware.yaml` + `firmware/esp32_band/main/app_main.c`)
 
 ```
 ESP32-S3 DevKitC-1                    Sensor Breakouts
@@ -102,10 +102,13 @@ cd SYNAPSE-24
 ### Build & Flash
 
 ```bash
-# 1. Navigate to firmware
-cd firmware/esp32_tier0
+# 1. Navigate to the canonical firmware project
+cd firmware/esp32_band
 
-# 2. Set target to ESP32-S3
+# 2. Build the smoke-kit variant (ECG+PPG+IMU, no GPS/TMP117)
+export SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults"
+
+# 3. Set target to ESP32-S3
 idf.py set-target esp32s3
 
 # 3. Configure (optional - uses sdkconfig.defaults)
@@ -167,10 +170,10 @@ Output: data/processed/live_validation/synapse_live_20250926_143022.xdf
 --------------------------------------------------------------------------------
 [1/6] Resolving LSL streams...
     ✅ SYNAPSE_ECG_T0  (ECG, 1ch, 500Hz, float32)
-    ✅ SYNAPSE_PPG_T0  (PPG, 2ch, 64Hz, float32)
-    ✅ SYNAPSE_ACC_T0  (ACC, 3ch, 100Hz, float32)
-    ✅ SYNAPSE_GYRO_T0 (GYRO, 3ch, 100Hz, float32)
-    ✅ SYNAPSE_MAG_T0  (MAG, 3ch, 100Hz, float32)
+    ✅ SYNAPSE_PPG_T0  (PPG, 2ch, 50Hz, float32)
+    ✅ SYNAPSE_ACC_T0  (ACC, 3ch, 50Hz, float32)
+    ✅ SYNAPSE_GYRO_T0 (GYRO, 3ch, 50Hz, float32)
+    ✅ SYNAPSE_MAG_T0  (MAG, 3ch, 50Hz, float32)
     ✅ SYNAPSE_Markers (Markers, 1ch, irregular, string)
 
 [2/6] Capturing 60s of live data...
@@ -304,7 +307,7 @@ After Phase 1 validation passes:
 - **Roadmap.md** — Phase-based execution, budget, dataset references (§138–158)
 - **config/hardware.yaml** — Canonical hardware configuration (pods, sync, power, motion)
 - **config/hardware_bringup.yaml** — Phase 1 overrides (firmware, BLE, validation params)
-- **firmware/esp32_tier0/** — ESP32-S3 Tier 0 firmware (sensor scheduler, BLE LSL bridge, triage)
+- **firmware/esp32_band/** - ESP32-S3 canonical firmware (band-core = smoke kit, band-full = product; Synapse Research Service + triage)
 - **scripts/validate_phase1_entry.py** — Live hardware validation entry point
 
 ---

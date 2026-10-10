@@ -9,6 +9,13 @@
 #                   §55-62 (compress before transmit), §92 (clock sync)
 #   Roadmap.md      §138 (Phase 1: ECG+PPG/IMU at normative rates)
 #
+# Canonical firmware: firmware/esp32_band (band-core / band-full variants).
+# The former esp32_tier0 / esp32_head / esp32_forearm / esp32_headband projects
+# are archived (see their DEPRECATED.md); firmware/common/ is the shared library
+# and remains active, used by esp32_band and by the host parity tests in
+# tests/firmware_host/.
+# =====================================================================
+#
 # Guardian Principle: BLE MACs / serial ports are NEVER hardcoded —
 # use ${ENV_VAR} expansion.
 #
