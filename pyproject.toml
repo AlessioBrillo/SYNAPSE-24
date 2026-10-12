@@ -1,7 +1,7 @@
 [project]
 name = "synapse-24"
 version = "0.1.0"
-description = "24/7 multimodal bio-sensing wearable platform — Phase 0: Software & Public Data Foundation"
+description = "24/7 multimodal bio-sensing wearable platform â€” Phase 0: Software & Public Data Foundation"
 readme = "README.md"
 # Dual-licensed: AGPL-3.0-or-later or commercial (see LICENSING.md). Table form keeps hatchling<1.27 working.
 license = { text = "AGPL-3.0-or-later" }
@@ -52,10 +52,12 @@ dev = [
     "types-pyyaml>=6.0.0,<7.0",
     "types-tqdm>=4.24.0,<5.0",
     # Provides a self-contained C/C++ compiler (zig cc) so the firmware host
-    # gates in tests/firmware_host run on any machine, with no system toolchain
-    # to install. Without it those gates would skip, and a skipped compile gate
-    # is a gate that cannot fail.
-    "ziglang>=0.13.0,<1.0",
+    # gates in tests/firmware_host run on any OS, with no system toolchain to
+    # install. Without it those gates would skip, and a skipped compile gate is
+    # a gate that cannot fail.
+    # Pinned below 0.17: 0.17 dropped its Windows wheels, which breaks
+    # `uv sync` on win32. 0.16 ships wheels for Linux, macOS and Windows.
+    "ziglang>=0.16.0,<0.17",
 "pre-commit>=3.7.0,<4.0",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
@@ -93,7 +95,7 @@ dev = [
     "esptool>=4.8.0,<5.0",
     "bandit>=1.9.4",
     "pytest-json-report>=1.5.0",
-    "ziglang>=0.13.0,<1.0",
+    "ziglang>=0.16.0,<0.17",
 ]
 hardware = [
     "bleak>=0.22.0,<1.0",
