@@ -12,6 +12,7 @@ unexpected firmware build is reported rather than silently mis-parsed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -30,6 +31,9 @@ OUTLET_BY_STREAM = {
     RawStream.MAG: "SYNAPSE_MAG_T0",
 }
 
+# (outlet name, channel values, timestamp in seconds)
+PushCallback = Callable[[str, list[float], float], None]
+
 
 @dataclass
 class RawFrameIngestor:
@@ -37,7 +41,7 @@ class RawFrameIngestor:
 
     decoder: ResearchStreamDecoder = field(default_factory=ResearchStreamDecoder)
     sample_counts: dict[str, int] = field(default_factory=dict)
-    push_callback: object = None  # Callable[[str, list[float], float], None]
+    push_callback: PushCallback | None = None
 
     def handle_notification(self, char_uuid: str, payload: bytes) -> bool:
         """Decode one notification and push its samples to the matching outlet.
