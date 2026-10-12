@@ -74,7 +74,11 @@ jobs:
         working-directory: firmware/${{ matrix.variant }}
         run: |
           sudo apt-get update && sudo apt-get install -y cppcheck
-          SRCS=$(find . -name "*.c" -o -name "*.cpp" -o -name "*.h" | tr '\n' ' ')
+          # managed_components/ is third-party code downloaded by the IDF
+          # component manager (esp-tflite-micro & friends); build/ is
+          # generated. Neither is ours to lint, and both break the scan.
+          SRCS=$(find . \( -name "*.c" -o -name "*.cpp" -o -name "*.h" \) \
+            -not -path "./build/*" -not -path "./managed_components/*" | tr '\n' ' ')
           cppcheck --enable=all --suppress=missingIncludeSystem \
             -I main -I config -I sensors -I acquisition -I signal_quality -I edge_ai \
             -I power -I ble -I fit -I provisioning -I ota \
