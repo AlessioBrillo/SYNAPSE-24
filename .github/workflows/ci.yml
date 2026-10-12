@@ -122,6 +122,42 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  firmware-host-gate:
+    name: Firmware Host Compile Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      # ziglang provides the C/C++ compiler, so the firmware source gates run
+      # without a system toolchain (and without ESP-IDF).
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Compile governance gate (research service + raw codec)
+        run: |
+          uv run pytest tests/test_research_service_host.py \
+                       tests/test_raw_frame_parity.py \
+                       tests/test_firmware_host_loadgate.py \
+                       tests/test_triage_feature_parity.py \
+                       tests/test_firmware_ppg_imu_host.py \
+                       -v --no-cov -p no:cacheprovider
+
+      - name: Platform note
+        run: |
+          echo "Firmware host gates compile C/C++ sources and load them with ctypes."
+          echo "A Windows Application Control policy can block loading a library"
+          echo "built in the temp directory; those runs skip with a named reason,"
+          echo "and the compile step still has to pass first."
+
   firmware-build:
     name: Firmware Build (ESP-IDF)
     runs-on: ubuntu-latest

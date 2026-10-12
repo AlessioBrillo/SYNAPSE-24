@@ -175,6 +175,62 @@ def check_serial_driver() -> list[Check]:
     ]
 
 
+def check_host_compile_gates() -> list[Check]:
+    """Verify a C/C++ compiler is reachable for the firmware host gates.
+
+    ``tests/firmware_host`` compiles the raw-frame codec and the Band research
+    service against ESP-IDF stubs, so the wire format and the firmware API stay
+    pinned without ESP-IDF. That gate needs *some* C compiler; ``ziglang`` is
+    the pip-installable last resort, so it is checked here too.
+    """
+    import importlib.util
+
+    checks: list[Check] = []
+
+    compiler = next(
+        (p for p in map(shutil.which, ["gcc", "cc", "clang", "g++", "c++", "clang++"]) if p),
+        None,
+    )
+    checks.append(
+        Check(
+            name="C/C++ compiler",
+            ok=compiler is not None,
+            detail=compiler or "none on PATH (the ziglang fallback below still applies)",
+        )
+    )
+
+    try:
+        importlib.import_module("ziglang")
+        detail = "ziglang importable - provides `python -m ziglang cc`"
+        ok = True
+    except ImportError:
+        ok = False
+        detail = "ziglang not importable; install with: uv sync --group dev"
+
+    checks.append(
+        Check(
+            name="ziglang (host compile-gate fallback)",
+            ok=ok,
+            blocking=False,
+            detail=detail,
+        )
+    )
+
+    # A compiler or ziglang: at least one must exist for the gate to mean anything.
+    if compiler is None and not ok:
+        checks.append(
+            Check(
+                name="Firmware host compile gate",
+                ok=False,
+                detail=(
+                    "no C compiler on PATH and no ziglang: tests/firmware_host cannot run. "
+                    "Install gcc/clang, or run `uv sync --group dev` for the ziglang fallback."
+                ),
+            )
+        )
+    return checks
+
+
 def check_firmware_projects() -> list[Check]:
     """Verify the canonical firmware project and its component tree exist."""
     checks: list[Check] = []
@@ -221,6 +277,7 @@ def main() -> int:
         check_python(),
         check_build_tools(),
         check_serial_driver(),
+        check_host_compile_gates(),
         check_firmware_projects(),
     ):
         all_checks.extend(group)

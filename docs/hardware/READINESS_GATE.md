@@ -62,8 +62,26 @@ side of the wire:
   ~4295 s — without this, a 24 h Tier-0 recording would jump backwards).
 - `tests/test_research_service_hil.py`: a synthetic pod that speaks the real
   frame format (ECG 500 Hz, PPG 50 Hz red+IR, IMU sub-streams at 50 Hz) with
-  injected faults. **7 tests, and the protocol/clock layer is now covered with
-  no hardware attached.**
+  injected faults.
+- `src/synapse24/hardware/research_ble_client.py`: the BLE client, with the
+  transport injected so connect, subscribe, decode, clock sync and gap
+  detection are all exercised without a Bluetooth adapter.
+- **C compile gates.** `tests/firmware_host` compiles the Band research service
+  and the raw-frame codec against ESP-IDF/NimBLE stubs with
+  `-Wall -Wextra -Werror`. These caught three real defects that would otherwise
+  have surfaced on the bench, after the sensors were bought:
+  1. `unit_scale` was `uint8_t` while the unit constants reach 1000, so every
+     quantised ECG/IMU sample was silently scaled by 232/1000;
+  2. `ble_research_service.h` used `bool` without including `<stdbool.h>`;
+  3. the `esp_err` stub was missing error codes the firmware returns.
+
+  Two process bugs were also fixed: the gates used to **skip** when no compiler
+  was found (a skipped compile gate cannot fail), and a `.cmd` shim was
+  mangling the compiler arguments. `ziglang` is now a dev dependency, so the
+  gate runs on a machine with no C toolchain at all.
+
+- The BLE client tests found two more real bugs: the NTP RTT sign was inverted,
+  and the client double-counted rejected frames.
 
 ## What is left
 
@@ -72,6 +90,21 @@ side of the wire:
 | **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h |
 | **G1** | Smoke kit not bought/measured | ~€100 + a weekend |
 | **G2** | Cerelog order | ~€350, after G1 |
+
+## How the gates are enforced
+
+Every gate above is an executable check, not a document:
+
+```bash
+uv run python tools/check_toolchain.py   # is the firmware buildable?
+uv run python tools/check_contract.py    # does the hardware contract still hold?
+uv run pytest -q                         # is the software still sound?
+```
+
+`tests/firmware_host` adds a fourth, quieter one: it compiles the Band research
+service and the raw-frame codec against ESP-IDF stubs with `-Wall -Wextra
+-Werror`. That gate has already earned its keep - see Sprint 3 above for the
+three firmware defects it caught before any hardware existed.
 
 ## Work explicitly deferred
 
