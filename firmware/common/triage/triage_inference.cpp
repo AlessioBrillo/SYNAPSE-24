@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_err.h"
+#include <inttypes.h>
 #include <string.h>
 #include <math.h>
 
@@ -76,7 +77,7 @@ esp_err_t triage_inference_init(triage_inference_t* triage) {
     }
 
     if (model->version() != TFLITE_SCHEMA_VERSION) {
-        ESP_LOGE(TAG, "Model schema version mismatch: %d != %d", model->version(), TFLITE_SCHEMA_VERSION);
+        ESP_LOGE(TAG, "Model schema version mismatch: %" PRIu32 " != %d", model->version(), TFLITE_SCHEMA_VERSION);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -322,7 +323,8 @@ esp_err_t triage_inference_get_model_info(triage_inference_t* triage, size_t* mo
     if (!triage || !triage->initialized) return ESP_ERR_INVALID_STATE;
 
 #if SYNAPSE_HAS_TFLM
-    extern const unsigned char synapse_triage_tflite[];
+    // Only the length is needed here; declaring the unused array symbol
+    // trips -Wunused-variable (=error) on the stricter CI toolchains.
     extern const unsigned int synapse_triage_tflite_len;
     if (model_size) *model_size = synapse_triage_tflite_len;
     if (arena_used) {
