@@ -10,34 +10,46 @@ bringup:
   mode: "single_pod"  # "single_pod" | "multi_pod" — Phase 1: forearm_hub only
   target_pod: "forearm_hub"
 
-  # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub)
+  # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub).
+  # Canonical firmware is firmware/esp32_band; band-core builds the smoke-kit
+  # rig (ECG+PPG+IMU, no GPS/TMP117/FIT/provisioning/OTA).
   firmware:
-    path: "firmware/synapse_tier0.bin"  # Built by CI triage-model job
+    project_dir: "firmware/esp32_band"
+    build_variant: "band-core"
+    path: "firmware/esp32_band/build/synapse-band.bin"  # Built by the CI firmware-build job
     port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"
     baud: 921600
     flash_mode: "dio"
     flash_freq: "80m"
-    flash_size: "4MB"
+    flash_size: "16MB"
     verify_after_flash: true
 
-  # BLE connection overrides for live hardware
+  # BLE connection overrides for live hardware.
+  # UUIDs are the Synapse Research Service (raw samples + sync), declared in
+  # config/hardware.yaml and firmware/esp32_band/ble/ble_research_service.h.
+  # They are deliberately distinct from the consumer feature-stream service.
   ble:
     address: "${SYNAPSE_FOREARM_BLE:-auto}"  # "auto" = scan for SYNAPSE device
     scan_timeout_s: 10
     connect_timeout_s: 15
-    mtu: 185  # Negotiated MTU for higher throughput
-    # BLE characteristic UUIDs (must match firmware/esp32_tier0/main/ble/ble_lsl_bridge.h)
+    mtu: 247  # Negotiated MTU for higher throughput
     characteristics:
-      service: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-      ppg: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-      ecg: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-      imu: "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
-      sync: "6E400005-B5A3-F393-E0A9-E50E24DCCA9E"
-      power: "6E400006-B5A3-F393-E0A9-E50E24DCCA9E"  # Power telemetry
+      service: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70"
+      ecg:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71"
+      ppg:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72"
+      acc:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73"
+      gyro: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74"
+      mag:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75"
+      sync: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
+      # A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C76 (temp) is declared in
+      # firmware/esp32_band/ble/ble_research_service.h but unused in band-core:
+      # temperature arrives through the consumer feature stream instead.
 
-  # PPG sampling rate for bringup (100Hz for SQI validation, 64Hz for deployment)
-  # MAX30102 supports up to 1000Hz; 100Hz gives better motion artifact rejection
-  ppg_bringup_sampling_rate_hz: 100
+  # PPG sampling rate for bringup. Matches config/hardware.yaml
+  # (sampling_rate.ppg = 50) and the ppg_dsp.c on-device pipeline, which is
+  # designed for 50 Hz. 64 Hz previously came from hardware.yaml while the
+  # firmware ran 50 Hz; the contract checker now forbids that split.
+  ppg_bringup_sampling_rate_hz: 50
 
   # Cerelog ESP-EEG head pod (Tier 1) - additional config beyond hardware.yaml
   cerelog_eeg:
@@ -56,7 +68,8 @@ bringup:
     chunk_size: 16
     max_buffered: 1000
     streams:
-      # Tier 0 streams (forearm_hub) — PPG at 100Hz for bringup
+      # Tier 0 streams (forearm_hub). Rates must equal hardware.yaml
+      # sampling_rate.* — enforced by tools/check_contract.py.
       - name: "SYNAPSE_ECG_T0"
         type: "ECG"
         channel_count: 1
@@ -67,28 +80,28 @@ bringup:
       - name: "SYNAPSE_PPG_T0"
         type: "PPG"
         channel_count: 2  # Red + IR
-        sampling_rate: 100  # Bringup: 100Hz; Deployment: 64Hz (WESAD wrist rate)
+        sampling_rate: 50
         channel_format: "float32"
         source_id: "synapse_ppg_t0_001"
         tier: 0
       - name: "SYNAPSE_ACC_T0"
         type: "ACC"
         channel_count: 3
-        sampling_rate: 100
+        sampling_rate: 50
         channel_format: "float32"
         source_id: "synapse_acc_t0_001"
         tier: 0
       - name: "SYNAPSE_GYRO_T0"
         type: "GYRO"
         channel_count: 3
-        sampling_rate: 100
+        sampling_rate: 50
         channel_format: "float32"
         source_id: "synapse_gyro_t0_001"
         tier: 0
       - name: "SYNAPSE_MAG_T0"
         type: "MAG"
         channel_count: 3
-        sampling_rate: 100
+        sampling_rate: 50
         channel_format: "float32"
         source_id: "synapse_mag_t0_001"
         tier: 0
@@ -112,7 +125,7 @@ bringup:
   # Clock synchronization - override mode for multi-pod
   sync:
     mode: "markers_only"  # Phase 1: markers_only (BLE); T1 needs markers_plus_acc + wired
-    # Wired sync GPIO for multi-pod (head_pod ↔ forearm_hub) - GPIO 27 (I2C: SDA=GPIO 8, SCL=GPIO 9)
+    # Wired sync GPIO for multi-pod (head_pod <-> forearm_hub) - GPIO 27 (I2C: SDA=GPIO 8, SCL=GPIO 9)
     wired_sync_gpio: 27
 
   # Motion gate - relaxed for MAX30102 wrist PPG validation

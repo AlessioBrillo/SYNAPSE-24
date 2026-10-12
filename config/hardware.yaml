@@ -1,52 +1,112 @@
-# SYNAPSE-24 Hardware Configuration
-# Single source of truth for all sensor pod configurations
-# Architecture.md §33-43 (tiered acquisition), §23-31 (decoupled pod/hub)
-# Roadmap.md §138 (Phase 1: ECG+PPG+IMU at normative rates)
-# Guardian Principle: BLE MACs / serial ports NEVER hardcoded — use ${ENV_VAR} expansion
+# SYNAPSE-24 Hardware Configuration — SINGLE SOURCE OF TRUTH
+# =====================================================================
+# Every rate, pin, UUID and stream name in this project is defined here.
+# tools/check_contract.py cross-checks this file against the firmware Kconfig,
+# the host LSL outlets and the documentation, and fails CI on any drift.
+#
+# Governing documents:
+#   Architecture.md §33-43 (tiered acquisition), §23-31 (decoupled pod/hub),
+#                   §55-62 (compress before transmit), §92 (clock sync)
+#   Roadmap.md      §138 (Phase 1: ECG+PPG/IMU at normative rates)
+#
+# Canonical firmware: firmware/esp32_band (band-core / band-full variants).
+# The former esp32_tier0 / esp32_head / esp32_forearm / esp32_headband projects
+# are archived (see their DEPRECATED.md); firmware/common/ is the shared library
+# and remains active, used by esp32_band and by the host parity tests in
+# tests/firmware_host/.
+# =====================================================================
+#
+# Guardian Principle: BLE MACs / serial ports are NEVER hardcoded —
+# use ${ENV_VAR} expansion.
+#
+# Canonical firmware: firmware/esp32_band (band-core / band-full variants).
+# The former esp32_tier0 / esp32_head / esp32_forearm apps are archived; the
+# shared library firmware/common/ is retained and is used by this firmware.
+# =====================================================================
 
 pods:
   - pod_id: "forearm_hub"
     name: "Forearm Hub (Tier 0 Continuous)"
-    board_type: "ESP32_TIER0"
+    board_type: "ESP32_BAND"          # firmware/esp32_band
+    build_variant: "band-core"        # smoke kit: no GPS/TMP117/FIT/provisioning/OTA
     modalities: ["ecg", "ppg", "imu"]
     tier: 0
     channels:
       ecg: 1
-      ppg: 2
+      ppg: 2                          # red + IR
       imu: 9
+    # Normative sample rates. These match firmware/esp32_band/config/Kconfig
+    # (SYNAPSE_PPG_SAMPLE_RATE=0x02 -> 50 Hz, SYNAPSE_IMU_ACCEL_ODR_HZ=50)
+    # and the host LSL outlets declared below. Do not change one without the
+    # other two: that is what check_contract.py enforces.
     sampling_rate:
       ecg: 500
-      ppg: 64
-      imu: 100
+      ppg: 50
+      imu: 50
     ble_address: "${SYNAPSE_FOREARM_BLE}"
     serial_port: "${SYNAPSE_FOREARM_SERIAL}"
     placement: "forearm"
     electrode_type: "AgAgCl_snap"
     is_hub: true
     metadata:
-      ble_service_uuid: "0000ffe0-0000-1000-8000-00805f9b34fb"
-      ble_char_uuid: "0000ffe1-0000-1000-8000-00805f9b34fb"
-      lsl_stream_ecg: "SYNAPSE_ECG_T0"
-      lsl_stream_ppg: "SYNAPSE_PPG_T0"
-      lsl_stream_acc: "SYNAPSE_ACC_T0"
-      lsl_stream_gyro: "SYNAPSE_GYRO_T0"
-      lsl_stream_mag: "SYNAPSE_MAG_T0"
+      # --- BLE: Synapse Research Service (raw samples, dataset path) ---
+      # Distinct from the consumer "feature stream" service. The research
+      # service is what Phase 1 hardware validation uses.
+      research_service_uuid: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70"
+      research_characteristics:
+        ecg:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71"
+        ppg:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72"
+        acc:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73"
+        gyro: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74"
+        mag:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75"
+        sync: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
+      # NOTE: skin temperature is carried by the consumer feature-stream
+      # characteristic (synapse_feature_stream_t.temperature), not by the
+      # research service. The research service carries the modalities that make
+      # up the dataset: ECG, PPG, and the three IMU sub-streams.
       sensors:
         ecg: "AD8232"
         ppg: "MAX30102"
         imu: "ICM-20948"
       ecg_config:
-        adc_pin: 36
+        adc_pin: 36                    # ADC1_CH0
+        gpio_drdy: 4
         lead_off_plus: 39
         lead_off_minus: 34
+        vref_mv: 1100
+        gain: 6.0                      # AD8232 fixed instrumentation gain
+        format: "s16"                  # see src/synapse24/hardware/raw_codec.py
+        lsl_stream: "SYNAPSE_ECG_T0"
       ppg_config:
         i2c_addr: 0x57
+        gpio_int: 5
         led_current_red: 0x1F
         led_current_ir: 0x1F
+        led_current_green: 0x0F
+        sample_rate_reg: 0x02          # 0x02=50Hz, 0x03=64Hz, 0x04=100Hz
+        pulse_width_reg: 0x03          # 411 us
+        adc_range_reg: 0x03            # 16384 nA
+        format: "s32"                  # 18-bit ADC, needs 32-bit codes
+        lsl_stream: "SYNAPSE_PPG_T0"
       imu_config:
         i2c_addr: 0x68
-        accel_range: 4
-        gyro_range: 500
+        gpio_int: 6
+        accel_range_g: 8
+        gyro_range_dps: 500
+        accel_odr_hz: 50
+        gyro_odr_hz: 50
+        format: "s16"
+        lsl_streams:
+          accel: "SYNAPSE_ACC_T0"
+          gyro: "SYNAPSE_GYRO_T0"
+          mag: "SYNAPSE_MAG_T0"
+      # --- I2C bus: shared by PPG + IMU ---
+      # ESP32-S3 has no usable GPIO 21-25 on octal-PSRAM modules; the classic
+      # ESP32 21/22 pair must NOT be used.
+      i2c:
+        port: 0
+        sda_gpio: 8
+        scl_gpio: 9
 
   - pod_id: "head_pod"
     name: "Head Pod (Tier 1 High-Density Rest/Sleep)"
@@ -67,10 +127,6 @@ pods:
     electrode_type: "dry_gold_pin"
     is_hub: false
     metadata:
-      ble_service_uuid: "0000ffe0-0000-1000-8000-00805f9b34fb"
-      lsl_stream_eeg: "SYNAPSE_EEG_T1"
-      lsl_stream_fnirs: "SYNAPSE_FNIRS_T1"
-      lsl_stream_ecg: "SYNAPSE_ECG_T1"
       sensors:
         eeg: "ADS1299"
         fnirs: "MAX86141"
@@ -99,13 +155,60 @@ pods:
     electrode_type: "dry_silver"
     is_hub: false
     metadata:
-      lsl_stream_eeg: "SYNAPSE_EEG_T0_EAR"
       sensors:
         eeg: "custom_earbud_afe"
       eeg_config:
         n_channels: 2
         montage: "bipolar_ear"
         reference: "ipsilateral_ear"
+
+# ---------------------------------------------------------------------
+# BLE transport contract
+# ---------------------------------------------------------------------
+ble:
+  # Consumer feature stream (Averyn / product integration): features only,
+  # no raw samples. Mirrors firmware/esp32_band/ble/ble_gatt_server.h.
+  feature_stream:
+    service_uuid: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"
+    characteristic_uuid: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5E"
+    payload_bytes: 20
+    version: 1
+  # Standard GATT services exposed alongside (nRF Connect / LightBlue usable).
+  standard_services:
+    heart_rate: "180D"
+    battery: "180F"
+    device_information: "180A"
+  mtu_target: 247
+  conn_interval_min_ms: 7.5
+  conn_interval_max_ms: 15.0
+  supervision_timeout_ms: 2000
+
+# ---------------------------------------------------------------------
+# Raw frame wire format (Synapse Research Service)
+# Mirrors firmware/common/ble/synapse_raw_frame.h and
+# src/synapse24/hardware/raw_codec.py. Protected by tests/test_raw_frame_parity.py.
+# ---------------------------------------------------------------------
+raw_frame:
+  version: 1
+  header_bytes: 12
+  max_payload_bytes: 244
+  stream_ids:
+    ecg: 0x01
+    ppg: 0x02
+    acc: 0x03
+    gyro: 0x04
+    mag: 0x05
+    temp: 0x06
+    sync: 0x10
+  sample_formats:
+    s8: 0x01
+    s16: 0x02
+    s32: 0x03
+  # Estimated BLE bytes/second per stream at the normative rates. Keeping the
+  # whole Tier-0 rig inside the ~0.6 kB/s budget from PHASE1_NEXT_STEPS.md is
+  # a requirement of Architecture.md §55-62, and is asserted in
+  # tests/test_raw_frame_parity.py::test_ppg_frame_fits_the_ble_energy_budget.
+  bytes_per_second_budget: 600
 
 # Sync configuration (Architecture.md §92)
 sync:
@@ -118,7 +221,7 @@ sync:
       sync_interval_s: 10.0
   acc_correlation_window_s: 30.0
   min_acc_correlation: 0.7
-  wired_sync_gpio: 27  # GPIO for hardwired Tier 1 sync marker (head_pod ↔ forearm_hub). I2C SDA=GPIO 8, SCL=GPIO 9 (S3 has no GPIO 22-25).
+  wired_sync_gpio: 27  # GPIO for hardwired Tier 1 sync marker (head_pod <-> forearm_hub)
 
 # Power budget profiles (Architecture.md §55-62)
 power_budget:

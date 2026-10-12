@@ -18,7 +18,9 @@ from pathlib import Path
 try:
     import serial
 except ImportError:
-    print("Error: pyserial not installed. Run 'pip install pyserial' or install hardware dependencies.")
+    print(
+        "Error: pyserial not installed. Run 'pip install pyserial' or install hardware dependencies."
+    )
     sys.exit(1)
 
 logging.basicConfig(
@@ -98,9 +100,7 @@ def validate_uart_stream(port: str, baudrate: int, duration_s: float, output_dir
         "duration_s": total_duration,
         "raw_lines_captured": raw_lines_captured,
         "sample_counts": sample_counts,
-        "estimated_rates_hz": {
-            k: v / max(total_duration, 0.1) for k, v in sample_counts.items()
-        },
+        "estimated_rates_hz": {k: v / max(total_duration, 0.1) for k, v in sample_counts.items()},
         "status": "PASS" if raw_lines_captured > 0 else "FAIL",
     }
 
@@ -112,11 +112,24 @@ def validate_uart_stream(port: str, baudrate: int, duration_s: float, output_dir
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SYNAPSE-24 Phase 1 UART Hardware Bringup Validation")
-    parser.add_argument("--port", default="COM3" if sys.platform.startswith("win") else "/dev/ttyUSB0", help="Serial port path")
+    parser = argparse.ArgumentParser(
+        description="SYNAPSE-24 Phase 1 UART Hardware Bringup Validation"
+    )
+    parser.add_argument(
+        "--port",
+        default="COM3" if sys.platform.startswith("win") else "/dev/ttyUSB0",
+        help="Serial port path",
+    )
     parser.add_argument("--baudrate", type=int, default=921600, help="UART baud rate")
-    parser.add_argument("--duration", type=float, default=60.0, help="Validation duration in seconds")
-    parser.add_argument("--output-dir", type=Path, default=Path("data/uart_bringup"), help="Output directory for reports")
+    parser.add_argument(
+        "--duration", type=float, default=60.0, help="Validation duration in seconds"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/uart_bringup"),
+        help="Output directory for reports",
+    )
 
     args = parser.parse_args()
 

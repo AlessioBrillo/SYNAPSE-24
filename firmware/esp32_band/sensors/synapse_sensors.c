@@ -22,6 +22,10 @@
 #include "gps_max_m10s.h"
 #include "temp_tmp117.h"
 
+#if defined(CONFIG_SYNAPSE_FEATURE_GPS) || defined(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
+#define SYNAPSE_HAS_AUX_SENSORS 1
+#endif
+
 static const char *TAG = "SYNAPSE_SENSORS";
 
 static synapse_sensors_t g_sensors = {0};
@@ -171,19 +175,40 @@ esp_err_t synapse_sensors_init(void) {
     };
     ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_sensors.scheduler, &imu_sensor));
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Initialize GPS
     ESP_ERROR_CHECK(gps_max_m10s_init(&g_sensors.gps_config));
+#endif
 
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Initialize Temperature
     ESP_ERROR_CHECK(temp_tmp117_init(&g_sensors.temp_config));
+#endif
 
     // Initialize latest data
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
     memset(&g_sensors.latest_gps, 0, sizeof(gps_data_t));
+#endif
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     memset(&g_sensors.latest_temp, 0, sizeof(temp_data_t));
+#endif
 
     g_sensors.initialized = true;
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
+ #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, GPS, Temp)",
              hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+ #else
+    ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, GPS)",
+             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+ #endif
+#elif defined(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
+    ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, Temp)",
+             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+#else
+    ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz) [band-core]",
+             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+#endif
     return ESP_OK;
 }
 
@@ -194,11 +219,15 @@ esp_err_t synapse_sensors_start(void) {
     // Start sensor scheduler (creates ECG/PPG/IMU tasks)
     ESP_ERROR_CHECK(sensor_scheduler_start(&g_sensors.scheduler));
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Start GPS
     ESP_ERROR_CHECK(gps_max_m10s_start());
+#endif
 
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Start Temperature
     ESP_ERROR_CHECK(temp_tmp117_start());
+#endif
 
     g_sensors.running = true;
     ESP_LOGI(TAG, "All sensors started");
@@ -211,11 +240,15 @@ esp_err_t synapse_sensors_stop(void) {
     // Stop sensor scheduler
     ESP_ERROR_CHECK(sensor_scheduler_stop(&g_sensors.scheduler));
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Stop GPS
     ESP_ERROR_CHECK(gps_max_m10s_stop());
+#endif
 
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Stop Temperature
     ESP_ERROR_CHECK(temp_tmp117_stop());
+#endif
 
     g_sensors.running = false;
     ESP_LOGI(TAG, "All sensors stopped");
@@ -225,11 +258,15 @@ esp_err_t synapse_sensors_stop(void) {
 esp_err_t synapse_sensors_deinit(void) {
     synapse_sensors_stop();
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Deinitialize GPS
     ESP_ERROR_CHECK(gps_max_m10s_deinit());
+#endif
 
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Deinitialize Temperature
     ESP_ERROR_CHECK(temp_tmp117_deinit());
+#endif
 
     // Deinitialize sensor scheduler
     ESP_ERROR_CHECK(sensor_scheduler_deinit(&g_sensors.scheduler));
@@ -262,15 +299,19 @@ esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample) {
     return ESP_OK;
 }
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
 esp_err_t synapse_sensors_get_gps(gps_data_t *gps) {
     if (!gps) return ESP_ERR_INVALID_ARG;
     return gps_max_m10s_get_latest(gps);
 }
+#endif
 
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
 esp_err_t synapse_sensors_get_temp(temp_data_t *temp) {
     if (!temp) return ESP_ERR_INVALID_ARG;
     return temp_tmp117_get_latest(temp);
 }
+#endif
 
 esp_err_t synapse_sensors_get_stats(uint32_t *sample_counts, uint32_t *dropped_samples) {
     if (!g_sensors.initialized) return ESP_ERR_INVALID_STATE;
@@ -291,9 +332,10 @@ esp_err_t synapse_sensors_set_enabled(sensor_type_t sensor_type, bool enable) {
     return ESP_ERR_NOT_SUPPORTED;
 }
 
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
 esp_err_t synapse_sensors_set_gps_power_mode(bool low_power) {
     if (!g_sensors.initialized) return ESP_ERR_INVALID_STATE;
-    
+
     if (low_power) {
         // Reduce GPS rate to 0.2Hz (5s interval)
         return gps_max_m10s_set_nav_rate(5000, 1, 0);
@@ -302,11 +344,14 @@ esp_err_t synapse_sensors_set_gps_power_mode(bool low_power) {
         return gps_max_m10s_set_nav_rate(1000, 1, 0);
     }
 }
+#endif
 
 // Periodic update for GPS/Temp data (call from main loop or acquisition FSM)
 void synapse_sensors_update_aux_data(void) {
     if (!g_sensors.initialized) return;
 
+#ifdef SYNAPSE_HAS_AUX_SENSORS
+ #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     gps_data_t gps;
     if (gps_max_m10s_get_latest(&gps) == ESP_OK) {
         if (xSemaphoreTake(g_sensors.data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -314,7 +359,9 @@ void synapse_sensors_update_aux_data(void) {
             xSemaphoreGive(g_sensors.data_mutex);
         }
     }
+ #endif
 
+ #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     temp_data_t temp;
     if (temp_tmp117_get_latest(&temp) == ESP_OK) {
         if (xSemaphoreTake(g_sensors.data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -322,4 +369,9 @@ void synapse_sensors_update_aux_data(void) {
             xSemaphoreGive(g_sensors.data_mutex);
         }
     }
+ #endif
+#else
+    // band-core build: no auxiliary sensors, nothing to refresh.
+    (void)0;
+#endif
 }

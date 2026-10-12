@@ -43,6 +43,8 @@ from synapse24.acquisition.state_machine import (
     MotionGateConfig,
     Tier,
 )
+from synapse24.hardware.raw_codec import RawStream
+from synapse24.hardware.raw_ingest import RawFrameIngestor
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
 from synapse24.signal_quality import Tier as QualityTier
 from synapse24.utils import verify_xdf_roundtrip
@@ -203,6 +205,13 @@ class Phase1Validator:
         self.running = False
         self.start_time = 0.0
         self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
+        # Decodes the Synapse Research Service frame format (the canonical one)
+        # and pushes straight into the LSL outlets. See raw_ingest.py.
+        self.raw_ingestor = RawFrameIngestor(push_callback=self._push_raw_to_lsl)
+
+    def _push_raw_to_lsl(self, outlet: str, values: list[float], ts: float) -> None:
+        """Forward one decoded raw sample row into its LSL outlet."""
+        self.lsl_manager.push_sample(outlet, values, ts)
 
     def _load_config(self, config_path: Path) -> dict:
         config = load_hardware_config_from_path(
@@ -361,6 +370,16 @@ class Phase1Validator:
         uuid_str = str(characteristic.uuid).lower()
 
         ble_chars = self.config["bringup"]["ble"]["characteristics"]
+
+        # The canonical firmware streams the Synapse Research Service frame
+        # format. Decode that first; only if the payload is not one of those
+        # frames do we fall back to the legacy sensor_sample_t parser, so an
+        # unexpected firmware build is reported rather than mis-parsed.
+        if self.raw_ingestor is not None:
+            pushed = self.raw_ingestor.handle_notification(uuid_str, bytes(data))
+            if pushed:
+                self._feed_downstream_from_raw(timestamp)
+                return
 
         try:
             if uuid_str == ble_chars["ecg"].lower():
@@ -939,6 +958,28 @@ class Phase1Validator:
 
         self.logger.warning("No SYNAPSE device found in scan")
         return None
+
+    def _feed_downstream_from_raw(self, timestamp: float) -> None:
+        """Feed clock sync and the acquisition controller from raw frames.
+
+        The ingestor already pushed samples into LSL; this mirrors the side
+        effects the legacy parser performed inline (accelerometer magnitude into
+        the sync model and the motion gate), so the rest of the gate behaves
+        identically whichever wire format the pod speaks.
+        """
+        if self.clock_sync is None and self.controller is None:
+            return
+
+        acc, _ts = self.raw_ingestor.decoder.arrays(RawStream.ACC)
+        if acc.size < 3:
+            return
+
+        acc_mag = float(np.linalg.norm(acc[-3:]))
+        if self.clock_sync:
+            self.clock_sync.add_hub_acc(acc_mag, timestamp)
+            self.clock_sync.add_pod_acc("forearm_hub", acc_mag, timestamp)
+        if self.controller:
+            self.controller.update_imu(accel_magnitude=acc_mag, timestamp=timestamp)
 
     async def _subscribe_characteristics(self) -> None:
         ble_chars = self.config["bringup"]["ble"]["characteristics"]
