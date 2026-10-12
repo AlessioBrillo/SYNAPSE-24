@@ -26,6 +26,7 @@
 
 #include "ble_research_service.h"
 #include "synapse_raw_frame.h"
+#include "host/ble_hs_mbuf.h"
 
 static const char *TAG = "SYNAPSE_RESEARCH";
 

@@ -25,6 +25,7 @@
 #ifndef SYNAPSE_BLE_RESEARCH_SERVICE_H
 #define SYNAPSE_BLE_RESEARCH_SERVICE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -72,7 +73,9 @@ typedef struct {
     uint8_t stream_id;      /**< synapse_raw_stream_t                       */
     uint8_t format;         /**< synapse_raw_format_t                       */
     uint8_t channels;       /**< channels interleaved per sample            */
-    uint8_t unit_scale;     /**< float -> int multiplier (see unit enum)    */
+    uint16_t unit_scale;    /**< float -> int multiplier (see unit enum);   *
+                             *  16-bit because the scale reaches 1000, which*
+                             *  would silently truncate to 232 in a uint8_t */
     bool enabled;           /**< host notified + subscribed                 */
     uint16_t sequence;      /**< wrapping 16-bit frame sequence             */
     uint16_t pending;       /**< buffered samples not yet framed            */

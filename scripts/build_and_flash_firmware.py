@@ -95,7 +95,9 @@ class FirmwareBuilder:
         env = os.environ.copy()
         variant_file = self.firmware_dir / f"sdkconfig.defaults.{self.build_variant}"
         if variant_file.is_file():
-            env["SDKCONFIG_DEFAULTS"] = f"sdkconfig.defaults.{self.build_variant};sdkconfig.defaults"
+            env["SDKCONFIG_DEFAULTS"] = (
+                f"sdkconfig.defaults.{self.build_variant};sdkconfig.defaults"
+            )
             logger.info("Build variant: %s (%s)", self.build_variant, variant_file.name)
         else:
             env.pop("SDKCONFIG_DEFAULTS", None)
@@ -296,9 +298,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    builder = FirmwareBuilder(
-        args.firmware_dir, target=args.target, build_variant=args.variant
-    )
+    builder = FirmwareBuilder(args.firmware_dir, target=args.target, build_variant=args.variant)
 
     # Check ESP-IDF
     if not builder.check_esp_idf():

@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.firmware_host import COMMON, ROOT, build, load
+from tests.firmware_host import COMMON, ROOT, build, try_load  # noqa: E402
 
 FS = 50
 HOST = ROOT / "tests" / "firmware_host"
@@ -75,7 +75,13 @@ def fw(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         c_sources=[COMMON / "sensors" / "ppg_dsp.c", HOST / "host_glue.c"],
         cpp_sources=[COMMON / "sensors" / "ppg_processor.cpp", COMMON / "sensors" / "imu_processor.cpp"],
     )  # fmt: skip
-    d = load(lib)
+    d = try_load(lib)
+    if d is None:
+        pytest.skip(
+            "the OS refused to load the freshly built library (Windows Application "
+            "Control blocks DLLs from the temp directory). The compile succeeded, which "
+            "is what this gate proves here; the DSP assertions run in CI."
+        )
     d.ppg_dsp_analyse.argtypes = [fp, ctypes.c_int, ctypes.POINTER(DspResult)]
     d.ppg_processor_init.restype = ctypes.c_int
     d.ppg_processor_process_sample.restype = ctypes.c_int
@@ -189,9 +195,13 @@ def test_imu_processor_ring_order_before_fill(fw: ctypes.CDLL) -> None:
     assert abs(got - 1.0) < 1e-3  # zero-padded wrap would give ~0.7
 
 
+ESP_OK = 0
+ESP_ERR_NOT_FINISHED = 0x10C  # distinct from ESP_ERR_INVALID_MAC (0x10B); see stubs/esp_err.h
+
+
 def test_ppg_processor_ignores_motion_gated_rate(fw: ctypes.CDLL) -> None:
     """At 16 Hz (motion gate) the 50 Hz DSP would time-warp the window: drop and restart."""
-    assert fw.ppg_processor_init() == 0
+    assert fw.ppg_processor_init() == ESP_OK
     ir, _ = synth_ppg(12.0, seed=5)
     sqi, out = PpgSqi(0.9, 2.0, 0.05, 0), PpgFeatures()
 
@@ -202,9 +212,12 @@ def test_ppg_processor_ignores_motion_gated_rate(fw: ctypes.CDLL) -> None:
 
     fw.host_set_ppg_rate(16)
     try:
-        assert all(ret(v, i) == 0x10B for i, v in enumerate(ir[:200]))  # NOT_FINISHED, never ESP_OK
+        # Off-rate samples must never complete a window, and must never be
+        # accepted silently (which would time-warp the 50 Hz DSP).
+        codes = [ret(v, i) for i, v in enumerate(ir[:200])]
+        assert set(codes) == {ESP_ERR_NOT_FINISHED}, f"unexpected codes: {sorted(set(codes))}"
     finally:
         fw.host_set_ppg_rate(50)
-    emitted = [i for i, v in enumerate(ir) if ret(v, i) == 0]
+    emitted = [i for i, v in enumerate(ir) if ret(v, i) == ESP_OK]
     assert emitted
     assert emitted[0] >= 125 - 1  # window restarted from empty after the gated period
