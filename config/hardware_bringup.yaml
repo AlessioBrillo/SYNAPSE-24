@@ -21,7 +21,7 @@ bringup:
     baud: 921600
     flash_mode: "dio"
     flash_freq: "80m"
-    flash_size: "16MB"
+    flash_size: "8MB"  # DevKitC-1 N8R8 (see docs/hardware/PROCUREMENT.md G1)
     verify_after_flash: true
 
   # BLE connection overrides for live hardware.

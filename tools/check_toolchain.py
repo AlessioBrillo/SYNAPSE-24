@@ -13,6 +13,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +55,58 @@ def _run(cmd: list[str], timeout_s: int = 60) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
+def _idf_py_version() -> str | None:
+    """Ask idf.py for the version, e.g. "ESP-IDF v5.5.5" -> "v5.5.5".
+
+    Returns None when idf.py is not reachable on PATH (the caller already
+    fails the idf.py check in that case), or when the idf-exe trampoline
+    cannot be exec'd from this interpreter (seen on some Windows hosts:
+    WinError 193 via subprocess even though the shell runs it fine).
+    """
+    rc, out = _run(["idf.py", "--version"], timeout_s=60)
+    if rc != 0 or not out.strip():
+        # Windows: the idf-exe trampoline cannot be exec'd from a Python
+        # subprocess (WinError 193). Try the interpreter + tools/idf.py form.
+        env_python = os.environ.get("IDF_PYTHON_ENV_PATH")
+        idf_path = os.environ.get("IDF_PATH")
+        if env_python and idf_path:
+            import sys as _sys
+
+            python = Path(env_python) / "Scripts" / "python.exe"
+            script = Path(idf_path) / "tools" / "idf.py"
+            if python.is_file() and script.is_file():
+                rc, out = _run([str(python), str(script), "--version"], timeout_s=60)
+    if rc != 0 or not out.strip():
+        return None
+    for token in out.split():
+        if token.startswith("v") and "." in token:
+            return token.lstrip("v")
+    return None
+
+
+def _idf_version_from_header(idf_dir: Path) -> str | None:
+    """Read ESP_IDF_VERSION_* from components/esp_common/include.
+
+    Deterministic for archive installs: version.txt is generated from
+    `git describe` and is absent from the official release ZIP, while this
+    header is a tracked source file present in every checkout.
+    """
+    header = idf_dir / "components" / "esp_common" / "include" / "esp_idf_version.h"
+    if not header.is_file():
+        return None
+    try:
+        text = header.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    parts = []
+    for macro in ("ESP_IDF_VERSION_MAJOR", "ESP_IDF_VERSION_MINOR", "ESP_IDF_VERSION_PATCH"):
+        match = re.search(rf"#define\s+{macro}\s+(\d+)", text)
+        if not match:
+            return None
+        parts.append(match.group(1))
+    return ".".join(parts)
+
+
 def check_esp_idf() -> list[Check]:
     """Verify ESP-IDF is installed, activated and >= 5.2."""
     import os
@@ -86,9 +140,13 @@ def check_esp_idf() -> list[Check]:
         return checks
 
     version_file = idf_dir / "version.txt"
-    version = (
-        version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "unknown"
-    )
+    version = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else ""
+    if not version:
+        # The official release ZIP (and any non-git checkout) does not carry
+        # version.txt — it is generated from git describe. Fall back to the
+        # in-tree esp_idf_version.h, then to asking idf.py itself (whose
+        # trampoline may not exec from this interpreter on Windows).
+        version = _idf_version_from_header(idf_dir) or _idf_py_version() or "unknown"
     major = minor = 0
     try:
         major, minor = (int(p) for p in version.split(".")[:2])
@@ -196,6 +254,10 @@ def check_host_compile_gates() -> list[Check]:
             name="C/C++ compiler",
             ok=compiler is not None,
             detail=compiler or "none on PATH (the ziglang fallback below still applies)",
+            # Non-blocking: on Windows there is no host gcc/clang on PATH and
+            # tests/firmware_host uses ziglang instead. The combined check
+            # below is the one that actually gates (compiler OR ziglang).
+            blocking=False,
         )
     )
 

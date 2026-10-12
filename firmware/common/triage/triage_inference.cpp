@@ -27,15 +27,19 @@ static const char* TAG = "triage_inference";
 #if SYNAPSE_HAS_TFLM
 #include "model_data.h"
 #include <new>
-extern "C" {
+// TFLM headers are C++ (namespace tflite). They must NOT be wrapped in
+// extern "C": doing so makes the C++ standard-library templates they pull
+// in "templates with C linkage", which GCC rejects.
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/micro/micro_error_reporter.h"
-}
+// TFLite Micro >=1.4 moved the default error reporter from micro/ to
+// tflite_bridge/ (tflite::GetMicroErrorReporter()); the old
+// tensorflow/lite/micro/micro_error_reporter.h header and its
+// tflite::MicroErrorReporter class were removed.
+#include "tensorflow/lite/micro/tflite_bridge/micro_error_reporter.h"
 
 static tflite::ErrorReporter* s_error_reporter = nullptr;
-static tflite::MicroErrorReporter s_micro_error_reporter;
 
 static inline tflite::MicroInterpreter* to_interpreter(void* p) {
     return static_cast<tflite::MicroInterpreter*>(p);
@@ -58,7 +62,7 @@ esp_err_t triage_inference_init(triage_inference_t* triage) {
     return ESP_OK;
 #else
     if (!s_error_reporter) {
-        s_error_reporter = &s_micro_error_reporter;
+        s_error_reporter = tflite::GetMicroErrorReporter();
     }
 
     // Use embedded model data
@@ -104,10 +108,12 @@ esp_err_t triage_inference_init(triage_inference_t* triage) {
     }
     triage->arena_size = TRIAGE_MODEL_ARENA_SIZE;
 
-    // Create interpreter (placement new inside arena)
+    // Create interpreter (placement new inside arena).
+    // TFLM >=1.4: the ErrorReporter parameter was removed from the
+    // constructor; errors go to the global GetMicroErrorReporter().
     void* interp_mem = triage->arena;
     tflite::MicroInterpreter* interp = new (interp_mem) tflite::MicroInterpreter(
-        model, resolver, static_cast<uint8_t*>(triage->arena), triage->arena_size, s_error_reporter);
+        model, resolver, static_cast<uint8_t*>(triage->arena), triage->arena_size);
     if (!interp) {
         ESP_LOGE(TAG, "Failed to create MicroInterpreter");
         heap_caps_free(triage->arena);

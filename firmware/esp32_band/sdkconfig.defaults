@@ -1,8 +1,13 @@
 # Synapse Band v1 - ESP32-S3 SDK Configuration
 # Based on esp32_forearm/esp32_tier0 with Band-specific adjustments
 
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE=16MB
+# Flash: DevKitC-1 N8R8 (WROOM-1-N8R8, 8 MB Quad flash + 8 MB Octal PSRAM).
+# See docs/hardware/PROCUREMENT.md G1 — the smoke kit board is N8R8.
+# partitions.csv below uses a 6 MB layout, which fits the 8 MB chip.
+# Do NOT set 16MB here: the N16R8V variant uses a different module
+# (WROOM-2, 1.8V Octal flash/PSRAM) and this project targets WROOM-1.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE=8MB
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHMODE="qio"
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

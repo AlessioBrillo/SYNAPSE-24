@@ -23,7 +23,9 @@ frame format.
 
 ## The real critical path
 
-Only one thing blocks the hardware order, and it costs €0:
+G0 used to be the only thing blocking the hardware order. It is **CLOSED
+(2026-10-12)**: the toolchain check is READY and both firmware variants
+compile on the dev host.
 
 ```
 G0: firmware has never been compiled
@@ -39,10 +41,11 @@ G2: Cerelog ESP-EEG (~EUR 350), only once G1 has measured
     the sync drift, the BLE budget and zero dropped samples
 ```
 
-`tools/check_toolchain.py` currently reports BLOCKED because ESP-IDF is not
-installed on the build host. That is the honest state and the reason G0 comes
-first: buying sensors before the firmware compiles means paying to discover
-bench problems that cost nothing to find now.
+`tools/check_toolchain.py` reports READY with ESP-IDF v5.5.5 installed and
+the environment activated (`export.ps1`). The first local compile found three
+real defects (a silent variant-profile bug, an `extern "C"` around C++ TFLM
+headers, and a stale-sdkconfig override) — exactly the class of bug G0 exists
+to catch before hardware, not after.
 
 ## Commands
 

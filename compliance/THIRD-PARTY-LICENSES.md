@@ -54,7 +54,22 @@ All runtime dependencies use permissive or file-level-copyleft licences compatib
 
 ## Firmware
 
-Firmware under `firmware/` is built on **ESP-IDF 5.2+** (Apache-2.0, including its bundled FreeRTOS under MIT). `firmware/esp32_band/README.md` references TensorFlow Lite Micro (Apache-2.0); it is not vendored in this repository, so record its version and licence when it is added to a build. Verify the licences of any component fetched at build time before shipping device images.
+Firmware under `firmware/` is built on **ESP-IDF v5.5.5** (pinned in CI via
+`esp-idf-ci-action` and in `docs/hardware/ESP-IDF_SETUP.md`; Apache-2.0,
+including its bundled FreeRTOS under MIT).
+
+Two managed components are declared in
+`firmware/esp32_band/main/idf_component.yml` and resolved at build time
+(pinned resolution in `dependencies.lock`):
+
+| Component | Pinned version | Licence | Notes |
+|---|---|---|---|
+| `espressif/esp-tflite-micro` | 1.4.1 | **Custom** — ships its own `license.txt` | TFLite Micro runtime for `common/triage/triage_inference.cpp`. 1.3.x and earlier were Apache-2.0; 1.4.0+ declare "Custom", so confirm the text in the unpacked component before shipping device images. |
+| `espressif/esp-nn` | resolved >=1.3.0 | Apache-2.0 | Transitive dependency of esp-tflite-micro (optimized kernels). |
+
+As before, verify the licences of any component fetched at build time before
+shipping device images; this table records the declared versions as of the
+v5.5.5 pin (October 2026).
 
 ## Datasets
 

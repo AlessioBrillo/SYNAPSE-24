@@ -19,21 +19,67 @@ parity tests in `tests/firmware_host/` both depend on it.
 The gate is: **`firmware/esp32_band` compiles with `-Wall -Wextra -Werror`**,
 and CI proves it on every push so the gate can never silently regress.
 
+## Pinned version: v5.5.5
+
+The project pins **ESP-IDF v5.5.5** everywhere (local host + CI
+`firmware-build` job). Rationale (verified October 2026):
+
+- v5.5.5 is the **latest stable 5.x** (16 Jul 2026). v5.3 is at end of
+  maintenance (last bugfix v5.3.6, 15 Sep 2026) and v6.0/6.1, while released,
+  carry breaking changes the firmware has not been evaluated against — the
+  NimBLE and TFLM component APIs used here are 5.x APIs.
+- Installing a version other than v5.5.5 locally reintroduces the
+  "compiles in CI, fails on my desk" failure mode the pin exists to prevent.
+
 ## 1. Install
 
 ### Windows
 
-1. Download the ESP-IDF offline/online installer:
-   <https://dl.espressif.com/dl/esp-idf/esp-idf-tools-setup-1.2.exe>
-2. Install **ESP-IDF v5.2 or newer** (5.3/5.4 are fine; do not use 6.x yet —
-   the NimBLE and TFLM component APIs used by this firmware are 5.x APIs).
-3. When the installer asks which targets to install, select **ESP32-S3**.
-4. Install the USB-serial driver for your board (CP210x or CH340).
-
-Activate the environment in **every new terminal**:
+Option A — pinned download (recommended, reproducible):
 
 ```powershell
-%USERPROFILE%\esp\esp-idf\export.bat
+# scripts/tools/download_esp_idf.ps1 fetches the pinned v5.5.5 archive from
+# the Espressif asset CDN (falls back to codeload), with resume + retry for
+# flaky links, into %USERPROFILE%\esp\esp-idf-v5.5.5.zip. Expand it, then:
+powershell -ExecutionPolicy Bypass -File scripts\tools\download_esp_idf.ps1
+tar -xf $env:USERPROFILE\esp\esp-idf-v5.5.5.zip -C $env:USERPROFILE\esp
+Rename-Item $env:USERPROFILE\esp\esp-idf-v5.5.5 $env:USERPROFILE\esp\esp-idf
+powershell -ExecutionPolicy Bypass -File scripts\tools\fetch_idf_submodules.ps1
+cd $env:USERPROFILE\esp\esp-idf
+.\install.ps1 esp32s3
+```
+
+Option B — git clone (simplest on a reliable link):
+
+```powershell
+git clone -b v5.5.5 --recursive https://github.com/espressif/esp-idf.git $env:USERPROFILE\esp\esp-idf
+cd $env:USERPROFILE\esp\esp-idf
+./install.ps1 esp32s3
+```
+
+Option C — GUI installer: download
+<https://dl.espressif.com/dl/esp-idf/esp-idf-tools-setup-1.2.exe> and select
+**v5.5.x** (do not let it default to a different 5.x, and do not use 6.x yet).
+When the installer asks which targets to install, select **ESP32-S3**.
+Install the USB-serial driver for your board (CP210x or CH340).
+
+> **Submodules (zip installs only):** the release ZIP (`esp-idf-v5.5.5.zip`,
+> ~1,9 GB, root folder `esp-idf-v5.5.5`) does not contain submodules.
+> `scripts/tools/fetch_idf_submodules.ps1` materialises the ten submodules the
+> Band build needs (NimBLE host, the esp32c3-family BLE controller used by
+> S3, wifi/phy/coex libs, lwip, mbedtls, tlsf, cJSON, micro-ecc) **at their
+> exact v5.5.5-pinned SHAs** (depth-1 fetch by SHA, with retry). Without
+> `esp-nimble`/`esp32c3-bt-lib` the NimBLE build fails at CMake time.
+>
+> **`version.txt` does not exist in the ZIP archive** (it is generated from
+> `git describe`). `tools/check_toolchain.py` falls back to `idf.py --version`
+> automatically, so this is handled — no manual step.
+
+Activate the environment in **every new terminal** (dot-source it, or the
+environment variables do not persist to the rest of your session):
+
+```powershell
+. $env:USERPROFILE\esp\esp-idf\export.ps1
 ```
 
 ### Linux / macOS

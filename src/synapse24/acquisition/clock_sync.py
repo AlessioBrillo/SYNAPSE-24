@@ -82,8 +82,10 @@ class SyncConfig:
     # Sampling rates for ACC streams (Hz) per pod
     acc_sampling_rates: dict[str, int] = field(default_factory=dict)
 
-    # Wired GPIO sync (Architecture.md §29, hardware_bringup.yaml)
-    wired_sync_gpio: int = 21
+    # Wired GPIO sync (Architecture.md §29, hardware_bringup.yaml).
+    # 27 matches config/hardware.yaml sync.wired_sync_gpio (single source
+    # of truth); it is free on the S3 (I2C is on 8/9, not 21/22).
+    wired_sync_gpio: int = 27
     wired_sync_enabled: bool = True
     wired_sync_pulse_width_us: int = 10  # 10µs pulse for sync
 

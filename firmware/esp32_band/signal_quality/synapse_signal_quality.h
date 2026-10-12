@@ -77,7 +77,10 @@ esp_err_t synapse_signal_quality_init(void);
  * @param sample Sensor sample
  * @return ESP_OK on success
  */
-esp_err_t synapse_signal_quality_process(const synapse_sensor_sample_t *sample);
+// Takes the common sensor_sample_t (not the Band's extended
+// synapse_sensor_sample_t): only ECG/PPG/IMU base fields are used, and this
+// keeps the component usable from any pod.
+esp_err_t synapse_signal_quality_process(const sensor_sample_t *sample);
 
 /**
  * @brief Get latest PPG quality metrics

@@ -204,11 +204,26 @@ raw_frame:
     s8: 0x01
     s16: 0x02
     s32: 0x03
-  # Estimated BLE bytes/second per stream at the normative rates. Keeping the
-  # whole Tier-0 rig inside the ~0.6 kB/s budget from PHASE1_NEXT_STEPS.md is
-  # a requirement of Architecture.md §55-62, and is asserted in
-  # tests/test_raw_frame_parity.py::test_ppg_frame_fits_the_ble_energy_budget.
-  bytes_per_second_budget: 600
+  # Estimated BLE bytes/second per stream at the normative rates. The 0.6 kB/s
+  # figure that used to live here was only ever true of the PPG stream alone
+  # (see tests/test_raw_frame_parity.py::test_ppg_frame_fits_the_ble_energy_budget).
+  # Measured/derived raw volume for the whole Tier-0 rig:
+  #   ECG  500 Hz x 2 B            = 1000 B/s
+  #   PPG   50 Hz x 2ch x 4 B s32   =  400 B/s
+  #   IMU   3 sub-streams x 3 x 2 B =  900 B/s (50 Hz each)
+  #   aggregate                     ~= 2.3-2.4 kB/s sustained
+  # This fits the physical BLE link (MTU 247 + DLE, 7.5-15 ms connection
+  # interval: >10 kB/s usable) but it is NOT a 0.6 kB/s system. The budgets
+  # below are therefore per-stream, with an aggregate cap for bringup.
+  # Architecture.md §55-62 "compress before transmit" (delta encoding etc.)
+  # is deferred firmware work with its own gate.
+  per_stream_bytes_per_second_budget:
+    ecg: 1100
+    ppg: 450
+    acc: 320
+    gyro: 320
+    mag: 320
+  aggregate_bytes_per_second_budget: 3000
 
 # Sync configuration (Architecture.md §92)
 sync:
