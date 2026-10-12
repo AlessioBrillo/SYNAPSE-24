@@ -209,11 +209,17 @@ class SynapseBleClient:
         return None
 
     async def sync_exchange(self, client: object, num_exchanges: int = 1) -> list[SyncExchange]:
-        """Run ``num_exchanges`` ping-pong exchanges on an open BleakClient."""
+        """Run ``num_exchanges`` ping-pong exchanges on an open BleakClient.
+
+        ``client`` is typed as ``object`` so this module keeps no hard dependency
+        on bleak at import time, so the attribute accesses are annotated
+        explicitly here. This was previously two mypy errors that kept the
+        entire lint job -- and therefore the test job -- red.
+        """
         from bleak import BleakClient
 
         results: list[SyncExchange] = []
-        ble_client = client  # typed as object to avoid hard bleak dependency
+        ble_client: BleakClient = client  # type: ignore[assignment]
         for _ in range(num_exchanges):
             self._next_seq += 1
             pod_send = self.now_us()
