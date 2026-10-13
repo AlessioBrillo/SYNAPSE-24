@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -21,8 +22,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _idf_cmd() -> list[str]:
+    """Command prefix that reliably invokes idf.py on every host.
+
+    On Windows the idf-exe trampoline (``idf.py.EXE``) cannot be launched via
+    CreateProcess from a Python subprocess (WinError 193: "%1 is not a valid
+    Win32 application"), even though shells can run it. The canonical fix is
+    to run ``$IDF_PATH/tools/idf.py`` with the ESP-IDF Python interpreter
+    (``IDF_PYTHON_ENV_PATH``, set by export.ps1). Fall back to the plain
+    ``idf.py`` name on Unix, or when the environment is missing.
+    """
+    if platform.system() == "Windows":
+        env_python = os.environ.get("IDF_PYTHON_ENV_PATH")
+        idf_path = os.environ.get("IDF_PATH")
+        if env_python and idf_path:
+            python = Path(env_python) / "Scripts" / "python.exe"
+            idf_py_script = Path(idf_path) / "tools" / "idf.py"
+            if python.is_file() and idf_py_script.is_file():
+                return [str(python), str(idf_py_script)]
+    return ["idf.py"]
+
+
 class FirmwareBuilder:
     """Manages ESP-IDF build and flash for SYNAPSE-24 firmware."""
+
+    # Build variant -> sdkconfig.defaults suffix (None = base defaults only).
+    # "band-core" is the smoke-kit rig and needs its profile appended AFTER
+    # the base file, hence the explicit mapping (the file is
+    # sdkconfig.defaults.core, NOT sdkconfig.defaults.band-core).
+    VARIANT_SDKCONFIG_SUFFIX = {
+        "band-core": "core",
+        "band-full": None,
+    }
 
     def __init__(
         self,
@@ -45,26 +76,68 @@ class FirmwareBuilder:
         """Verify ESP-IDF environment is set up."""
         idf_path = os.environ.get("IDF_PATH")
         if not idf_path:
-            logger.error("IDF_PATH not set. Source export.sh from ESP-IDF installation.")
+            logger.error("IDF_PATH not set. Source export.sh/export.ps1 from ESP-IDF installation.")
             return False
 
-        idf_py = shutil.which("idf.py")
-        if not idf_py:
-            logger.error("idf.py not in PATH. Activate ESP-IDF environment.")
-            return False
-
+        idf_cmd = _idf_cmd()
+        if idf_cmd != ["idf.py"]:
+            logger.info(f"idf.py: {' '.join(idf_cmd)}")
+        else:
+            idf_py = shutil.which("idf.py")
+            if not idf_py:
+                logger.error("idf.py not in PATH. Activate ESP-IDF environment.")
+                return False
         logger.info(f"ESP-IDF found at: {idf_path}")
         return True
 
+    def _variant_env(self) -> dict[str, str]:
+        """Environment carrying the variant's SDKCONFIG_DEFAULTS.
+
+        The variant selects sdkconfig.defaults.<suffix> in addition to the
+        base defaults. Passing SDKCONFIG_DEFAULTS replaces ESP-IDF's default
+        list, so both files must be named explicitly. Every idf.py invocation
+        that can (re)generate sdkconfig must receive this environment —
+        set-target included, or its regenerated sdkconfig would later win.
+        """
+        variant_suffix = self.VARIANT_SDKCONFIG_SUFFIX.get(self.build_variant, "")
+        if self.build_variant not in self.VARIANT_SDKCONFIG_SUFFIX:
+            raise ValueError(
+                f"unknown build variant {self.build_variant!r}; "
+                f"expected one of {sorted(self.VARIANT_SDKCONFIG_SUFFIX)}"
+            )
+        env = os.environ.copy()
+        if variant_suffix:
+            variant_file = self.firmware_dir / f"sdkconfig.defaults.{variant_suffix}"
+            if not variant_file.is_file():
+                raise FileNotFoundError(f"variant defaults not found: {variant_file}")
+            env["SDKCONFIG_DEFAULTS"] = f"sdkconfig.defaults.{variant_suffix};sdkconfig.defaults"
+            logger.info(
+                "Build variant: %s (%s)", self.build_variant, f"sdkconfig.defaults.{variant_suffix}"
+            )
+        else:
+            env.pop("SDKCONFIG_DEFAULTS", None)
+            logger.info("Build variant: %s (base sdkconfig.defaults only)", self.build_variant)
+        return env
+
     def set_target(self) -> bool:
         """Set the target chip (ESP32-S3)."""
+        # The sdkconfig file lives OUTSIDE build/ and survives --clean. Its
+        # values take precedence over every sdkconfig.defaults file, so a
+        # stale one (e.g. from a band-full build) silently defeats the
+        # variant profile. Delete it first: the defaults files are the
+        # authoritative source and idf.py regenerates the file from them.
+        stale_sdkconfig = self.firmware_dir / "sdkconfig"
+        if stale_sdkconfig.is_file():
+            stale_sdkconfig.unlink()
+            logger.info("Deleted stale sdkconfig (regenerated from variant defaults)")
         try:
             result = subprocess.run(
-                ["idf.py", "set-target", self.target],
+                [*_idf_cmd(), "set-target", self.target],
                 cwd=self.firmware_dir,
                 capture_output=True,
                 text=True,
                 timeout=60,
+                env=self._variant_env(),
             )
             if result.returncode != 0:
                 logger.error(f"Failed to set target: {result.stderr}")
@@ -85,23 +158,11 @@ class FirmwareBuilder:
             if self.build_dir.exists():
                 shutil.rmtree(self.build_dir)
 
-        cmd = ["idf.py", "build"]
+        cmd = [*_idf_cmd(), "build"]
         if verbose:
             cmd.append("-v")
 
-        # The variant selects sdkconfig.defaults.<variant> in addition to the
-        # base defaults. Passing SDKCONFIG_DEFAULTS replaces ESP-IDF's default
-        # list, so both files must be named explicitly.
-        env = os.environ.copy()
-        variant_file = self.firmware_dir / f"sdkconfig.defaults.{self.build_variant}"
-        if variant_file.is_file():
-            env["SDKCONFIG_DEFAULTS"] = (
-                f"sdkconfig.defaults.{self.build_variant};sdkconfig.defaults"
-            )
-            logger.info("Build variant: %s (%s)", self.build_variant, variant_file.name)
-        else:
-            env.pop("SDKCONFIG_DEFAULTS", None)
-            logger.info("Build variant: default (no sdkconfig.defaults.%s)", self.build_variant)
+        env = self._variant_env()
 
         logger.info("Building firmware...")
         start = time.time()
@@ -199,7 +260,7 @@ class FirmwareBuilder:
             logger.error(f"Binary not found: {self.bin_path}. Run build first.")
             return False
 
-        cmd = ["idf.py", "-p", port, "-b", str(baud), "flash"]
+        cmd = [*_idf_cmd(), "-p", port, "-b", str(baud), "flash"]
         if erase_flash:
             cmd.insert(-1, "erase-flash")
 
@@ -225,7 +286,7 @@ class FirmwareBuilder:
 
         if verify:
             logger.info("Verifying flash...")
-            verify_cmd = ["idf.py", "-p", port, "-b", str(baud), "flash", "verify"]
+            verify_cmd = [*_idf_cmd(), "-p", port, "-b", str(baud), "flash", "verify"]
             try:
                 result = subprocess.run(
                     verify_cmd,
@@ -245,7 +306,7 @@ class FirmwareBuilder:
 
     def monitor(self, port: str, baud: int = 921600, duration: int | None = None) -> bool:
         """Open serial monitor (non-blocking with optional duration)."""
-        cmd = ["idf.py", "-p", port, "-b", str(baud), "monitor"]
+        cmd = [*_idf_cmd(), "-p", port, "-b", str(baud), "monitor"]
 
         logger.info(f"Starting monitor on {port}...")
 

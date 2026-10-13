@@ -58,27 +58,27 @@ esp_err_t synapse_signal_quality_init(void) {
     return ESP_OK;
 }
 
-esp_err_t synapse_signal_quality_process(const synapse_sensor_sample_t *sample) {
+esp_err_t synapse_signal_quality_process(const sensor_sample_t *sample) {
     if (!g_initialized || !sample) return ESP_ERR_INVALID_ARG;
 
     // Feed the processors / triage window (nothing else did: they only exposed get_latest()).
     ppg_sqi_result_t feed_sqi = {0};
     bool ppg_new = false, imu_new = false;  // processors emit 10 Hz / 1 Hz, not per sample
-    switch (sample->base.type) {
+    switch (sample->type) {
     case SENSOR_TYPE_PPG:
         (void)ppg_max30102_get_sqi(&feed_sqi);
-        ppg_new = ppg_processor_process_sample(sample->base.data.ppg.red, sample->base.data.ppg.ir,
-                                               sample->base.timestamp_us, &feed_sqi, NULL) == ESP_OK;
-        triage_features_push_ppg_ir(sample->base.data.ppg.ir);
+        ppg_new = ppg_processor_process_sample(sample->data.ppg.red, sample->data.ppg.ir,
+                                               sample->timestamp_us, &feed_sqi, NULL) == ESP_OK;
+        triage_features_push_ppg_ir(sample->data.ppg.ir);
         break;
     case SENSOR_TYPE_IMU:
-        imu_new = imu_processor_process_sample(sample->base.data.imu.ax, sample->base.data.imu.ay,
-                                               sample->base.data.imu.az, sample->base.data.imu.gx,
-                                               sample->base.data.imu.gy, sample->base.data.imu.gz,
-                                               sample->base.timestamp_us, NULL) == ESP_OK;
-        triage_features_push_imu(sample->base.data.imu.ax, sample->base.data.imu.ay,
-                                 sample->base.data.imu.az, sample->base.data.imu.gx,
-                                 sample->base.data.imu.gy, sample->base.data.imu.gz);
+        imu_new = imu_processor_process_sample(sample->data.imu.ax, sample->data.imu.ay,
+                                               sample->data.imu.az, sample->data.imu.gx,
+                                               sample->data.imu.gy, sample->data.imu.gz,
+                                               sample->timestamp_us, NULL) == ESP_OK;
+        triage_features_push_imu(sample->data.imu.ax, sample->data.imu.ay,
+                                 sample->data.imu.az, sample->data.imu.gx,
+                                 sample->data.imu.gy, sample->data.imu.gz);
         break;
     default:
         return ESP_OK;  // ECG (500 Hz) has no processor here; skip the aggregate update

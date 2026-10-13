@@ -3,9 +3,9 @@
 The plan and its current state. This file is the answer to: *what has to be true
 before I spend money on sensors?*
 
-**Verdict as of this writing:** the software is ready to absorb hardware. The
-world's only blocker is that the firmware has never been compiled — which costs
-€0 to fix and, left unfixed, would invalidate the entire procurement order.
+**Verdict as of this writing:** the software is ready to absorb hardware, and
+the firmware now compiles: G0 closed on the dev host on 2026-10-12 (ESP-IDF
+v5.5.5, both build variants). The next physical step is the smoke kit (G1).
 
 ## Where the project was
 
@@ -85,11 +85,11 @@ side of the wire:
 
 ## What is left
 
-| Gate | Blocker | Cost to clear |
-|---|---|---|
-| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h |
-| **G1** | Smoke kit not bought/measured | ~€100 + a weekend |
-| **G2** | Cerelog order | ~€350, after G1 |
+| Gate | Blocker | Cost to clear | State (2026-10-12) |
+|---|---|---|---|
+| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY, `band-core` and `band-full` both compile locally. CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
+| **G1** | Smoke kit not bought/measured | ~€100 + a weekend | ⛔ Not started — order after this PR merges |
+| **G2** | Cerelog order | ~€350, after G1 | ⛔ Not started |
 
 ## How the gates are enforced
 

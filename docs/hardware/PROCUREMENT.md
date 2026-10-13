@@ -14,13 +14,17 @@ can use.
 
 | Gate | What it unlocks | Evidence required | State |
 |---|---|---|---|
-| **G0** | Any firmware work at all | `tools/check_toolchain.py` green; `firmware/esp32_band` compiles `band-core` in CI | ⛔ **BLOCKED** — ESP-IDF not installed on the build host |
+| **G0** | Any firmware work at all | `tools/check_toolchain.py` green; `firmware/esp32_band` compiles `band-core` in CI | ✅ **CLOSED 2026-10-12** — ESP-IDF v5.5.5 on the dev host; `band-core` and `band-full` both compile locally; CI pins v5.5.5 |
 | **G1** | Order the Phase 2 rig (Cerelog) | Smoke kit passes the measurement SOP below | ⛔ Not started |
 | **G2** | Anything beyond EEG (in-ear, hub, fNIRS, EmotiBit) | G1 + a full night of Cerelog co-recording in XDF | ⛔ Not started |
 
-**G0 is the only thing standing in front of G1 and G2.** It is a software
+**G0 is the only thing standing in front of G1 and G2.** It was a software
 problem with a zero-euro fix: install ESP-IDF and let the CI build job prove
-the firmware. See `docs/hardware/ESP-IDF_SETUP.md`.
+the firmware. **Closed 2026-10-12** — see `docs/hardware/ESP-IDF_SETUP.md`
+(pinned v5.5.5, reproducible download/submodule scripts under
+`scripts/tools/`). Buying sensors before the firmware compiles means paying to
+discover bench problems that cost nothing to find now — the first local
+compile found three real defects (see the commit that closed the gate).
 
 ---
 
@@ -34,10 +38,10 @@ reason.
 
 | # | Part | Qty | Spec that matters | Est. EUR | Why this one |
 |---|---|---|---|---|---|
-| 1 | ESP32-S3 DevKitC-1 | 1 | **N8R8: 8 MB Flash + 8 MB PSRAM** | 12–15 | PSRAM is mandatory for the TFLM triage arena (~60 KB model + activations). ESP32-C3 has none and will OOM. ESP32-S3 also has no usable GPIO 21–25, which is why the I²C bus is on 8/9. |
+| 1 | ESP32-S3 DevKitC-1 | 1 | **N8R8: 8 MB Flash + 8 MB PSRAM** | 12–15 | PSRAM is mandatory for the TFLM triage arena (~60 KB model + activations). ESP32-C3 has none and will OOM. ESP32-S3 also has no usable GPIO 21–25, which is why the I²C bus is on 8/9. N8R8 (WROOM-1) is the mainstream module — do **not** buy N16R8V: that is WROOM-2 with 1.8 V octal flash/PSRAM, a different part for the same price. `partitions.csv` uses a 6 MB layout, which fits the 8 MB chip as-is. |
 | 2 | AD8232 ECG breakout | 1 | Generic clone, snap-electrode header | 3–7 | The de-facto DIY single-lead front-end. Fine for HR/HRV; not diagnostic. |
 | 3 | MAX30102 breakout | 1 | Red + IR photodiode, I²C | 2–6 | Cheapest credible PPG. Shield from ambient light. |
-| 4 | ICM-20948 breakout | 1 | 9-axis, I²C | 10–15 | The MPU-9250 is discontinued by the manufacturer; ICM-20948 is the supported successor and is drop-in pin compatible. |
+| 4 | ICM-20948 breakout | **2** | 9-axis, I²C | 10–15 ea | ⚠️ **EOL**: TDK PCN-000570 (Mar 2026) — last-time-buy Apr 2026, last-time-ship **30 Oct 2026**. Distributor and clone stock remains fine for a one-off bringup rig, so buy 2 (one spare). A **firmware migration to ICM-42688-P (+ AK09918 magnetometer) or ICM-45608+ICT-15318 is a Phase-2 gated task** — no pin-compatible replacement and no driver exists in-tree yet. |
 | 5 | Ag/AgCl snap electrodes | 50-pack | Gel, single-use | 8–15 | Skin prep is the single biggest determinant of ECG SNR. |
 | 6 | Breadboard 830-pt + Dupont jumpers (M/M, M/F, F/F) | 1 | — | 15–25 | |
 | 7 | Micro-USB **data** cable | 2 | Must carry data, not charge-only | 3–5 | Charge-only cables are the #1 cause of "flash failed". |
@@ -101,7 +105,7 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 |---|---|---|---|
 | 1 | Idle current, deep sleep between BLE events | Bench PSU + series R / USB power meter | As low as achievable; record the number, this is the number that decides 24 h feasibility. |
 | 2 | Average Tier-0 current, streaming raw | Same | ≤5 mW average (the `hardware.yaml` T0 budget). |
-| 3 | BLE throughput, the raw research service | Host + `decoder.estimated_bytes()` | ≤600 B/s sustained. |
+| 3 | BLE throughput, the raw research service | Host + `decoder.estimated_bytes()` | Per-stream budgets: ECG ≤1,1 kB/s, PPG ≤0,45 kB/s, each IMU sub-stream ≤0,32 kB/s; aggregate ≤3 kB/s sustained. The old "≤600 B/s" figure only ever applied to the PPG stream alone (raw volume of the full rig is ~2,3–2,4 kB/s — see `config/hardware.yaml` `raw_frame.*`). |
 | 4 | **Dropped frames over 30 min** | `ResearchStreamDecoder.drops` | **Zero.** Any gap fails the recording — see `research_client.py`. |
 | 5 | HR vs manual pulse count | Stopwatch + timer | MAE ≤ 2 bpm. |
 | 6 | RMSSD vs NeuroKit2 reference on the same recording | NeuroKit2 | MAE < 5 ms. |

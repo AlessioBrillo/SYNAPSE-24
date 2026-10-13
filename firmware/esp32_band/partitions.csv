@@ -1,5 +1,5 @@
 # Name,   Type, SubType, Offset,  Size, Flags
-# 6MB layout for 16MB flash (ESP32-S3 DevKitC-1 N16R8 per HARDWARE_BRINGUP.md).
+# 6MB layout for the N8R8 board (ESP32-S3 DevKitC-1 N8R8, WROOM-1, 8MB flash).
 # App slots 1.5MB each, ~1.4MB SPIFFS for FIT sessions.
 nvs,      data, nvs,     0x9000,  0x6000
 phy_init, data, phy,     0xF000,  0x1000

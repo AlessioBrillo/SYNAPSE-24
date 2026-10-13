@@ -169,7 +169,7 @@ jobs:
       - name: Build band-core (smoke kit rig)
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.3
+          esp_idf_version: v5.5.5
           target: esp32s3
           path: firmware/esp32_band
           command: |
@@ -178,7 +178,7 @@ jobs:
       - name: Build band-full (product firmware)
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.3
+          esp_idf_version: v5.5.5
           target: esp32s3
           path: firmware/esp32_band
           command: idf.py build

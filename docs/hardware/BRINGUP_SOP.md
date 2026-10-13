@@ -84,11 +84,62 @@ Step 5 is the one people skip. A recording with a hole is worse than a
 recording that stopped, because the hole is silent. `ResearchStreamDecoder`
 counts it; do not override it.
 
+### 3a. Staged stream subscription (BLE budget triage)
+
+The full rig streams ~2,3–2,4 kB/s sustained (ECG 1,0 + PPG 0,42 + IMU 0,95;
+see `config/hardware.yaml` `raw_frame.*`). That fits the physical link with
+MTU 247 + DLE, but if measurement 4 (dropped frames) is non-zero it means the
+negotiated link is under-performing. Debug in stages by commenting
+characteristics out of `config/hardware_bringup.yaml` `bringup.ble`:
+
+1. First run: **ECG only** (~1,0 kB/s). Zero drops here → the link and the
+   frame path are sound; the fault is capacity, not correctness.
+2. Second run: ECG + PPG (~1,4 kB/s).
+3. Third run: everything, including the three IMU sub-streams.
+
+Before blaming capacity, check that **DLE was negotiated** (link-layer
+packets of 251 B, not the default 27 B): `nRF Connect` shows it under the
+connection ("Data Length"). With 27-byte PDUs the ~244-byte notifications
+fragment into 9 link-layer packets each and the budget collapses. If DLE is
+missing on the pod side, set the preferred data length after connect
+(`esp_ble_gap_set_data_length`) — one function call in the research service.
+
 ## 4. Record the numbers
 
 Write every measured value into `data/live_validation/gate_report.json` —
 current per tier, throughput, drift, HR/RMSSD errors, SQI/MAP. `PROCUREMENT.md`
 treats those numbers as the only legitimate basis for the Phase 2 order.
+
+### 4a. Bench characterization (before wearing the rig)
+
+Two cheap bench numbers that make the G1 dataset interpretable later:
+
+1. **AD8232 noise floor**: electrodes unplugged, RA/LA/RL shorted together,
+   60 s of recording. Record the std of the raw stream in µV-equivalent units
+   (after the fixed gain of 6 and the vref scaling from `hardware.yaml`). This
+   is the number every future ECG SNR claim hangs on — a generic clone varies
+   unit to unit.
+2. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
+   pull-ups on SDA/SCL before replacing sensors — see the troubleshooting
+   table.
+
+### 4b. Motion session (informational, not a gate)
+
+Record 5 minutes of walking plus desk-tapping while wearing the rig. This is
+**not** a G1 pass criterion (the gate is seated-and-still per `PROCUREMENT.md`),
+but it is the first real data the motion gate (`Architecture.md §74`) will ever
+have seen. Save it alongside the gate report; do not let it annul a green run.
+
+## 5. Soak test — the MVP bar
+
+The SOP's 30-minute zero-drop run is a proxy. The project promises 24/7
+Tier-0, and the pod's 32-bit microsecond timestamp wraps every ~71,6 minutes —
+so only a multi-hour run exercises `DeviceClock` for real.
+
+**MVP criterion: one 6-hour continuous recording (overnight is fine) with
+zero dropped frames, monotonic XDF, and the pod on battery.** Passing that,
+plus the ten SOP numbers in `data/live_validation/gate_report.json`, is what
+unlocks the G2 order.
 
 ## Troubleshooting
 

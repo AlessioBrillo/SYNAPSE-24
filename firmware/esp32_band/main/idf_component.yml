@@ -1,0 +1,16 @@
+# Managed components for the Synapse Band firmware (firmware/esp32_band).
+#
+# edge_ai -> ../../common/triage/triage_inference.cpp includes
+# tensorflow/lite/micro/* headers and links the TFLite Micro runtime, which
+# is NOT part of ESP-IDF: it comes from the Espressif component registry.
+# Until this manifest existed the dependency was undeclared, so any build
+# that ever succeeded did so by luck (or not at all). Declaring it here means
+# `idf.py build` resolves it deterministically and pins the resolution in
+# dependencies.lock.
+dependencies:
+  # Pinned exactly: the triage runtime is model/runtime coupled, and an
+  # unattended resolver drift is exactly the "works in CI, not at my desk"
+  # failure mode the firmware-build gate exists to prevent. esp-tflite-micro
+  # 1.4.1 requires IDF >=5.1 and esp-nn >=1.3.0 — satisfied by our pinned
+  # ESP-IDF v5.5.5 (both are resolved automatically).
+  espressif/esp-tflite-micro: "1.4.1"
