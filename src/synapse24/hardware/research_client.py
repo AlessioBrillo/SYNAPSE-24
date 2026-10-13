@@ -120,6 +120,11 @@ class ResearchStreamDecoder:
     clock: DeviceClock = field(default_factory=DeviceClock)
     frames_seen: int = 0
     frames_rejected: int = 0
+    # Extended (64-bit) timestamp of the most recent accepted frame, in
+    # microseconds. The frame header only carries the low 32 bits of the
+    # pod's counter, so anything mapping pod time into the host domain must
+    # use this reconstructed value, never the raw header stamp.
+    last_first_us: int = 0
 
     def feed(self, frame: bytes | bytearray) -> RawHeader:
         """Decode one GATT notification and buffer its samples.
@@ -172,6 +177,7 @@ class ResearchStreamDecoder:
             return
 
         first_us = self.clock.extend(header.timestamp_us, header.flags)
+        self.last_first_us = first_us
         # Timestamps within a frame are not carried per sample; the frame
         # stamp is the first sample's time. The stream's own rate (from
         # hardware.yaml) is what the consumer uses to space them.

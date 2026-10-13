@@ -14,12 +14,14 @@ client that has been reviewed and one that has been executed.
 from __future__ import annotations
 
 import struct
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
 
+from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
 from synapse24.hardware.raw_codec import RawStream, decode_frame
 from synapse24.hardware.research_client import ResearchStreamDecoder
 
@@ -102,7 +104,20 @@ class ClockSyncResult:
 
 @dataclass
 class ResearchBleClient:
-    """Streams raw samples from a pod and keeps its clock aligned."""
+    """Streams raw samples from a pod and keeps its clock aligned.
+
+    Args:
+        address: BLE address or name of the pod.
+        transport: Injected BLE transport (bleak satisfies it at runtime).
+        decoder: Research-service frame decoder.
+        streams: Raw streams to subscribe to.
+        clock_model: Optional pod→hub clock model. When present, every
+            ``sync_once`` exchange is also recorded in the LSL clock domain,
+            which is the domain the recorded dataset must live in
+            (Guardian Principle 3).
+        lsl_clock_fn: LSL clock source, injectable for tests. Defaults to
+            ``pylsl.local_clock``.
+    """
 
     address: str
     transport: Transport
@@ -110,7 +125,18 @@ class ResearchBleClient:
     streams: list[RawStream] = field(default_factory=lambda: [RawStream.ECG, RawStream.PPG])
     sync_sequence: int = 0
     sync_history: list[ClockSyncResult] = field(default_factory=list)
+    clock_model: PodClockModel | None = None
+    lsl_clock_fn: Callable[[], float] | None = None
     _running: bool = False
+
+    def _lsl_now_us(self) -> int:
+        """Current time in the LSL clock domain, as integer microseconds."""
+        clock = self.lsl_clock_fn
+        if clock is None:
+            from pylsl import local_clock
+
+            clock = local_clock
+        return int(float(clock()) * 1_000_000)
 
     async def connect(self) -> None:
         """Connect and subscribe to the requested raw streams."""
@@ -153,15 +179,21 @@ class ResearchBleClient:
         The pod echoes the request's sequence and answers with its own
         receive/send timestamps; the WRTT must be sampled immediately before
         and after so the round trip is attributable.
-        """
-        import time
 
+        When a :attr:`clock_model` is attached, the same exchange is also
+        recorded with host timestamps drawn from the **LSL clock domain** —
+        the domain the dataset lives in. The monotonic-clock result stays
+        for RTT accounting; only the model uses the LSL domain, so a wall
+        clock adjustment mid-session cannot bend the fit.
+        """
         self.sync_sequence += 1
         seq = self.sync_sequence
         hub_send = time.monotonic_ns() // 1000  # us
+        lsl_send_us = self._lsl_now_us()
         request = struct.pack("<Iq", seq, hub_send)
         await self.transport.write_gatt_char(SYNC_CHAR_UUID, request)
         response = await self.transport.read_gatt_char(SYNC_CHAR_UUID)
+        lsl_recv_us = self._lsl_now_us()
         hub_recv = time.monotonic_ns() // 1000
 
         received_seq, pod_recv, pod_send = struct.unpack("<Iqq", response[:SYNC_RESPONSE_SIZE])
@@ -181,6 +213,16 @@ class ResearchBleClient:
                 hub_recv_us=hub_recv,
                 pod_recv_us=pod_recv,
                 pod_send_us=pod_send,
+            )
+        if self.clock_model is not None:
+            self.clock_model.record_exchange(
+                ClockExchange(
+                    sequence=result.sequence,
+                    pod_recv_us=int(result.pod_recv_us),
+                    pod_send_us=int(result.pod_send_us),
+                    host_send_us=int(lsl_send_us),
+                    host_recv_us=int(lsl_recv_us),
+                )
             )
         self.sync_history.append(result)
         return result

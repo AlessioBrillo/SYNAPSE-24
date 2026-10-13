@@ -15,7 +15,9 @@ import struct
 from dataclasses import dataclass, field
 
 import numpy as np
+import pytest
 
+from synapse24.acquisition.pod_clock_model import PodClockModel
 from synapse24.hardware.raw_codec import RawFormat, RawStream, encode_frame
 from synapse24.hardware.research_ble_client import (
     GATT_CHAR_UUIDS,
@@ -223,3 +225,106 @@ def test_decoder_shared_with_the_host_path() -> None:
     """The client must not carry a second decoder implementation."""
     client = ResearchBleClient(address="x", transport=FakeTransport())
     assert isinstance(client.decoder, ResearchStreamDecoder)
+
+
+class DriftingPodTransport(FakeTransport):
+    """Answers SYNC reads from a pod clock with a known offset and drift.
+
+    The pod's stamps are a deterministic function of the injected LSL clock,
+    so the test asserts the estimator recovers ground truth instead of
+    merely agreeing with itself. The exchange geometry (radio legs + pod
+    turnaround) is explicit, so the RTT is positive and the NTP offset is
+    unbiased.
+    """
+
+    RADIO_US = 50.0
+    TURNAROUND_US = 1500.0
+
+    def __init__(
+        self, lsl_now: list[float], offset_ms: float = 12.5, drift_ppm: float = 35.0
+    ) -> None:
+        super().__init__()
+        self.lsl_now = lsl_now
+        self.offset_ms = offset_ms
+        self.drift_ppm = drift_ppm
+        self.t0_s: float | None = None
+
+    def _pod_at(self, host_s: float) -> int:
+        """Pod stamp for the host instant `host_s`, offset and drifting."""
+        if self.t0_s is None:
+            self.t0_s = host_s
+        elapsed_s = host_s - self.t0_s
+        skew_us = elapsed_s * self.drift_ppm  # ppm in, microseconds out
+        return int(host_s * 1_000_000.0 + skew_us + self.offset_ms * 1000.0)
+
+    async def read_gatt_char(self, char_uuid: str) -> bytes:
+        # The request reaches the pod one radio leg after the hub sent it;
+        # the pod turns around, and the reply arrives one leg later, so the
+        # host observes (turnaround + 2 * radio) of elapsed time.
+        recv_s = self.lsl_now[0] + self.RADIO_US / 1_000_000.0
+        send_s = recv_s + self.TURNAROUND_US / 1_000_000.0
+        self.lsl_now[0] = send_s + self.RADIO_US / 1_000_000.0
+        pod_recv = self._pod_at(recv_s)
+        pod_send = self._pod_at(send_s)
+        return struct.pack("<Iqq", self.sync_sequence, pod_recv, pod_send)
+
+    @property
+    def sync_sequence(self) -> int:
+        return len(self.writes)
+
+    def current_pod_us(self) -> int:
+        """The pod's stamp for the current host instant."""
+        return self._pod_at(self.lsl_now[0])
+
+
+def test_sync_exchanges_feed_the_clock_model() -> None:
+    """sync_once must record LSL-domain exchanges, not wall-clock ones."""
+    lsl_now = [1_000.0]
+    transport = DriftingPodTransport(lsl_now=lsl_now)
+    model = PodClockModel(pod_id="forearm_hub")
+    client = ResearchBleClient(
+        address="SYNAPSE-BAND",
+        transport=transport,
+        streams=[],
+        clock_model=model,
+        lsl_clock_fn=lambda: lsl_now[0],
+    )
+
+    for _i in range(8):
+        _run(client.sync_once())
+        lsl_now[0] += 30.0
+
+    assert model.is_calibrated
+    fit = model.fit()
+    assert fit is not None
+    assert fit.offset_ms == pytest.approx(12.5, abs=2.0)
+    assert fit.drift_ppm == pytest.approx(35.0, abs=15.0)
+    # The model lives in the LSL domain: the pod's current stamp maps near
+    # the current LSL time, not to a boot-epoch timestamp.
+    mapped = model.to_lsl_seconds(transport.current_pod_us())
+    assert mapped is not None
+    assert mapped == pytest.approx(lsl_now[0], abs=0.05)
+
+
+def test_sync_exchanges_survive_a_rejected_exchange() -> None:
+    """An RTT-spiked exchange is logged and discarded, not fitted."""
+    lsl_now = [2_000.0]
+    transport = DriftingPodTransport(lsl_now=lsl_now)
+    model = PodClockModel(pod_id="forearm_hub")
+    client = ResearchBleClient(
+        address="SYNAPSE-BAND",
+        transport=transport,
+        streams=[],
+        clock_model=model,
+        lsl_clock_fn=lambda: lsl_now[0],
+    )
+    for _i in range(5):
+        _run(client.sync_once())
+        lsl_now[0] += 30.0
+    clean = model.fit()
+    assert clean is not None
+
+    # Freeze the LSL clock backwards: the exchange becomes implausible.
+    lsl_now[0] -= 5_000.0
+    _run(client.sync_once())
+    assert model.fit() == clean, "a rejected exchange must not move the model"

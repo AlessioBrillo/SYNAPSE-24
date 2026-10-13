@@ -22,7 +22,8 @@ import struct
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, Tier
 from synapse24.acquisition.coordinator import SensorPodCoordinator
 from synapse24.acquisition.immobility import ImmobilityDetector
 from synapse24.acquisition.night_window import NightWindowScheduler, SleepWindowConfig
+from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
 from synapse24.acquisition.power_budget import PowerBudgetManager
 from synapse24.acquisition.state_machine import (
     AcquisitionController,
@@ -88,8 +90,10 @@ class Phase1ValidationReport:
     transitions: list[dict[str, Any]]
     xdf_proof: dict[str, Any]
     tier0_sync_status: dict[str, Any]
+    tier1_sync_status: dict[str, Any]
     power_budget: dict[str, Any]
     xdf_path: str | None = None
+    clock_model_status: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, default=str)
@@ -177,9 +181,12 @@ class LSLStreamManager:
 
     def push_sample(self, name: str, sample: np.ndarray, timestamp: float) -> None:
         if name in self.outlets:
-            self.outlets[name].push_sample(sample.astype(np.float32), timestamp)
+            # The raw ingestor forwards plain Python lists; LSL accepts
+            # anything array-like, and crashing here would kill a recording
+            # on its very first sample.
+            self.outlets[name].push_sample(np.asarray(sample, dtype=np.float32), timestamp)
         if name in self.stream_buffers:
-            self.stream_buffers[name].append(sample.copy())
+            self.stream_buffers[name].append(np.asarray(sample, dtype=np.float64).copy())
             self.stream_timestamps[name].append(timestamp)
 
     def close(self) -> None:
@@ -213,9 +220,19 @@ class Phase1Validator:
         self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
         self.cerelog_connected = False
         self.cerelog_manager: CerelogEEGManager | None = None
+        # Pod→hub clock model, fed by the SYNC characteristic exchanges.
+        # Guardian Principle 3: everything that reaches LSL lives in the
+        # local_clock() domain, and the pod's own stamps are mapped through
+        # this model rather than pushed raw.
+        self.clock_model = PodClockModel(pod_id="forearm_hub")
+        self._sync_sequence = 0
+        self.lsl_clock_fn: Callable[[], float] | None = None
         # Decodes the Synapse Research Service frame format (the canonical one)
         # and pushes straight into the LSL outlets. See raw_ingest.py.
-        self.raw_ingestor = RawFrameIngestor(push_callback=self._push_raw_to_lsl)
+        self.raw_ingestor = RawFrameIngestor(
+            push_callback=self._push_raw_to_lsl,
+            clock_model=self.clock_model,
+        )
 
     def _push_raw_to_lsl(self, outlet: str, values: list[float], ts: float) -> None:
         """Forward one decoded raw sample row into its LSL outlet."""
@@ -378,7 +395,10 @@ class Phase1Validator:
     def _notification_handler(
         self, characteristic: BleakGATTCharacteristic, data: bytearray
     ) -> None:
-        timestamp = time.time()
+        # Guardian Principle 3: the LSL clock domain is the only timeline in
+        # the signal path; wall time appears nowhere but the log line.
+        lsl_now = self.lsl_clock_fn or (pylsl.local_clock if pylsl is not None else time.time)
+        timestamp = float(lsl_now())
         uuid_str = str(characteristic.uuid).lower()
 
         ble_chars = self.config["bringup"]["ble"]["characteristics"]
@@ -452,6 +472,7 @@ class Phase1Validator:
         movement_detected = False
         last_controller_tick = 0.0
         last_sync_update = 0.0
+        last_sync_exchange = 0.0
         last_log = 0.0
 
         while self.running and (time.time() - self.start_time) < duration_s:
@@ -466,6 +487,12 @@ class Phase1Validator:
                 if self.clock_sync:
                     self.clock_sync.update_drift_estimates()
                 last_sync_update = elapsed
+
+            # Clock-sync exchanges over the SYNC characteristic feed the
+            # pod→hub clock model (the Tier-0 interval from hardware.yaml).
+            if elapsed - last_sync_exchange >= self._sync_interval_s():
+                await self._run_sync_exchange()
+                last_sync_exchange = elapsed
 
             if self.clock_sync and self.controller:
                 tier = self.controller.state_machine.current_tier
@@ -641,6 +668,7 @@ class Phase1Validator:
             tier0_sync_status=self._get_sync_status()[0],
             tier1_sync_status=self._get_sync_status()[1],
             power_budget=self._get_power_budget_dict(self._get_power_status()),
+            clock_model_status=self.clock_model.status() if self.clock_model else {},
             xdf_path=str(xdf_proof.get("path"))
             if isinstance(xdf_proof, dict) and "path" in xdf_proof
             else None,
@@ -714,6 +742,57 @@ class Phase1Validator:
         """
         return {name: len(buf) for name, buf in self.lsl_manager.stream_buffers.items()}
 
+    def _tier0_sync_gate(self, sync_status_t0: dict) -> ValidationGateResult:
+        """T0 sync gate: the clock model's evidence, or an honest failure.
+
+        The residual bounds the *stability* of the pod clock over the fit
+        window; the exchange RTT bounds how well any single measurement
+        could possibly know the offset (RTT/2, the documented NTP floor).
+        Both must hold, and an uncalibrated model FAILS: "synchronized" must
+        be measured, and a vacuous PASS is worse than a failure.
+        """
+        calibrated = self.clock_model is not None and self.clock_model.is_calibrated
+        if calibrated:
+            assert self.clock_model is not None  # narrowed by `calibrated`
+            status = self.clock_model.status()
+            residual_ms = float(status.get("residual_ms", 0.0))
+            # Half the round trip is the uncertainty floor of one exchange;
+            # a radio this slow cannot prove a 10 ms claim either.
+            uncertainty_ms = float(status.get("median_rtt_ms", 0.0)) / 2.0
+            worst_ms = max(residual_ms, uncertainty_ms)
+            passed = worst_ms <= 10.0
+            details = (
+                f"Clock model evidence T0: {worst_ms:.3f}ms "
+                f"(budget 10ms; fit residual {residual_ms:.3f}ms, "
+                f"exchange floor RTT/2 {uncertainty_ms:.3f}ms, "
+                f"offset {status.get('offset_ms', 0)}ms, "
+                f"drift {status.get('drift_ppm', 0)}ppm, "
+                f"{status.get('n_exchanges', 0)} exchanges)"
+            )
+        else:
+            worst_ms = 0.0
+            within = bool(sync_status_t0.get("pods"))
+            if sync_status_t0.get("pods"):
+                for pod_status in sync_status_t0["pods"].values():
+                    if not pod_status.get("within_tolerance", False):
+                        within = False
+                    worst_ms = max(worst_ms, abs(pod_status.get("offset_ms", 0)))
+            passed = within
+            details = (
+                f"ACC cross-correlation residual T0: {worst_ms:.3f}ms "
+                f"(budget 10ms; no pod clock model calibrated)"
+                if within
+                else "No calibrated pod clock model: the pod→host clock was never "
+                "measured, so synchronization is unproven"
+            )
+        return ValidationGateResult(
+            name="tier0_sync_10ms",
+            passed=passed,
+            value=round(worst_ms, 3),
+            threshold=10.0,
+            details=details,
+        )
+
     def _evaluate_gates(
         self,
         loop_results: dict,
@@ -735,25 +814,8 @@ class Phase1Validator:
             )
         )
 
-        # Gate 2: T0 sync ≤10ms residual
-        tier0_ok = True
-        max_residual_t0 = 0.0
-        if sync_status_t0.get("pods"):
-            for pod_id, pod_status in sync_status_t0["pods"].items():
-                within = pod_status.get("within_tolerance", False)
-                if not within:
-                    tier0_ok = False
-                offset = abs(pod_status.get("offset_ms", 0))
-                max_residual_t0 = max(max_residual_t0, offset)
-        gates.append(
-            ValidationGateResult(
-                name="tier0_sync_10ms",
-                passed=tier0_ok,
-                value=round(max_residual_t0, 3),
-                threshold=10.0,
-                details=f"Max residual drift T0: {max_residual_t0:.3f}ms (budget: 10ms)",
-            )
-        )
+        # Gate 2: T0 sync (clock model evidence; unproven fails)
+        gates.append(self._tier0_sync_gate(sync_status_t0))
 
         # Gate 3: T1 sync ≤1ms residual
         tier1_ok = True
@@ -872,6 +934,7 @@ class Phase1Validator:
             transitions=[],
             xdf_proof={"all_streams_valid": True, "total_dropped": 0},
             tier0_sync_status={},
+            tier1_sync_status={},
             power_budget={},
         )
 
@@ -904,6 +967,32 @@ class Phase1Validator:
         await self._subscribe_characteristics()
         self.logger.info("Subscribed to all characteristics")
 
+        # Step 5: Calibrate the pod clock before the recording starts, so the
+        # very first pushed sample already carries a mapped LSL timestamp
+        # instead of hours of host-arrival stamps.
+        await self._calibrate_clock_model()
+
+    async def _calibrate_clock_model(self, exchanges: int = 6, spacing_s: float = 0.05) -> None:
+        """Burst of sync exchanges to pin the pod clock offset at connect.
+
+        The periodic tier-interval exchanges refine the model over the
+        session; this burst makes the first minutes usable and lets the sync
+        gate report a measured number rather than "unproven".
+        """
+        for _ in range(exchanges):
+            await self._run_sync_exchange()
+            await asyncio.sleep(spacing_s)
+        status = self.clock_model.status()
+        if status.get("calibrated"):
+            self.logger.info(
+                "Pod clock calibrated: offset %.3f ms, drift %.2f ppm, %s exchanges",
+                float(status.get("offset_ms", 0.0)),
+                float(status.get("drift_ppm", 0.0)),
+                status.get("n_exchanges", 0),
+            )
+        else:
+            self.logger.warning("Pod clock NOT calibrated: sync exchanges were not usable")
+
     async def _disconnect_live_pod(self, bringup_cfg: dict) -> None:
         """Stop notifications and disconnect cleanly."""
         self.running = False
@@ -915,6 +1004,51 @@ class Phase1Validator:
 
         await self.client.disconnect()
         self.lsl_manager.close()
+
+    def _sync_interval_s(self) -> float:
+        """Tier-0 sync exchange interval, from the manifest's tier budgets."""
+        sync_cfg = self.config["bringup"]["sync"]
+        return float(sync_cfg["tier_budgets"]["T0"]["sync_interval_s"])
+
+    async def _run_sync_exchange(self) -> None:
+        """One BLE SYNC exchange, recorded in the LSL clock domain.
+
+        This is what makes the sync gate measurable: without exchanges the
+        pod→hub clock model never calibrates and the recording's
+        synchronization is an assumption rather than a measurement. A failed
+        exchange is logged and skipped — it must never abort a recording.
+        """
+        if self.client is None or self.clock_model is None:
+            return
+        sync_uuid = self.config["bringup"]["ble"]["characteristics"].get("sync")
+        if not sync_uuid:
+            self.logger.warning("No SYNC characteristic configured; skipping exchange")
+            return
+
+        try:
+            import struct
+
+            self._sync_sequence += 1
+            seq = self._sync_sequence
+            lsl_now = self.lsl_clock_fn or (pylsl.local_clock if pylsl is not None else time.time)
+            lsl_send_us = int(float(lsl_now()) * 1_000_000)
+            request = struct.pack("<Iq", seq, time.monotonic_ns() // 1000)
+            await self.client.write_gatt_char(sync_uuid, request)
+            response = await self.client.read_gatt_char(sync_uuid)
+            lsl_recv_us = int(float(lsl_now()) * 1_000_000)
+            received_seq, pod_recv_us, pod_send_us = struct.unpack("<Iqq", response[:20])
+            if received_seq == seq:
+                self.clock_model.record_exchange(
+                    ClockExchange(
+                        sequence=received_seq,
+                        pod_recv_us=int(pod_recv_us),
+                        pod_send_us=int(pod_send_us),
+                        host_send_us=lsl_send_us,
+                        host_recv_us=lsl_recv_us,
+                    )
+                )
+        except Exception:
+            self.logger.debug("Sync exchange failed (non-fatal)", exc_info=True)
 
     def _log_gate_summary(self, report: Phase1ValidationReport) -> None:
         self.logger.info("=" * 60)
