@@ -179,3 +179,111 @@ def test_cli_exit_code_is_non_zero_on_violation(tmp_path: Path) -> None:
     )
     assert proc.returncode != 0
     assert "CONTRACT VIOLATIONS" in proc.stdout
+
+
+class TestNoLegacyRateLiterals:
+    """The 64/100 Hz literals must stay out of the host rate consumers."""
+
+    def test_current_tree_is_clean(self) -> None:
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_reintroduced_ppg_literal_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """A stale `ppg_sampling_rate: int = 64` must fail, not silently pass."""
+        broken = tmp_path / "esp32_tier0.py"
+        broken.write_text(
+            "from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates\n"
+            "class Config:\n"
+            "    ppg_sampling_rate: int = 64\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(broken, "host Tier 0 adapter", "forearm_hub_normative_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert any("legacy rate literal" in f for f in report.failures)
+
+    def test_missing_manifest_derivation_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """A file with no literals but no manifest link is still drifting."""
+        clean = tmp_path / "esp32_tier0.py"
+        clean.write_text("class Config:\n    ppg_sampling_rate: int = 50\n", encoding="utf-8")
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(clean, "host Tier 0 adapter", "forearm_hub_normative_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert any("derive rates from the manifest" in f for f in report.failures)
+
+    def test_validator_gate_rate_check_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """A hardcoded nominal in a gate check would fail a conforming pod."""
+        broken = tmp_path / "validate_phase1_entry.py"
+        broken.write_text(
+            "def gates():\n    ok = abs(imu_rate - 100) / 100 <= 0.01\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(broken, "Phase 1 validator", "_nominal_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert any("hardcoded nominal rate" in f for f in report.failures)
+
+    def test_sampling_rate_dict_form_fails(self, tmp_path: Path, monkeypatch) -> None:
+        """`sampling_rate={"ppg": 64, ...}` is the form the coordinator carried."""
+        broken = tmp_path / "tier1_coordinator.py"
+        broken.write_text(
+            'cfg = SensorPodConfig(\n    sampling_rate={"ppg": 64, "ecg": 250, "imu": 100}\n)\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(broken, "tier 1 pod coordinator", "forearm_hub_normative_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert any("sampling_rate structure" in f for f in report.failures)
+
+    def test_percentage_is_not_a_rate_literal(self, tmp_path: Path, monkeypatch) -> None:
+        """`== 100.0` is a percentage; flagging it would train readers to ignore."""
+        ok = tmp_path / "live_lsl_sync.py"
+        ok.write_text(
+            "from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates\n"
+            "def passes(results):\n"
+            "    return all(s['residual'].get('within_10ms_pct', 0.0) == 100.0 for s in results)\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(ok, "live 2-pod LSL sync gate", "forearm_hub_normative_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_contract_exempt_marker_is_honoured(self, tmp_path: Path, monkeypatch) -> None:
+        """A value the manifest does not declare is an explicit, marked parameter."""
+        ok = tmp_path / "tier1_coordinator.py"
+        ok.write_text(
+            "from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates\n"
+            "def register(pod_id: str, imu_rate_hz: int = 100):  # "
+            "contract-exempt: not in hardware.yaml\n"
+            "    pass\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            cc,
+            "_RATE_LITERAL_TARGETS",
+            [(ok, "tier 1 pod coordinator", "forearm_hub_normative_rates")],
+        )
+        report = cc.Report()
+        cc.check_no_legacy_rate_literals(report)
+        assert not report.failures, "; ".join(report.failures)

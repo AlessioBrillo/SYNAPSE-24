@@ -193,9 +193,15 @@ class LSLStreamManager:
 class Phase1Validator:
     """Phase 1 hardware bringup validator."""
 
-    def __init__(self, config_path: Path, logger: logging.Logger):
+    def __init__(
+        self,
+        config_path: Path,
+        logger: logging.Logger,
+        legacy_format: bool = False,
+    ):
         self.config = self._load_config(config_path)
         self.logger = logger
+        self.legacy_format = legacy_format
         self.parser = BLEDataParser()
         self.lsl_manager = LSLStreamManager()
         self.clock_sync: MultiPodClockSync | None = None
@@ -205,6 +211,8 @@ class Phase1Validator:
         self.running = False
         self.start_time = 0.0
         self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
+        self.cerelog_connected = False
+        self.cerelog_manager: CerelogEEGManager | None = None
         # Decodes the Synapse Research Service frame format (the canonical one)
         # and pushes straight into the LSL outlets. See raw_ingest.py.
         self.raw_ingestor = RawFrameIngestor(push_callback=self._push_raw_to_lsl)
@@ -255,10 +263,14 @@ class Phase1Validator:
             tier_budget=tier_budget,
             acc_corr_window_s=sync_cfg["acc_correlation_window_s"],
             min_acc_correlation=sync_cfg["min_acc_correlation"],
-            acc_sampling_rates={"forearm_hub": 100},
+            acc_sampling_rates={
+                "forearm_hub": int(self._nominal_rates().get("SYNAPSE_ACC_T0", 0) or 0)
+            },
         )
         self.clock_sync = MultiPodClockSync(config)
-        self.clock_sync.register_pod("forearm_hub", 100)
+        self.clock_sync.register_pod(
+            "forearm_hub", int(self._nominal_rates().get("SYNAPSE_ACC_T0", 0) or 0)
+        )
 
         marker_info = pylsl.StreamInfo(
             name="SYNAPSE_MARKERS",
@@ -288,7 +300,7 @@ class Phase1Validator:
         )
 
         immobility_detector = ImmobilityDetector(
-            accel_sampling_rate=100,
+            accel_sampling_rate=int(self._nominal_rates().get("SYNAPSE_ACC_T0", 0) or 0),
             window_duration_s=bringup_cfg["immobility"]["window_s"],
             magnitude_threshold=bringup_cfg["immobility"]["accel_threshold_g"],
             min_immobility_min=bringup_cfg["immobility"]["required_windows"]
@@ -380,6 +392,20 @@ class Phase1Validator:
             if pushed:
                 self._feed_downstream_from_raw(timestamp)
                 return
+
+        if not self.legacy_format:
+            # The legacy Nordic-UART parser mis-parses the research service
+            # format (wrong ECG scale, wrong rates), so an unrecognised
+            # payload from a conforming pod must surface as a decoder
+            # rejection — never as silently mangled samples.
+            self.logger.warning(
+                "Unrecognised notification on %s (%d bytes) — not a research "
+                "service frame. Re-run with --legacy-format for the old "
+                "sensor_sample_t wire format.",
+                uuid_str,
+                len(data),
+            )
+            return
 
         try:
             if uuid_str == ble_chars["ecg"].lower():
@@ -659,17 +685,34 @@ class Phase1Validator:
             "power_draw_mw": power_status.power_draw_mw,
         }
 
-    def _get_power_budget_dict(self, power_status) -> dict:
-        if not power_status:
-            return {}
-        return {
-            "battery_remaining_mah": power_status.battery_remaining_mah,
-            "estimated_remaining_h": power_status.estimated_remaining_h,
-            "tier0_h_used": power_status.tier0_h_used,
-            "tier1_h_used": power_status.tier1_h_used,
-            "can_afford_tier1": power_status.can_afford_tier1,
-            "power_draw_mw": power_status.power_draw_mw,
-        }
+    # ------------------------------------------------------------------
+    # Contract-derived expectations (config/hardware.yaml is the single
+    # source of truth; these gates never hardcode a rate).
+    # ------------------------------------------------------------------
+
+    def _nominal_rates(self) -> dict[str, float]:
+        """Nominal sampling rate per LSL outlet, from the stream declarations.
+
+        The LSL declarations in hardware_bringup.yaml are pinned to
+        hardware.yaml by tools/check_contract.py, so deriving the gate
+        expectations here means a rate cannot change in the manifest and
+        leave the validator asserting a stale value.
+        """
+        rates: dict[str, float] = {}
+        for cfg in self.config["bringup"]["lsl"]["streams"]:
+            rates[cfg["name"]] = float(cfg.get("sampling_rate", 0.0))
+        return rates
+
+    def _outlet_sample_counts(self) -> dict[str, int]:
+        """Samples actually pushed per LSL outlet.
+
+        Counting from the outlets (not from per-path counters) makes the
+        gate correct whichever wire format the pod speaks: the legacy
+        parser path used to increment ``sample_counts`` inline while the
+        canonical research-service path did not, so the gates measured
+        zero samples against a conforming pod.
+        """
+        return {name: len(buf) for name, buf in self.lsl_manager.stream_buffers.items()}
 
     def _evaluate_gates(
         self,
@@ -732,21 +775,28 @@ class Phase1Validator:
             )
         )
 
-        # Gate 3: PPG SQI ≥0.3 for ≥80% of windows
-        ppg_samples = loop_results["sample_counts"]["ppg"]
-        expected_ppg = int(64 * self.config["bringup"]["validation"]["duration_s"])
-        ppg_completeness = ppg_samples / expected_ppg if expected_ppg > 0 else 0
+        # Gate 4: PPG completeness — expected rate from the LSL declaration.
+        nominal = self._nominal_rates()
+        counts = self._outlet_sample_counts()
+        duration = self.config["bringup"]["validation"]["duration_s"]
+        ppg_rate = nominal.get("SYNAPSE_PPG_T0", 0.0)
+        expected_ppg = int(ppg_rate * duration)
+        ppg_samples = counts.get("SYNAPSE_PPG_T0", 0)
+        ppg_completeness = ppg_samples / expected_ppg if expected_ppg > 0 else 0.0
         gates.append(
             ValidationGateResult(
                 name="ppg_completeness",
                 passed=ppg_completeness >= 0.8,
                 value=round(ppg_completeness * 100, 1),
                 threshold=80.0,
-                details=f"PPG sample completeness: {ppg_completeness * 100:.1f}%",
+                details=(
+                    f"PPG sample completeness: {ppg_completeness * 100:.1f}% "
+                    f"({ppg_samples}/{expected_ppg} at nominal {ppg_rate:g} Hz)"
+                ),
             )
         )
 
-        # Gate 4: EEG quality (Tier 1)
+        # Gate 5: EEG quality (Tier 1)
         eeg_quality_pass = True
         eeg_flatness = 0.0
         eeg_alpha_ratio = 0.0
@@ -772,69 +822,61 @@ class Phase1Validator:
             )
         )
 
-        # Gate 5: Sample rates within 1% of nominal (includes EEG @ 500Hz for Tier 1)
-        ecg_samples = loop_results["sample_counts"]["ecg"]
-        imu_samples = loop_results["sample_counts"]["imu"]
-        eeg_samples = loop_results["sample_counts"]["eeg"]
-        duration = self.config["bringup"]["validation"]["duration_s"]
-        ecg_rate = ecg_samples / duration if duration > 0 else 0
-        imu_rate = imu_samples / duration if duration > 0 else 0
-        eeg_rate = eeg_samples / duration if duration > 0 else 0
-        ecg_ok = abs(ecg_rate - 500) / 500 <= 0.01
-        imu_ok = abs(imu_rate - 100) / 100 <= 0.01
-        eeg_ok = abs(eeg_rate - 500) / 500 <= 0.01 if eeg_samples > 0 else True
+        # Gate 6: Sample rates within 1% of the declared nominal values.
+        outlet_of = {
+            "ECG": "SYNAPSE_ECG_T0",
+            "IMU": "SYNAPSE_ACC_T0",
+            "EEG": "SYNAPSE_EEG_T1",
+        }
+        measured: dict[str, float] = {}
+        for label, outlet in outlet_of.items():
+            rate = nominal.get(outlet, 0.0)
+            n = counts.get(outlet, loop_results["sample_counts"].get(label.lower(), 0))
+            measured[label] = n / duration if duration > 0 else 0.0
+        rate_checks = {
+            label: abs(measured[label] - nominal.get(outlet, 0.0))
+            <= 0.01 * nominal.get(outlet, 0.0)
+            for label, outlet in outlet_of.items()
+            if nominal.get(outlet, 0.0) > 0
+        }
+        measured_str = ", ".join(f"{label}={measured[label]:.1f}Hz" for label in sorted(measured))
+        expected_str = ", ".join(
+            f"{label}={nominal.get(outlet, 0.0):g}Hz" for label, outlet in sorted(outlet_of.items())
+        )
         gates.append(
             ValidationGateResult(
                 name="sample_rate_accuracy",
-                passed=ecg_ok and imu_ok and eeg_ok,
-                value=f"ECG={ecg_rate:.1f}Hz, IMU={imu_rate:.1f}Hz, EEG={eeg_rate:.1f}Hz",
-                threshold="ECG=500Hz±1%, IMU=100Hz±1%, EEG=500Hz±1%",
-                details=f"Measured rates over {duration}s",
+                passed=all(rate_checks.values()) if rate_checks else True,
+                value=measured_str,
+                threshold=f"{expected_str} ±1% (declared in hardware_bringup.yaml)",
+                details=f"Measured rates over {duration}s vs declared nominal rates",
             )
         )
 
         return gates
 
-    async def run(
-        self, flash: bool = False, duration_s: float | None = None, dry_run: bool = False
-    ) -> Phase1ValidationReport:
-        bringup_cfg = self.config["bringup"]
-        val_cfg = bringup_cfg["validation"]
+    def _dry_run_report(self, duration_s: float) -> Phase1ValidationReport:
+        """Build the dry-run report after validating configuration only."""
+        return Phase1ValidationReport(
+            run_id="dry-run",
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            config_path=str(self.config.get("_config_path", "unknown")),
+            duration_s=duration_s,
+            gates=[
+                ValidationGateResult(
+                    "config_validation", True, "OK", "OK", "Config structure valid"
+                )
+            ],
+            overall_pass=True,
+            sample_counts={},
+            transitions=[],
+            xdf_proof={"all_streams_valid": True, "total_dropped": 0},
+            tier0_sync_status={},
+            power_budget={},
+        )
 
-        if duration_s is None:
-            duration_s = val_cfg["duration_s"]
-
-        self.logger.info("=" * 60)
-        self.logger.info("SYNAPSE-24 Phase 1 Entry Gate: Hardware Bringup Validation")
-        self.logger.info("=" * 60)
-
-        if dry_run:
-            self.logger.info("DRY RUN MODE - validating configuration only")
-            # Validate config structure, env expansion, etc.
-            self._create_lsl_outlets()
-            self._setup_clock_sync()
-            self._setup_acquisition_controller()
-            # Skip Cerelog EEG hardware connection in dry-run
-            self.cerelog_connected = False
-            self.logger.info("Configuration validation PASSED")
-            return Phase1ValidationReport(
-                run_id="dry-run",
-                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                config_path=str(self.config.get("_config_path", "unknown")),
-                duration_s=duration_s,
-                gates=[
-                    ValidationGateResult(
-                        "config_validation", True, "OK", "OK", "Config structure valid"
-                    )
-                ],
-                overall_pass=True,
-                sample_counts={},
-                transitions=[],
-                xdf_proof={"all_streams_valid": True, "total_dropped": 0},
-                tier0_sync_status={},
-                power_budget={},
-            )
-
+    async def _connect_live_pod(self, bringup_cfg: dict, flash: bool) -> None:
+        """Discover, connect and subscribe to the live pod."""
         # Step 1: Flash firmware if requested
         if flash:
             success = await self._flash_firmware()
@@ -862,12 +904,10 @@ class Phase1Validator:
         await self._subscribe_characteristics()
         self.logger.info("Subscribed to all characteristics")
 
-        # Step 5: Run validation loop
-        loop_results = await self._run_validation_loop(duration_s)
-
-        # Step 6: Cleanup
+    async def _disconnect_live_pod(self, bringup_cfg: dict) -> None:
+        """Stop notifications and disconnect cleanly."""
         self.running = False
-        for name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
+        for _name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
             try:
                 await self.client.stop_notify(char_uuid)
             except Exception:
@@ -876,13 +916,7 @@ class Phase1Validator:
         await self.client.disconnect()
         self.lsl_manager.close()
 
-        # Step 7: Save XDF and verify
-        xdf_proof, xdf_path = self._save_xdf_and_verify()
-
-        # Step 8: Collect results
-        report = self._collect_results(loop_results, xdf_proof)
-        report.xdf_path = str(xdf_path) if xdf_path else None
-
+    def _log_gate_summary(self, report: Phase1ValidationReport) -> None:
         self.logger.info("=" * 60)
         self.logger.info("PHASE 1 ENTRY GATE RESULT")
         for gate in report.gates:
@@ -893,6 +927,45 @@ class Phase1Validator:
         self.logger.info(f"OVERALL: {'PASS' if report.overall_pass else 'FAIL'}")
         self.logger.info("=" * 60)
 
+    async def run(
+        self,
+        flash: bool = False,
+        duration_s: float | None = None,
+        dry_run: bool = False,
+        legacy_format: bool | None = None,
+    ) -> Phase1ValidationReport:
+        if legacy_format is not None:
+            self.legacy_format = legacy_format
+        bringup_cfg = self.config["bringup"]
+        val_cfg = bringup_cfg["validation"]
+
+        if duration_s is None:
+            duration_s = val_cfg["duration_s"]
+
+        self.logger.info("=" * 60)
+        self.logger.info("SYNAPSE-24 Phase 1 Entry Gate: Hardware Bringup Validation")
+        self.logger.info("=" * 60)
+
+        if dry_run:
+            self.logger.info("DRY RUN MODE - validating configuration only")
+            # Validate config structure, env expansion, etc.
+            self._create_lsl_outlets()
+            self._setup_clock_sync()
+            self._setup_acquisition_controller()
+            # Skip Cerelog EEG hardware connection in dry-run
+            self.cerelog_connected = False
+            self.logger.info("Configuration validation PASSED")
+            return self._dry_run_report(duration_s)
+
+        await self._connect_live_pod(bringup_cfg, flash=flash)
+        loop_results = await self._run_validation_loop(duration_s)
+        await self._disconnect_live_pod(bringup_cfg)
+
+        # Save XDF and verify, then collect results
+        xdf_proof, xdf_path = self._save_xdf_and_verify()
+        report = self._collect_results(loop_results, xdf_proof)
+        report.xdf_path = str(xdf_path) if xdf_path else None
+        self._log_gate_summary(report)
         return report
 
     async def _flash_firmware(self) -> bool:
@@ -1020,6 +1093,7 @@ async def main_async(args: argparse.Namespace) -> int:
             flash=args.flash,
             duration_s=args.duration,
             dry_run=args.dry_run,
+            legacy_format=args.legacy_format,
         )
 
         # Save report
@@ -1070,6 +1144,15 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="Validate configuration only (no hardware required)",
+    )
+    parser.add_argument(
+        "--legacy-format",
+        action="store_true",
+        help=(
+            "Accept the legacy Nordic-UART sensor_sample_t wire format "
+            "(default: research service only; unrecognised payloads are "
+            "reported, never silently mis-parsed)"
+        ),
     )
     parser.add_argument(
         "--output-dir",

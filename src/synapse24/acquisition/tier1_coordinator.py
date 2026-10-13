@@ -6,8 +6,9 @@ Architecture.md §67-68: In-ear EEG satellite for Tier 0 H24 continuity.
 Architecture.md §92: Clock drift risk mitigation - Tier 1 requires 1ms tolerance, 10s sync interval.
 
 This coordinator manages:
-- Head pod (Cerelog ESP-EEG): 8-ch EEG @ 500Hz, IMU @ 100Hz, Tier 1
-- Forearm hub (Tier 0): PPG @ 64Hz, IMU @ 100Hz, ECG @ 250Hz, Tier 0
+- Head pod (Cerelog ESP-EEG): 8-ch EEG @ 500Hz per config/hardware.yaml, Tier 1
+- Forearm hub (Tier 0): PPG/IMU/ECG at the config/hardware.yaml normative
+  rates, Tier 0 (rates are loaded from the manifest, never hardcoded here)
 - In-ear pod (Tier 0): 1-2ch EEG @ 256Hz, IMU @ 50Hz, Tier 0 (H24 continuity)
 - MultiPodClockSync with Tier 1 budget (1ms residual, 10s interval)
 - Tier 0→1 promotion/demotion with sync marker alignment
@@ -35,6 +36,7 @@ from synapse24.acquisition.state_machine import (
     TransitionEvent,
 )
 from synapse24.hardware import BoardConfig, BoardManager, DeviceRegistry, SensorPodConfig
+from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
 from synapse24.hardware.inear_eeg import InEarEEGConfig, InEarEEGFirmware
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
 from synapse24.signal_quality import Tier as QualityTier
@@ -152,8 +154,22 @@ class Tier1Coordinator:
         cerelog_config: CerelogEEGConfig,
         placement: str = "head",
         electrode_type: str = "dry",
+        imu_rate_hz: int = 100,  # contract-exempt: not declared in hardware.yaml
     ) -> None:
-        """Register a Cerelog ESP-EEG head pod for Tier 1 acquisition."""
+        """Register a Cerelog ESP-EEG head pod for Tier 1 acquisition.
+
+        Args:
+            pod_id: Unique pod identifier.
+            name: Human-readable pod name.
+            cerelog_config: Cerelog EEG device configuration.
+            placement: Electrode placement description.
+            electrode_type: Electrode type (dry/wet).
+            imu_rate_hz: Head-pod IMU rate. ``config/hardware.yaml`` does not
+                yet declare one for the head pod (the Cerelog on-board IMU is
+                not part of the current contract), so it is an explicit
+                parameter rather than a hidden literal — and a contract
+                extension point for when IMU/fNIRS land on that pod.
+        """
         pod_config = SensorPodConfig(
             pod_id=pod_id,
             name=name,
@@ -161,7 +177,7 @@ class Tier1Coordinator:
             modalities=["eeg", "acc", "gyro", "mag"],
             tier=QualityTier.T1,
             channels={"eeg": cerelog_config.n_channels, "acc": 3, "gyro": 3, "mag": 3},
-            sampling_rate={"eeg": cerelog_config.sampling_rate, "imu": 100},
+            sampling_rate={"eeg": cerelog_config.sampling_rate, "imu": imu_rate_hz},
             ble_address=cerelog_config.mac_address,
             serial_port=cerelog_config.serial_port,
             placement=placement,
@@ -178,8 +194,8 @@ class Tier1Coordinator:
             cerelog_manager=cerelog_manager,
         )
 
-        # Register with clock sync (ACC at 100Hz for cross-correlation)
-        self.clock_sync.register_pod(pod_id, acc_sampling_rate=100)
+        # Register with clock sync; ACC rate is the head-pod IMU rate above.
+        self.clock_sync.register_pod(pod_id, acc_sampling_rate=imu_rate_hz)
 
         logger.info("Registered Tier 1 head pod: %s (%s)", pod_id, name)
 
@@ -190,7 +206,14 @@ class Tier1Coordinator:
         board_config: BoardConfig,
         placement: str = "forearm",
     ) -> None:
-        """Register a Tier 0 forearm hub pod (PPG + IMU + ECG)."""
+        """Register a Tier 0 forearm hub pod (PPG + IMU + ECG).
+
+        Rates come from config/hardware.yaml (pod ``forearm_hub``) — the
+        single source of truth. They used to be literals here (64/250/100)
+        that had drifted from the manifest, so the coordinator described a
+        rig that does not exist.
+        """
+        normative = forearm_hub_normative_rates()
         pod_config = SensorPodConfig(
             pod_id=pod_id,
             name=name,
@@ -198,7 +221,11 @@ class Tier1Coordinator:
             modalities=["ppg", "ecg", "acc", "gyro", "temp"],
             tier=QualityTier.T0,
             channels={"ppg": 3, "ecg": 1, "acc": 3, "gyro": 3, "temp": 1},
-            sampling_rate={"ppg": 64, "ecg": 250, "imu": 100},
+            sampling_rate={
+                "ppg": normative["ppg_hz"],
+                "ecg": normative["ecg_hz"],
+                "imu": normative["imu_hz"],
+            },
             ble_address=board_config.mac_address,
             serial_port=board_config.serial_port,
             placement=placement,
@@ -214,8 +241,9 @@ class Tier1Coordinator:
         )
         self._hub_pod_id = pod_id
 
-        # Register with clock sync (ACC at 100Hz for cross-correlation)
-        self.clock_sync.register_pod(pod_id, acc_sampling_rate=100)
+        # Register with clock sync; ACC rate is the forearm-hub IMU rate from
+        # the manifest, so cross-correlation windowing uses the real rate.
+        self.clock_sync.register_pod(pod_id, acc_sampling_rate=normative["imu_hz"])
 
         logger.info("Registered Tier 0 forearm hub: %s (%s)", pod_id, name)
 

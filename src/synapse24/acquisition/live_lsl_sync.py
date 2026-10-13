@@ -10,8 +10,8 @@ at normative rates through real liblsl outlets and pulls them back through
 inlets: resolve failures or dropped samples fail loudly instead of biasing
 downstream fusion windows.
 
-Normative rates match config/hardware.yaml forearm hub
-(ECG 500Hz / PPG 64Hz / IMU 100Hz) — single source of truth, no resampling.
+Normative rates are read from config/hardware.yaml (pod ``forearm_hub``)
+at call time — single source of truth, no resampling.
 """
 
 from __future__ import annotations
@@ -19,12 +19,14 @@ from __future__ import annotations
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
+
+from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
 
 if TYPE_CHECKING:
     from pylsl import StreamOutlet
@@ -36,14 +38,19 @@ class LSLUnavailableError(RuntimeError):
     """Raised when the live LSL wire cannot be exercised (no liblsl/route)."""
 
 
+def _normative_fs(field_name: str) -> int:
+    """Resolve one normative rate from config/hardware.yaml."""
+    return int(forearm_hub_normative_rates()[field_name])
+
+
 @dataclass(frozen=True)
 class LiveTwoPodConfig:
     """Configuration for the live 2-pod sync gate."""
 
     duration_s: float = 2.0
-    ecg_fs: int = 500
-    ppg_fs: int = 64
-    imu_fs: int = 100
+    ecg_fs: int = field(default_factory=lambda: _normative_fs("ecg_hz"))
+    ppg_fs: int = field(default_factory=lambda: _normative_fs("ppg_hz"))
+    imu_fs: int = field(default_factory=lambda: _normative_fs("imu_hz"))
     seed: int = 42
     resolve_timeout_s: float = 5.0
     pull_timeout_s: float = 8.0

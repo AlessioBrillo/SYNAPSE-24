@@ -633,12 +633,15 @@ class TestLiveTwoPodConfig:
     """Tests for LiveTwoPodConfig."""
 
     def test_default_config(self):
-        """Test default configuration."""
+        """Default rates come from config/hardware.yaml, not from literals."""
+        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+        normative = forearm_hub_normative_rates()
         config = LiveTwoPodConfig()
         assert config.duration_s == 2.0
-        assert config.ecg_fs == 500
-        assert config.ppg_fs == 64
-        assert config.imu_fs == 100
+        assert config.ecg_fs == normative["ecg_hz"]
+        assert config.ppg_fs == normative["ppg_hz"]
+        assert config.imu_fs == normative["imu_hz"]
 
 
 class TestTier1PodState:
@@ -678,7 +681,8 @@ class TestTier0PodState:
             modalities=["ecg", "ppg", "acc"],
             tier=Tier.T0,
             channels={"ecg": 1, "ppg": 2, "acc": 3},
-            sampling_rate={"ecg": 500, "ppg": 64, "acc": 100},
+            # Normative rates from config/hardware.yaml (forearm_hub).
+            sampling_rate={"ecg": 500, "ppg": 50, "imu": 50},
             placement="forearm",
             electrode_type="wet",
         )
