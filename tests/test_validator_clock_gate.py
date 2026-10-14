@@ -74,6 +74,7 @@ class SyntheticPodTransport:
         offset_ms: float = 0.0,
         drift_ppm: float = 0.0,
         host_jitter_us: float = 0.0,
+        duration_s: float = 1.0,
     ):
         self.offset_ms = offset_ms
         self.drift_ppm = drift_ppm
@@ -81,7 +82,7 @@ class SyntheticPodTransport:
         self._sequence = 0
         self._n_exchanges = 0
         self._frames: list[tuple[str, bytes]] = []
-        pod = SyntheticPod(duration_s=1.0, seed=13)
+        pod = SyntheticPod(duration_s=duration_s, seed=13)
         by_stream: dict = {}
         for stream, frame in pod.frames():
             by_stream.setdefault(stream, []).append(frame)
@@ -107,7 +108,8 @@ class SyntheticPodTransport:
     async def start_notify(self, char_uuid: str, callback) -> None:  # noqa: ANN001
         for uuid, frame in self._frames:
             if uuid == char_uuid:
-                callback(self, bytearray(frame))
+                # bleak passes the characteristic as the first argument.
+                callback(_Char(char_uuid), bytearray(frame))
 
     async def stop_notify(self, char_uuid: str) -> None:
         return None

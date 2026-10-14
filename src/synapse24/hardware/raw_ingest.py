@@ -28,7 +28,7 @@ from typing import Any
 import numpy as np
 
 from synapse24.hardware.raw_codec import RawStream, decode_frame
-from synapse24.hardware.research_client import ResearchStreamDecoder
+from synapse24.hardware.research_client import UNIT_DIVISOR, ResearchStreamDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,15 @@ class RawFrameIngestor:
         if not self.stream_rates_hz:
             self.stream_rates_hz = _normative_stream_rates()
 
+    def reset_session(self) -> None:
+        """Start a clean session: zero the decoder and this ingestor's counts.
+
+        Called when a recording starts, so a pod reconnect is not read as a
+        catastrophic loss (see ResearchStreamDecoder.reset).
+        """
+        self.decoder.reset()
+        self.sample_counts.clear()
+
     def _push_timestamp(self, pod_timestamp_us: float) -> float:
         """LSL-domain timestamp for one pod microsecond stamp.
 
@@ -153,13 +162,15 @@ class RawFrameIngestor:
             # are spaced at the stream's nominal rate: the device's true
             # inter-sample spacing survives, without BLE arrival jitter.
             rate_hz = float(self.stream_rates_hz.get(header.stream, 0.0) or 0.0)
+            divisor = UNIT_DIVISOR.get(header.stream, 1.0)
             for i, row in enumerate(block):
                 sample_us = pod_timestamp_us + (i * 1_000_000.0 / rate_hz if rate_hz > 0 else 0.0)
-                self.push_callback(
-                    outlet,
-                    [float(v) for v in row],
-                    self._push_timestamp(sample_us),
-                )
+                # Engineering units, the same conversion the decoder applies
+                # in arrays(): pushing raw counts would make the LSL streams
+                # and every downstream quality metric read two different
+                # signals from one wire.
+                values = [float(v) / divisor for v in row]
+                self.push_callback(outlet, values, self._push_timestamp(sample_us))
 
         self.sample_counts[header.stream.name.lower()] = (
             self.sample_counts.get(header.stream.name.lower(), 0) + samples.size

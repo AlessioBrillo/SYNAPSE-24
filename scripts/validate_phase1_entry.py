@@ -190,11 +190,13 @@ class LSLStreamManager:
             self.stream_timestamps[name].append(timestamp)
 
     def close(self) -> None:
-        for outlet in self.outlets.values():
-            try:
-                outlet.__del__()
-            except Exception:
-                pass
+        # pylsl's StreamOutlet frees its native handle in __del__; calling it
+        # explicitly and then dropping the reference double-frees (the
+        # "access violation reading 0xFFFF..." teardown noise). Clearing the
+        # references is enough — and the sample buffers must survive, because
+        # the XDF gate proof is written *after* the session closes.
+        self.outlets.clear()
+        self.stream_configs.clear()
 
 
 class Phase1Validator:
@@ -205,15 +207,20 @@ class Phase1Validator:
         config_path: Path,
         logger: logging.Logger,
         legacy_format: bool = False,
+        transport: Any = None,
     ):
         self.config = self._load_config(config_path)
         self.logger = logger
         self.legacy_format = legacy_format
+        # Injected BLE transport (CI / synthetic pod). When present, bleak
+        # discovery and connect are bypassed entirely — that is what lets the
+        # whole SOP run in CI with no hardware on the desk.
+        self.transport = transport
         self.parser = BLEDataParser()
         self.lsl_manager = LSLStreamManager()
         self.clock_sync: MultiPodClockSync | None = None
         self.controller: AcquisitionController | None = None
-        self.client: BleakClient | None = None
+        self.client: Any = None
         self.device: BLEDevice | None = None
         self.running = False
         self.start_time = 0.0
@@ -226,6 +233,9 @@ class Phase1Validator:
         # this model rather than pushed raw.
         self.clock_model = PodClockModel(pod_id="forearm_hub")
         self._sync_sequence = 0
+        # Duration of the run actually being executed (set by run()); the
+        # gates judge this, never the config's nominal window.
+        self._duration_s = float(self.config["bringup"]["validation"]["duration_s"])
         self.lsl_clock_fn: Callable[[], float] | None = None
         # Decodes the Synapse Research Service frame format (the canonical one)
         # and pushes straight into the LSL outlets. See raw_ingest.py.
@@ -538,7 +548,22 @@ class Phase1Validator:
             "final_tier": self.controller.state_machine.current_tier.name
             if self.controller
             else "T0",
-            "sample_counts": self.sample_counts.copy(),
+            "sample_counts": self._report_sample_counts(),
+        }
+
+    def _report_sample_counts(self) -> dict[str, int]:
+        """Sample counts per modality, derived from the LSL outlets.
+
+        The research-service path never touched the legacy ``sample_counts``
+        dict, so a conforming pod used to report zero samples while the
+        gates (which read the outlets) saw thousands. One source of truth.
+        """
+        counts = self._outlet_sample_counts()
+        return {
+            "ecg": counts.get("SYNAPSE_ECG_T0", self.sample_counts["ecg"]),
+            "ppg": counts.get("SYNAPSE_PPG_T0", self.sample_counts["ppg"]),
+            "imu": counts.get("SYNAPSE_ACC_T0", self.sample_counts["imu"]),
+            "eeg": self.sample_counts.get("eeg", 0),
         }
 
     def _check_promotion(
@@ -659,7 +684,7 @@ class Phase1Validator:
             run_id=run_id,
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
             config_path=str(self.config.get("_config_path", "unknown")),
-            duration_s=self.config["bringup"]["validation"]["duration_s"],
+            duration_s=self._duration_s,
             gates=gates,
             overall_pass=all(g.passed for g in gates),
             sample_counts=loop_results["sample_counts"],
@@ -802,7 +827,7 @@ class Phase1Validator:
     ) -> list:
         gates = []
 
-        # Gate 1: XDF zero-drop
+        # Gate 1: XDF zero-drop (write/read fidelity of this file)
         total_dropped = xdf_proof.get("total_dropped", -1)
         gates.append(
             ValidationGateResult(
@@ -811,6 +836,27 @@ class Phase1Validator:
                 value=total_dropped,
                 threshold=0,
                 details=f"Total dropped samples: {total_dropped}",
+            )
+        )
+
+        # Gate 2: research stream zero-drop — frames lost in transit. The
+        # header stamps a 16-bit sequence per stream, so a hole is *seen*;
+        # this gate is the difference between "the file is consistent" and
+        # "the data is complete". A recording with a hole is worse than one
+        # that stopped, because the hole is silent.
+        drops = self.raw_ingestor.drop_summary() if self.raw_ingestor else {}
+        rejected = int(self.raw_ingestor.decoder.frames_rejected) if self.raw_ingestor else 0
+        lost_frames = int(sum(drops.values()))
+        gates.append(
+            ValidationGateResult(
+                name="research_stream_zero_loss",
+                passed=lost_frames == 0 and rejected == 0,
+                value=lost_frames,
+                threshold=0,
+                details=(
+                    f"Frames lost in transit: {lost_frames} "
+                    f"(per stream: {drops or 'none'}), rejected frames: {rejected}"
+                ),
             )
         )
 
@@ -840,7 +886,7 @@ class Phase1Validator:
         # Gate 4: PPG completeness — expected rate from the LSL declaration.
         nominal = self._nominal_rates()
         counts = self._outlet_sample_counts()
-        duration = self.config["bringup"]["validation"]["duration_s"]
+        duration = self._duration_s
         ppg_rate = nominal.get("SYNAPSE_PPG_T0", 0.0)
         expected_ppg = int(ppg_rate * duration)
         ppg_samples = counts.get("SYNAPSE_PPG_T0", 0)
@@ -939,15 +985,37 @@ class Phase1Validator:
         )
 
     async def _connect_live_pod(self, bringup_cfg: dict, flash: bool) -> None:
-        """Discover, connect and subscribe to the live pod."""
-        # Step 1: Flash firmware if requested
+        """Discover, connect and subscribe to the live pod.
+
+        The LSL outlets, clock-sync model and acquisition controller are set
+        up for *both* transports: the injected path is the same recording as
+        the bleak one, minus the radio.
+        """
+        # Step 1: Setup LSL, clock sync, acquisition controller
+        self._create_lsl_outlets()
+        self._setup_clock_sync()
+        self._setup_acquisition_controller()
+        # A fresh session: the pod restarts its sequence numbers, and a
+        # reconnect must not be read as ~65533 lost frames per stream.
+        self.raw_ingestor.reset_session()
+
+        if self.transport is not None:
+            # Injected transport: no bleak, no radio, the same code path.
+            self.client = self.transport
+            for _name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
+                await self.client.start_notify(char_uuid, self._notification_handler)
+            self.logger.info("Subscribed to all characteristics (injected transport)")
+            await self._calibrate_clock_model()
+            return
+
+        # Step 2: Flash firmware if requested
         if flash:
             success = await self._flash_firmware()
             if not success:
                 raise RuntimeError("Firmware flash failed")
             await asyncio.sleep(3)
 
-        # Step 2: Discover and connect to BLE device
+        # Step 3: Discover and connect to BLE device
         self.device = await self._discover_device()
         if self.device is None:
             raise RuntimeError("No BLE device found")
@@ -956,12 +1024,6 @@ class Phase1Validator:
         self.client = BleakClient(self.device, timeout=bringup_cfg["ble"]["connect_timeout_s"])
         await self.client.connect()
         self.logger.info("Connected!")
-
-        # Step 3: Setup LSL, clock sync, acquisition controller
-        self._create_lsl_outlets()
-        self._setup_clock_sync()
-        self._setup_acquisition_controller()
-        self._setup_cerelog_eeg()
 
         # Step 4: Subscribe to sensor notifications
         await self._subscribe_characteristics()
@@ -972,16 +1034,34 @@ class Phase1Validator:
         # instead of hours of host-arrival stamps.
         await self._calibrate_clock_model()
 
-    async def _calibrate_clock_model(self, exchanges: int = 6, spacing_s: float = 0.05) -> None:
+    async def _disconnect_live_pod(self, bringup_cfg: dict) -> None:
+        """Stop notifications and disconnect cleanly."""
+        self.running = False
+        if self.client is None:
+            return
+        for _name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
+            try:
+                await self.client.stop_notify(char_uuid)
+            except Exception:
+                pass
+
+        if self.transport is None:
+            await self.client.disconnect()
+        self.lsl_manager.close()
+
+    async def _calibrate_clock_model(self, exchanges: int = 6, spacing_s: float = 0.0) -> None:
         """Burst of sync exchanges to pin the pod clock offset at connect.
 
         The periodic tier-interval exchanges refine the model over the
         session; this burst makes the first minutes usable and lets the sync
-        gate report a measured number rather than "unproven".
+        gate report a measured number rather than "unproven". The default
+        spacing is zero so CI runs it in milliseconds; live hardware still
+        sees real round trips between exchanges.
         """
         for _ in range(exchanges):
             await self._run_sync_exchange()
-            await asyncio.sleep(spacing_s)
+            if spacing_s > 0:
+                await asyncio.sleep(spacing_s)
         status = self.clock_model.status()
         if status.get("calibrated"):
             self.logger.info(
@@ -993,20 +1073,10 @@ class Phase1Validator:
         else:
             self.logger.warning("Pod clock NOT calibrated: sync exchanges were not usable")
 
-    async def _disconnect_live_pod(self, bringup_cfg: dict) -> None:
-        """Stop notifications and disconnect cleanly."""
-        self.running = False
-        for _name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
-            try:
-                await self.client.stop_notify(char_uuid)
-            except Exception:
-                pass
-
-        await self.client.disconnect()
-        self.lsl_manager.close()
-
     def _sync_interval_s(self) -> float:
         """Tier-0 sync exchange interval, from the manifest's tier budgets."""
+        sync_cfg = self.config["bringup"]["sync"]
+        return float(sync_cfg["tier_budgets"]["T0"]["sync_interval_s"])
         sync_cfg = self.config["bringup"]["sync"]
         return float(sync_cfg["tier_budgets"]["T0"]["sync_interval_s"])
 
@@ -1050,6 +1120,146 @@ class Phase1Validator:
         except Exception:
             self.logger.debug("Sync exchange failed (non-fatal)", exc_info=True)
 
+    def _build_gate_report(self, report: Phase1ValidationReport) -> dict[str, Any]:
+        """Build the SOP gate report: the 10 measurements of PROCUREMENT.md.
+
+        Software-computable measurements are filled from this run; bench
+        measurements (current, HR-vs-manual, triage latency) stay ``None``
+        with an explicit ``source`` so a half-filled report is visibly a
+        half-filled report rather than a green lie.
+        """
+        counts = self._outlet_sample_counts()
+        duration = self._duration_s
+        drops = self.raw_ingestor.drop_summary() if self.raw_ingestor else {}
+        rejected = int(self.raw_ingestor.decoder.frames_rejected) if self.raw_ingestor else 0
+        throughput = int(self.raw_ingestor.decoder.estimated_bytes()) if self.raw_ingestor else 0
+
+        ecg = self._outlet_array("SYNAPSE_ECG_T0")
+        ppg_red = self._outlet_array("SYNAPSE_PPG_T0", channel=0)
+        ppg_ir = self._outlet_array("SYNAPSE_PPG_T0", channel=1)
+
+        hr_bpm = rmssd_ms = sqi = map_ = None
+        if ecg.size > 50:
+            try:
+                from synapse24.signal_quality import compute_ecg_quality
+
+                quality = compute_ecg_quality(
+                    ecg[:, 0], self._nominal_rates().get("SYNAPSE_ECG_T0", 500)
+                )
+                hrv = getattr(quality, "hrv_metrics", {}) or {}
+                hr_bpm = hrv.get("hr_mean_bpm")
+                rmssd_ms = hrv.get("rmssd_ms")
+            except Exception:  # noqa: BLE001 - a metric failure must not hide the rest
+                self.logger.warning("ECG quality computation failed", exc_info=True)
+        if ppg_red.size > 50:
+            try:
+                from synapse24.signal_quality import compute_ppg_quality
+
+                ppg = compute_ppg_quality(ppg_red, self._nominal_rates().get("SYNAPSE_PPG_T0", 50))
+                sqi = ppg.get("ppg_sqi")
+                map_ = ppg.get("motion_artifact_prob")
+            except Exception:  # noqa: BLE001 - as above
+                self.logger.warning("PPG quality computation failed", exc_info=True)
+
+        return {
+            "run_id": report.run_id,
+            "timestamp": report.timestamp,
+            "duration_s": duration,
+            "measurements": {
+                # 1-2: bench PSU / power meter, recorded by hand.
+                "idle_current_ma": {"value": None, "source": "bench"},
+                "tier0_avg_current_ma": {"value": None, "source": "bench"},
+                # 3: BLE throughput of the raw research service.
+                "ble_throughput_bytes_per_s": {
+                    "value": round(throughput / duration, 1) if duration > 0 else 0.0,
+                    "source": "decoder.estimated_bytes",
+                },
+                # 4: dropped frames — the silent-hole measurement.
+                "dropped_frames": {
+                    "total": int(sum(drops.values())),
+                    "per_stream": drops,
+                    "rejected": rejected,
+                    "source": "ResearchStreamDecoder",
+                },
+                # 5-6: HR and RMSSD against references, from this recording.
+                "hr_mean_bpm": {
+                    "value": self._finite(hr_bpm),
+                    "source": "synapse24.signal_quality.ecg",
+                },
+                "rmssd_ms": {
+                    "value": self._finite(rmssd_ms),
+                    "source": "synapse24.signal_quality.ecg",
+                },
+                # 7: PPG quality, seated and still.
+                "ppg_sqi": {
+                    "value": self._finite(sqi),
+                    "source": "synapse24.signal_quality.ppg",
+                },
+                "ppg_map": {
+                    "value": self._finite(map_),
+                    "source": "synapse24.signal_quality.ppg",
+                },
+                # 8: clock residual drift, pod↔host via the SYNC exchange.
+                "clock_residual_drift_ms": {
+                    "value": report.clock_model_status.get("residual_ms"),
+                    "tier": "T0",
+                    "budget_ms": 10.0,
+                    "source": "PodClockModel",
+                },
+                # 9: XDF integrity of the recorded file.
+                "xdf_integrity": {
+                    "all_streams_valid": bool(report.xdf_proof.get("all_streams_valid")),
+                    "total_dropped": report.xdf_proof.get("total_dropped"),
+                    "path": report.xdf_path,
+                    "source": "synapse24.utils.validate_xdf",
+                },
+                # 10: on-device triage latency, from the serial log.
+                "triage_latency_ms": {"value": None, "source": "serial log"},
+            },
+            "sample_counts": counts,
+            "gates": [
+                {
+                    "name": g.name,
+                    "passed": g.passed,
+                    "value": g.value,
+                    "threshold": g.threshold,
+                    "details": g.details,
+                }
+                for g in report.gates
+            ],
+            "overall_pass": report.overall_pass,
+        }
+
+    def _outlet_array(self, outlet: str, channel: int | None = None) -> Any:
+        """Buffered samples of one LSL outlet, as a 2-D array."""
+        import numpy as np
+
+        rows = self.lsl_manager.stream_buffers.get(outlet, [])
+        if not rows:
+            return np.zeros(0)
+        arr = np.asarray(rows, dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        return arr if channel is None else arr[:, channel]
+
+    @staticmethod
+    def _finite(value: Any) -> float | None:
+        """JSON-safe float: NaN/Inf (a short window has no HRV) becomes None.
+
+        json.dumps happily writes ``NaN``, which is not valid JSON and breaks
+        every strict parser downstream, including the ones reading the SOP
+        report after a short run.
+        """
+        if value is None:
+            return None
+        try:
+            import math
+
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
     def _log_gate_summary(self, report: Phase1ValidationReport) -> None:
         self.logger.info("=" * 60)
         self.logger.info("PHASE 1 ENTRY GATE RESULT")
@@ -1067,14 +1277,22 @@ class Phase1Validator:
         duration_s: float | None = None,
         dry_run: bool = False,
         legacy_format: bool | None = None,
+        record: bool = False,
+        lsl_clock_fn: Callable[[], float] | None = None,
     ) -> Phase1ValidationReport:
         if legacy_format is not None:
             self.legacy_format = legacy_format
+        if lsl_clock_fn is not None:
+            self.lsl_clock_fn = lsl_clock_fn
         bringup_cfg = self.config["bringup"]
         val_cfg = bringup_cfg["validation"]
 
         if duration_s is None:
             duration_s = val_cfg["duration_s"]
+        # The gate must judge THIS run, not the config's nominal window: a
+        # 2-second CI run compared against a 60-second expectation fails
+        # every completeness gate there is.
+        self._duration_s = float(duration_s)
 
         self.logger.info("=" * 60)
         self.logger.info("SYNAPSE-24 Phase 1 Entry Gate: Hardware Bringup Validation")
@@ -1091,11 +1309,41 @@ class Phase1Validator:
             self.logger.info("Configuration validation PASSED")
             return self._dry_run_report(duration_s)
 
+        if record:
+            return await self._run_with_recording(bringup_cfg, duration_s, flash=flash)
+
         await self._connect_live_pod(bringup_cfg, flash=flash)
         loop_results = await self._run_validation_loop(duration_s)
         await self._disconnect_live_pod(bringup_cfg)
 
         # Save XDF and verify, then collect results
+        xdf_proof, xdf_path = self._save_xdf_and_verify()
+        report = self._collect_results(loop_results, xdf_proof)
+        report.xdf_path = str(xdf_path) if xdf_path else None
+        self._log_gate_summary(report)
+        return report
+
+    async def _run_with_recording(
+        self, bringup_cfg: dict, duration_s: float, flash: bool = False
+    ) -> Phase1ValidationReport:
+        """Run the gate with LabRecorderCLI writing the continuous XDF.
+
+        The in-memory buffer path is fine for a one-minute gate; a 6-hour
+        soak is not (10.8M ECG samples in Python lists, and nothing on disk
+        if the process dies). The recorder is trusted to write, never to
+        prove: integrity stays with validate_xdf on the file it produced.
+        """
+        from synapse24.utils.labrecorder import record_session
+
+        val_cfg = bringup_cfg["validation"]
+        record_dir = Path(val_cfg["xdf_output_dir"]) / "recordings"
+        # The exceptions carry their own recovery_hint (error contract);
+        # logging here would only duplicate it. Raise, don't log-and-throw.
+        with record_session(record_dir, stream_specs=val_cfg.get("recorder_streams", [])):
+            await self._connect_live_pod(bringup_cfg, flash=flash)
+            loop_results = await self._run_validation_loop(duration_s)
+            await self._disconnect_live_pod(bringup_cfg)
+
         xdf_proof, xdf_path = self._save_xdf_and_verify()
         report = self._collect_results(loop_results, xdf_proof)
         report.xdf_path = str(xdf_path) if xdf_path else None
@@ -1220,6 +1468,12 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.error(f"Config file not found: {config_path}")
         return 2
 
+    if args.soak and not args.live_hardware:
+        logger.error(
+            "--soak records continuously and is meant for live hardware; add --live-hardware"
+        )
+        return 2
+
     validator = Phase1Validator(config_path, logger)
 
     try:
@@ -1228,6 +1482,7 @@ async def main_async(args: argparse.Namespace) -> int:
             duration_s=args.duration,
             dry_run=args.dry_run,
             legacy_format=args.legacy_format,
+            record=args.soak,
         )
 
         # Save report
@@ -1238,6 +1493,12 @@ async def main_async(args: argparse.Namespace) -> int:
         report_path = output_dir / f"phase1_validation_{report.run_id}.json"
         report_path.write_text(report.to_json())
         logger.info(f"Report saved to: {report_path}")
+
+        # SOP evidence: the ten measurements PROCUREMENT.md gates G1 on.
+        gate_report = validator._build_gate_report(report)
+        args.gate_report.parent.mkdir(parents=True, exist_ok=True)
+        args.gate_report.write_text(json.dumps(gate_report, indent=2, default=str))
+        logger.info(f"SOP gate report saved to: {args.gate_report}")
 
         # Print summary
         print(f"\n{'=' * 60}")
@@ -1280,6 +1541,24 @@ def main() -> int:
         help="Validate configuration only (no hardware required)",
     )
     parser.add_argument(
+        "--live-hardware",
+        action="store_true",
+        help=(
+            "Run the entry gate against live hardware. This is the mode the "
+            "bringup SOP documents; without it the script still streams, but "
+            "the flag makes the intent (and the prerequisite checks) explicit."
+        ),
+    )
+    parser.add_argument(
+        "--soak",
+        action="store_true",
+        help=(
+            "Soak mode: record continuously via LabRecorderCLI and write "
+            "data/live_validation/gate_report.json at the end. Requires "
+            "--live-hardware semantics; use with a multi-hour --duration."
+        ),
+    )
+    parser.add_argument(
         "--legacy-format",
         action="store_true",
         help=(
@@ -1293,6 +1572,12 @@ def main() -> int:
         type=Path,
         default=None,
         help="Output directory for validation report",
+    )
+    parser.add_argument(
+        "--gate-report",
+        type=Path,
+        default=Path("data/live_validation/gate_report.json"),
+        help="Where to write the SOP gate report (default: data/live_validation/gate_report.json)",
     )
     parser.add_argument(
         "--verbose",
