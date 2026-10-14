@@ -85,11 +85,40 @@ side of the wire:
 
 ## What is left
 
-| Gate | Blocker | Cost to clear | State (2026-10-12) |
+| Gate | Blocker | Cost to clear | State (2026-10-14) |
 |---|---|---|---|
 | **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY, `band-core` and `band-full` both compile locally. CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
-| **G1** | Smoke kit not bought/measured | ~€100 + a weekend | ⛔ Not started — order after this PR merges |
+| **G1** | Smoke kit not bought/measured | ~€125 + a weekend | ⛔ **Software side closed** — the SOP is executable end to end and every gate is CI-provable without hardware (see "MVP live-path closure" below). Only the physical kit and the bench measurements remain. |
 | **G2** | Cerelog order | ~€350, after G1 | ⛔ Not started |
+
+### MVP live-path closure (what was added after G0)
+
+The remaining risk was that "the firmware compiles" and "the SOP can run" were
+two different statements. The following closed that gap, and each item is
+gated in CI rather than asserted in prose:
+
+- **Rate drift removed** — the 64/100 Hz literals are gone from the host
+  adapter, the pod coordinator, the validator's gates and the tests; every
+  rate comes from `config/hardware.yaml`, and `check_contract.py` (now 83
+  checks) fails if they return.
+- **One clock domain** — the pod's raw stamps are mapped into
+  `pylsl.local_clock()` through a `PodClockModel` estimated from the SYNC
+  exchanges, and the Tier-0 sync gate judges *evidence* (fit residual **and**
+  the RTT/2 uncertainty floor). An uncalibrated model fails instead of
+  claiming synchronization it never measured.
+- **The documented command exists** — `--live-hardware` and `--soak` are real
+  flags, `gate_report.json` carries the ten measurement-SOP rows (bench rows
+  explicitly unfilled), and `tests/test_doc_command_parity.py` parses every
+  runbook command.
+- **The SOP runs without hardware** — the assembled `run()` is driven against a
+  synthetic pod in CI, which is where six never-executed defects surfaced
+  (a crash on the first raw sample, a report keyword the dataclass did not
+  declare, a shared device clock across streams, ingest/decoder unit
+  disagreement, a reconnect read as 65k lost frames, and gates judging the
+  config duration instead of the run).
+- **Energy as data** — the INA219 streams measured current on the POWER stream
+  (`sensors/ina219.c`, verified against a simulated I²C bus), so the 24-hour
+  feasibility claim rests on per-session measurement rather than a tier model.
 
 ## How the gates are enforced
 
@@ -102,9 +131,9 @@ uv run pytest -q                         # is the software still sound?
 ```
 
 `tests/firmware_host` adds a fourth, quieter one: it compiles the Band research
-service and the raw-frame codec against ESP-IDF stubs with `-Wall -Wextra
--Werror`. That gate has already earned its keep - see Sprint 3 above for the
-three firmware defects it caught before any hardware existed.
+service, the raw-frame codec and the INA219 driver against ESP-IDF stubs with
+`-Wall -Wextra -Werror`. That gate has already earned its keep - see Sprint 3
+above for the three firmware defects it caught before any hardware existed.
 
 ## Work explicitly deferred
 

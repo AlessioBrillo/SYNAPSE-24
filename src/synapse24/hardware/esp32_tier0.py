@@ -2,17 +2,28 @@
 
 Interfaces with AD8232 (ECG), MAX30102 (PPG), ICM-20948 (IMU) on ESP32.
 Provides BLE LSL bridge for real-time streaming to Python hub.
+
+**Single source of truth.** Every normative value (rates, ranges, pins) is
+read from ``config/hardware.yaml`` at import time via
+:func:`forearm_hub_normative_rates`; nothing is hardcoded here. The values in
+this file used to be literals that drifted from the manifest (PPG 64 Hz / IMU
+100 Hz / ±4 g) — exactly the incoherence class the contract checker
+(``tools/check_contract.py``) exists to prevent. If the manifest is missing or
+unparseable the module refuses to guess: it raises, so a broken checkout fails
+loudly instead of silently resampling.
 """
 
 from __future__ import annotations
 
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import yaml
 
 try:
     from pylsl import StreamInfo, StreamOutlet, local_clock
@@ -23,33 +34,96 @@ except ImportError:  # pragma: no cover
 
 from .base import BoardAdapter, BoardConfig
 
+# config/hardware.yaml, resolved relative to the repository root
+# (src/synapse24/hardware/esp32_tier0.py -> <root>/config/hardware.yaml).
+_HARDWARE_YAML = Path(__file__).resolve().parents[3] / "config" / "hardware.yaml"
+
+
+class NormativeConfigError(RuntimeError):
+    """Raised when config/hardware.yaml cannot provide the forearm-hub values."""
+
+
+def forearm_hub_normative_rates(config_path: Path | None = None) -> dict[str, int]:
+    """Load the normative Tier 0 rates from ``config/hardware.yaml``.
+
+    Args:
+        config_path: Override path, for tests. Defaults to the repository
+            ``config/hardware.yaml``.
+
+    Returns:
+        Dict with keys ``ecg_hz``, ``ppg_hz``, ``imu_hz``, ``accel_range_g``,
+        ``gyro_range_dps`` — all taken from the ``forearm_hub`` pod entry.
+
+    Raises:
+        NormativeConfigError: If the manifest is missing or does not declare
+            the ``forearm_hub`` pod. The caller must not fall back to
+            hardcoded literals: a silent fallback is how the rates drifted.
+    """
+    path = Path(config_path) if config_path is not None else _HARDWARE_YAML
+    if not path.is_file():
+        raise NormativeConfigError(f"hardware manifest not found: {path}")
+
+    with path.open(encoding="utf-8") as handle:
+        manifest = yaml.safe_load(handle) or {}
+
+    pod = next(
+        (p for p in manifest.get("pods", []) if p.get("pod_id") == "forearm_hub"),
+        None,
+    )
+    if pod is None:
+        raise NormativeConfigError("config/hardware.yaml declares no 'forearm_hub' pod")
+
+    rates = pod.get("sampling_rate", {})
+    meta = pod.get("metadata", {})
+    imu_cfg = meta.get("imu_config", {})
+    required = ("ecg", "ppg", "imu")
+    if any(rates.get(key) is None for key in required):
+        raise NormativeConfigError(f"forearm_hub sampling_rate is incomplete: {rates}")
+
+    return {
+        "ecg_hz": int(rates["ecg"]),
+        "ppg_hz": int(rates["ppg"]),
+        "imu_hz": int(rates["imu"]),
+        "accel_range_g": int(imu_cfg.get("accel_range_g", 0)),
+        "gyro_range_dps": int(imu_cfg.get("gyro_range_dps", 0)),
+    }
+
+
+def _normative(field_name: str) -> Any:
+    """Resolve one normative value at import time, failing loudly on drift."""
+    rates = forearm_hub_normative_rates()
+    if field_name not in rates:
+        raise NormativeConfigError(f"normative rates missing key {field_name!r}")
+    return rates[field_name]
+
 
 @dataclass(frozen=True)
 class ESP32Tier0Config:
     """Configuration for ESP32 Tier 0 sensor suite.
 
-    Normative rates align to config/hardware.yaml forearm hub
-    (ECG 500Hz / PPG 64Hz / IMU 100Hz) — single source of truth
-    per Architecture.md tiered acquisition. No silent resampling.
+    Defaults are **derived from config/hardware.yaml** (pod ``forearm_hub``)
+    at import time — see :func:`forearm_hub_normative_rates`. Pass explicit
+    overrides only to emulate a non-normative breakout; the production path
+    stays normative. No silent resampling (Architecture.md tiered acquisition).
     """
 
     # ECG (AD8232)  # noqa: ERA001
     ecg_adc_pin: int = 36
-    ecg_sampling_rate: int = 500
+    ecg_sampling_rate: int = field(default_factory=lambda: _normative("ecg_hz"))
     ecg_lead_off_plus: int = 39
     ecg_lead_off_minus: int = 34
 
     # PPG (MAX30102)  # noqa: ERA001
     ppg_i2c_addr: int = 0x57
-    ppg_sampling_rate: int = 64
+    ppg_sampling_rate: int = field(default_factory=lambda: _normative("ppg_hz"))
     ppg_led_current_red: int = 0x1F  # 6.4 mA
     ppg_led_current_ir: int = 0x1F  # 6.4 mA
 
     # IMU (ICM-20948)  # noqa: ERA001
     imu_i2c_addr: int = 0x68
-    imu_sampling_rate: int = 100
-    imu_accel_range: int = 4  # ±4g
-    imu_gyro_range: int = 500  # ±500 dps
+    imu_sampling_rate: int = field(default_factory=lambda: _normative("imu_hz"))
+    imu_accel_range: int = field(default_factory=lambda: _normative("accel_range_g"))
+    imu_gyro_range: int = field(default_factory=lambda: _normative("gyro_range_dps"))
 
     # BLE LSL  # noqa: ERA001
     ble_device_name: str = "SYNAPSE-T0"
@@ -220,24 +294,25 @@ def create_synthetic_tier0_data(
     ppg_hr: float = 72.0,
     motion_level: float = 0.0,
     seed: int = 42,
-    ecg_fs: int = 500,
-    ppg_fs: int = 64,
-    imu_fs: int = 100,
+    ecg_fs: int | None = None,
+    ppg_fs: int | None = None,
+    imu_fs: int | None = None,
 ) -> dict[str, npt.NDArray[np.float64]]:
     """Generate synthetic Tier 0 data for testing.
 
-    Normative defaults match config/hardware.yaml forearm hub
-    (ECG 500Hz / PPG 64Hz / IMU 100Hz). Pass explicit fs_* only to
-    emulate a non-normative breakout; production path stays normative.
+    Normative defaults are loaded from config/hardware.yaml (pod
+    ``forearm_hub``). Pass explicit fs_* only to emulate a non-normative
+    breakout; production path stays normative.
 
     Returns dict with keys: ecg, ppg_red, ppg_ir, acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z
     All timestamps aligned to common timebase.
     """
+    normative = forearm_hub_normative_rates()
     rng = np.random.default_rng(seed)
 
-    fs_ecg = ecg_fs
-    fs_ppg = ppg_fs
-    fs_imu = imu_fs
+    fs_ecg = ecg_fs if ecg_fs is not None else normative["ecg_hz"]
+    fs_ppg = ppg_fs if ppg_fs is not None else normative["ppg_hz"]
+    fs_imu = imu_fs if imu_fs is not None else normative["imu_hz"]
 
     n_ecg = int(duration_s * fs_ecg)
     n_ppg = int(duration_s * fs_ppg)
@@ -298,17 +373,18 @@ class Tier0LSLValidator:
 
     def __init__(
         self,
-        ecg_fs: int = 500,
-        ppg_fs: int = 64,
-        imu_fs: int = 100,
+        ecg_fs: int | None = None,
+        ppg_fs: int | None = None,
+        imu_fs: int | None = None,
         tier: int = 0,
     ) -> None:
         from synapse24.signal_quality import QualityThresholds
         from synapse24.signal_quality import Tier as SQTier
 
-        self.ecg_fs = ecg_fs
-        self.ppg_fs = ppg_fs
-        self.imu_fs = imu_fs
+        normative = forearm_hub_normative_rates()
+        self.ecg_fs = ecg_fs if ecg_fs is not None else normative["ecg_hz"]
+        self.ppg_fs = ppg_fs if ppg_fs is not None else normative["ppg_hz"]
+        self.imu_fs = imu_fs if imu_fs is not None else normative["imu_hz"]
         self.thresholds = QualityThresholds.for_tier(SQTier(tier))
 
         self._ecg_buffer: list[float] = []
@@ -316,8 +392,8 @@ class Tier0LSLValidator:
         self._ppg_ir_buffer: list[float] = []
         self._acc_mag_buffer: list[float] = []
 
-        self._ecg_samples_needed = ecg_fs * 10  # 10 seconds for quality assessment
-        self._ppg_samples_needed = ppg_fs * 30  # 30 seconds
+        self._ecg_samples_needed = self.ecg_fs * 10  # 10 seconds for quality assessment
+        self._ppg_samples_needed = self.ppg_fs * 30  # 30 seconds
 
     def process_ecg(self, sample: float) -> dict[str, Any] | None:
         """Process ECG sample, return quality metrics when buffer full."""

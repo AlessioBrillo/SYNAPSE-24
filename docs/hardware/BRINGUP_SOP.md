@@ -20,8 +20,8 @@ octal-PSRAM S3 modules.
 |---|---|
 | AD8232 OUTPUT | 36 (ADC1_CH0) |
 | AD8232 LO+ / LO− | 39 / 34 |
-| MAX30102 + ICM-20948 SDA | **8** |
-| MAX30102 + ICM-20948 SCL | **9** |
+| MAX30102 + ICM-20948 + INA219 SDA | **8** |
+| MAX30102 + ICM-20948 + INA219 SCL | **9** |
 | MAX30102 INT | 5 |
 | ICM-20948 INT | 6 |
 | All VCC | 3V3 |
@@ -47,18 +47,24 @@ Expected first-boot sequence:
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
 I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
-I (xxx) SYNAPSE_RESEARCH: research service registered (5 streams, raw samples only)
+I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
+I (xxx) INA219: INA219 ready at 0x40 (bus 3.70 V, shunt 0.100 ohm)
+I (xxx) SYNAPSE_POWER: INA219 power monitor active: measured current telemetry enabled
+I (xxx) SYNAPSE_POWER: power telemetry sink attached
 I (xxx) SYNAPSE_BAND: Entering main loop
 ```
 
 `[band-core]` must appear. If GPS/Temp lines appear instead, the wrong variant
-was built.
+was built. The INA219 lines appear only when the monitor is stocked and
+answering at 0x40; without it the rig still boots and reports the current
+figure as a tier-model estimate rather than a measurement — the SOP's power
+row then says so instead of inventing a number.
 
 ## 2. Confirm the pod is discoverable
 
 Point `nRF Connect` (or the host client) at the research service
-`A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70` and confirm six characteristics exist:
-ECG, PPG, ACC, GYRO, MAG, SYNC. Enable notifications on the ones you want.
+`A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70` and confirm seven characteristics exist:
+ECG, PPG, ACC, GYRO, MAG, POWER, SYNC. Enable notifications on the ones you want.
 
 If the service is absent, the firmware is not the one you think it is: the
 research service is registered only when `CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE=y`,

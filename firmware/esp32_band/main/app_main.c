@@ -136,6 +136,11 @@ void app_main(void)
     // 12. Initialize power management
     synapse_power_init();
 
+    // 12b. Route measured power telemetry onto the research service's POWER
+    //      stream. The power module stays BLE-agnostic: the wiring happens
+    //      here (Architecture.md §23-31 decoupled pod/hub).
+    synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
+
     // 13. Check if provisioning is needed
     bool provisioned = synapse_provisioning_is_complete();
     if (!provisioned) {

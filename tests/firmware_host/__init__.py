@@ -94,12 +94,27 @@ def run_compiler(cmd: list[str]) -> None:
 _run_compiler = run_compiler
 
 
-def build(out_dir: Path, c_sources: list[Path], cpp_sources: list[Path] | None = None) -> Path:
+def build(
+    out_dir: Path,
+    c_sources: list[Path],
+    cpp_sources: list[Path] | None = None,
+    extra_includes: list[str] | None = None,
+) -> Path:
     """Compile sources into one shared library with -Wall -Wextra (-Werror for C).
 
     Never silently skips: resolution falls back to a pip-installable compiler,
     and an unavailable compiler raises rather than skipping, because a compile
     gate that skips cannot fail.
+
+    Args:
+        out_dir: Directory for object files and the resulting library; created
+            if missing (a missing directory used to fail the compile with an
+            opaque "no such file" from the compiler).
+        c_sources: C translation units to compile with ``-Werror``.
+        cpp_sources: Optional C++ translation units (``-Wno-unused-variable``).
+        extra_includes: Additional ``-I`` paths for sources whose headers live
+            outside ``firmware/common`` (the band-local ``sensors/``, ``ble/``
+            directories, whose drivers are gated by the same host gate).
     """
     cpp_sources = cpp_sources or []
     cc = _find("gcc", "cc", "clang")
@@ -111,7 +126,9 @@ def build(out_dir: Path, c_sources: list[Path], cpp_sources: list[Path] | None =
         assert cxx is not None, "no C++ compiler available (install g++/clang++, or ziglang)"
 
     lib = out_dir / ("fw.dll" if os.name == "nt" else "fw.so")
+    out_dir.mkdir(parents=True, exist_ok=True)
     inc = [f"-I{STUBS}", f"-I{COMMON / 'sensors'}", f"-I{COMMON / 'triage'}"]
+    inc += [f"-I{path}" for path in (extra_includes or [])]
     objs: list[str] = []
     jobs = [(cc, "-std=c99", ["-Werror"], src) for src in c_sources]
     jobs += [(cxx, "-std=c++17", ["-Wno-unused-variable"], src) for src in cpp_sources]

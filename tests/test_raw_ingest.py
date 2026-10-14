@@ -49,7 +49,11 @@ def test_ecg_frame_is_forwarded_to_the_right_outlet() -> None:
 
     assert accepted
     assert [c[0] for c in recorder.calls] == ["SYNAPSE_ECG_T0"] * 3
-    assert [c[1] for c in recorder.calls] == [[10.0], [20.0], [30.0]]
+    # Engineering units, the same conversion ResearchStreamDecoder.arrays
+    # applies: the LSL streams and the decoded arrays must not be two
+    # different signals from one wire. ECG quantises to microvolts, so the
+    # raw counts 10/20/30 arrive as 0.010/0.020/0.030.
+    assert [c[1] for c in recorder.calls] == [[0.01], [0.02], [0.03]]
     assert ingestor.sample_counts["ecg"] == 3
 
 

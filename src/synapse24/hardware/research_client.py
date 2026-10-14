@@ -54,6 +54,7 @@ UNIT_DIVISOR: dict[RawStream, float] = {
     RawStream.GYRO: 1000.0,  # mrad/s
     RawStream.MAG: 100.0,  # 0.01 uT
     RawStream.TEMP: 1.0,  # 0.01 degC
+    RawStream.POWER: 1.0,  # mV, mA, mW, % — already engineering units
     RawStream.SYNC: 1.0,
 }
 
@@ -65,6 +66,7 @@ LSL_STREAM_NAMES: dict[RawStream, str] = {
     RawStream.GYRO: "SYNAPSE_GYRO_T0",
     RawStream.MAG: "SYNAPSE_MAG_T0",
     RawStream.TEMP: "SYNAPSE_TEMP_T0",
+    RawStream.POWER: "SYNAPSE_Power",
     RawStream.SYNC: "SYNAPSE_SYNC_T0",
 }
 
@@ -117,9 +119,20 @@ class ResearchStreamDecoder:
     timestamps: dict[RawStream, list[np.ndarray]] = field(default_factory=dict)
     sequences: dict[RawStream, int] = field(default_factory=dict)
     drops: list[DropEvent] = field(default_factory=list)
-    clock: DeviceClock = field(default_factory=DeviceClock)
+    # One timeline per stream: the wire carries only the low 32 bits of each
+    # stream's own counter, and each stream is framed independently, so a
+    # single shared DeviceClock would read every later stream's restart as a
+    # 32-bit wrap and shift it by 2^32 µs (~71 minutes). That is not a
+    # hypothetical: it put the ACC stream two hours ahead of the ECG stream
+    # and made the pod→host clock map meaningless.
+    clocks: dict[RawStream, DeviceClock] = field(default_factory=dict)
     frames_seen: int = 0
     frames_rejected: int = 0
+    # Extended (64-bit) timestamp of the most recent accepted frame, in
+    # microseconds. The frame header only carries the low 32 bits of the
+    # pod's counter, so anything mapping pod time into the host domain must
+    # use this reconstructed value, never the raw header stamp.
+    last_first_us: int = 0
 
     def feed(self, frame: bytes | bytearray) -> RawHeader:
         """Decode one GATT notification and buffer its samples.
@@ -171,7 +184,9 @@ class ResearchStreamDecoder:
             self.frames_rejected += 1
             return
 
-        first_us = self.clock.extend(header.timestamp_us, header.flags)
+        device_clock = self.clocks.setdefault(header.stream, DeviceClock())
+        first_us = device_clock.extend(header.timestamp_us, header.flags)
+        self.last_first_us = first_us
         # Timestamps within a frame are not carried per sample; the frame
         # stamp is the first sample's time. The stream's own rate (from
         # hardware.yaml) is what the consumer uses to space them.
@@ -203,6 +218,25 @@ class ResearchStreamDecoder:
     def is_clean(self) -> bool:
         """True when no frames were lost and none were rejected."""
         return not self.drops and self.frames_rejected == 0
+
+    def reset(self) -> None:
+        """Forget the previous session.
+
+        A pod that reconnects — or a second recording in the same process —
+        restarts its per-stream sequence at zero. Without this reset the
+        decoder compares 0 against the previous session's last sequence and
+        reports the gap as ~65533 lost frames per stream. A reconnect is not
+        a loss, and reporting it as one trains the reader to ignore the
+        gate.
+        """
+        self.samples.clear()
+        self.timestamps.clear()
+        self.sequences.clear()
+        self.clocks.clear()
+        self.drops.clear()
+        self.frames_seen = 0
+        self.frames_rejected = 0
+        self.last_first_us = 0
 
     def estimated_bytes(self) -> int:
         """Rough BLE payload volume, for checking the §55-62 budget."""

@@ -98,6 +98,29 @@ void synapse_power_record_tier2_session(float actual_duration_min);
 void synapse_power_set_charging(bool charging);
 
 /**
+ * @brief Telemetry sink for measured power samples.
+ *
+ * Signature matched to synapse_research_service_submit_power(): voltage in
+ * mV, current in mA, state of charge in percent. The module does not know
+ * about BLE — app_main wires the sink, so the power measurement and the
+ * transport stay separate (Architecture.md §23-31).
+ */
+typedef void (*synapse_power_telemetry_sink_t)(float voltage_mv, float current_ma, float battery_pct);
+
+/**
+ * @brief Install the telemetry sink (NULL to detach).
+ */
+void synapse_power_set_telemetry_sink(synapse_power_telemetry_sink_t sink);
+
+/**
+ * @brief True when an INA219 is present, answering, and reporting sane values.
+ *
+ * With the monitor absent the module falls back to the tier-model current
+ * estimate and says so, rather than presenting a model as a measurement.
+ */
+bool synapse_power_has_measured_current(void);
+
+/**
  * @brief Read raw battery voltage (mV)
  * @return Battery voltage in mV
  */

@@ -63,6 +63,10 @@ typedef enum {
     SYNAPSE_RAW_STREAM_GYRO = 0x04,  /**< ICM-20948 gyro 3-axis, 50 Hz      */
     SYNAPSE_RAW_STREAM_MAG = 0x05,   /**< ICM-20948 mag 3-axis, 50 Hz       */
     SYNAPSE_RAW_STREAM_TEMP = 0x06,  /**< skin temperature, 1 Hz            */
+    SYNAPSE_RAW_STREAM_POWER = 0x07, /**< INA219 telemetry, 1 Hz, 4 channels:
+                                          voltage_mv, current_ma, power_mw,
+                                          battery_pct (Architecture.md §55-62:
+                                          actual consumption logged per session) */
     SYNAPSE_RAW_STREAM_SYNC = 0x10,  /**< clock-sync marker, irregular      */
 } synapse_raw_stream_t;
 

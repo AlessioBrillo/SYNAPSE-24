@@ -267,6 +267,35 @@ config SYNAPSE_BAT_VOLTAGE_DIVIDER
     help
         Voltage divider ratio * 100. 200 = 2.0 (1:1 divider).
 
+config SYNAPSE_INA219_I2C_PORT
+    int "INA219 I2C Port"
+    default 0
+    range 0 1
+    help
+        I2C port for the INA219 power monitor (shared with PPG/IMU).
+
+config SYNAPSE_INA219_I2C_ADDR
+    hex "INA219 I2C Address"
+    default 0x40
+    help
+        I2C address for the INA219. 0x40 with A0/A1 grounded.
+
+config SYNAPSE_INA219_SHUNT_MOHM
+    int "INA219 Shunt Resistance (mOhm)"
+    default 100
+    range 1 1000
+    help
+        Shunt resistor in milliohms. 100 = 0.1 ohm, the value standard
+        INA219 breakouts ship with.
+
+config SYNAPSE_INA219_MAX_CURRENT_MA
+    int "INA219 Max Expected Current (mA)"
+    default 2000
+    range 10 3200
+    help
+        Maximum expected current in mA. Selects the PGA range and the
+        programmed current LSB; the range follows this value.
+
 config SYNAPSE_BLE_DEVICE_NAME
     string "BLE Device Name"
     default "SYNAPSE-BAND"

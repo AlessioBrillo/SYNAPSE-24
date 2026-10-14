@@ -11,15 +11,16 @@ Their state after the Hardware Readiness Gate:
 
 | # | Item | Then | Now |
 |---|---|---|---|
-| 1 | Host BLE client / clock-sync validation on hardware | Pending hardware | Codec + decoder + HIL bench exist and are tested without hardware. Only the live run remains, and it needs the smoke kit. |
+| 1 | Host BLE client / clock-sync validation on hardware | Pending hardware | The **assembled** SOP runs in CI against the synthetic pod (synthetic pod → BLE transport → decode → LSL → XDF → gates → `gate_report.json`). Only the bench run remains, and that needs the smoke kit. |
 | 2 | IIR filter integration in the PPG task | Skeleton | Unchanged — the Band firmware's research path streams raw samples, so on-device DSP is a product concern, not a dataset one. Deferred past G1. |
-| 3 | Power validation | Pending measurement | Part of the G1 SOP (`docs/hardware/PROCUREMENT.md`). |
+| 3 | Power validation | Pending measurement | Firmware side **done**: INA219 driver + POWER stream (1 Hz, 4 channels), declared in `hardware.yaml` and covered by the contract checker. The bench measurement against the bench PSU remains a G1 SOP row. |
 | 4 | On-device R-peak TFLM validation | Pending | Deferred past G1: it is a product feature, not a prerequisite for recording the dataset. |
-| 5 | LSL bridge end-to-end XDF | Framework complete | The wire format is pinned by C↔Python parity; the live path is exercised by the synthetic-pod bench. |
+| 5 | LSL bridge end-to-end XDF | Framework complete | Wire format pinned by C↔Python parity; the live path exercised by the synthetic-pod bench through `Phase1Validator.run()` itself, including the XDF round-trip. |
 
 The important change: **items 1 and 5 no longer need hardware to progress,**
 because the protocol is now tested against a synthetic pod that speaks the real
-frame format.
+frame format — and since the live-path closure, the *validator* is driven
+through that same synthetic pod, not just the decoder.
 
 ## The real critical path
 

@@ -5,7 +5,7 @@ Architecture.md §23-31 (decoupled pod/hub), §33-43 (tiered acquisition),
 ECG+PPG+IMU streaming, synchronized in LSL) + §151 (LSL/XDF from day one).
 
 Proves with real liblsl wire (not injected timestamps): forearm T0 pod
-(ECG 500Hz / PPG 64Hz / IMU 100Hz per config/hardware.yaml) + head-pod
+(synthetic at the normative config/hardware.yaml rates) + head-pod
 sync-marker stream -> outlet -> resolve -> inlet -> measured residual
 vs. Tier-0 10ms budget -> XDF zero-drop at live scale.
 
@@ -18,10 +18,13 @@ from pathlib import Path
 
 import pytest
 
-# Normative Tier 0 rates — config/hardware.yaml forearm hub.
-NORM_ECG_HZ = 500
-NORM_PPG_HZ = 64
-NORM_IMU_HZ = 100
+from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+# Normative Tier 0 rates — config/hardware.yaml forearm hub (single source of truth).
+_NORM = forearm_hub_normative_rates()
+NORM_ECG_HZ = _NORM["ecg_hz"]
+NORM_PPG_HZ = _NORM["ppg_hz"]
+NORM_IMU_HZ = _NORM["imu_hz"]
 
 pytestmark = pytest.mark.integration
 

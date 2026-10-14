@@ -254,6 +254,130 @@ def check_canonical_firmware_paths(report: Report) -> None:
     )
 
 
+# Files that previously carried stale 64/100 Hz literals. Each is checked for
+# both the literal and for the presence of the manifest-derived replacement,
+# so the drift cannot silently return.
+_RATE_LITERAL_TARGETS = [
+    (
+        ROOT / "src" / "synapse24" / "hardware" / "esp32_tier0.py",
+        "host Tier 0 adapter",
+        "forearm_hub_normative_rates",
+    ),
+    (
+        ROOT / "src" / "synapse24" / "acquisition" / "live_lsl_sync.py",
+        "live 2-pod LSL sync gate",
+        "forearm_hub_normative_rates",
+    ),
+    (
+        ROOT / "src" / "synapse24" / "acquisition" / "tier1_coordinator.py",
+        "tier 1 pod coordinator",
+        "forearm_hub_normative_rates",
+    ),
+    (
+        ROOT / "scripts" / "validate_phase1_entry.py",
+        "Phase 1 validator",
+        "_nominal_rates",
+    ),
+    (
+        ROOT / "scripts" / "validate_live_sync.py",
+        "live sync validation script",
+        "forearm_hub_normative_rates",
+    ),
+    (
+        ROOT / "tests" / "test_tier0_live_loop.py",
+        "Tier 0 live-loopback test",
+        "forearm_hub_normative_rates",
+    ),
+    (
+        ROOT / "tests" / "test_lsl_live_sync.py",
+        "live 2-pod sync test",
+        "forearm_hub_normative_rates",
+    ),
+]
+
+_FORBIDDEN_RATE_LITERALS = [
+    # A rate-valued field assigned a legacy literal, with or without a type
+    # annotation: ppg_sampling_rate: int = 64, imu_fs=100, accel_sampling_rate=100.
+    (
+        r"(?:rate|fs)\w*\s*(?::\s*[A-Za-z_\[\]| ]+)?\s*=\s*(?:64|100)\b",
+        "legacy rate literal",
+    ),
+    # A sampling_rate structure still carrying a legacy value: {"ppg": 64, ...}.
+    # A percentage (== 100.0) is not a rate and must not match this.
+    ("__SAMPLING_RATE_DICT__", "legacy rate literal in a sampling_rate structure"),
+    (r"int\(64\s*\*", "hardcoded 64 Hz PPG expectation"),
+    (r"abs\([a-z_]+_rate\s*-\s*\d+\)", "hardcoded nominal rate in a gate check"),
+]
+
+# A line carrying this marker is exempt from the literal check. It exists for
+# values the manifest genuinely does not declare (e.g. the Cerelog head-pod
+# IMU rate), where an explicit parameter is the honest representation — the
+# alternative is either a hidden literal or an invented manifest entry.
+_CONTRACT_EXEMPT = "contract-exempt"
+
+
+def _legacy_rate_reason(line: str) -> str | None:
+    """Why this line carries a stale rate literal, or None if it does not.
+
+    Percentages (``== 100.0``) and battery states are deliberately not rate
+    literals: matching them would train the reader to ignore the checker.
+    """
+    if _CONTRACT_EXEMPT in line:
+        return None
+    if "sampling_rate" in line and re.search(r"\b(?:64|100)\b", line):
+        return "legacy rate literal in a sampling_rate structure"
+    for pattern, description in _FORBIDDEN_RATE_LITERALS:
+        if pattern == "__SAMPLING_RATE_DICT__":
+            continue
+        if re.search(pattern, line):
+            return description
+    return None
+
+
+def check_no_legacy_rate_literals(report: Report) -> None:
+    """The stale 64/100 Hz rates must not reappear in host code or tests.
+
+    hardware.yaml declares PPG 50 Hz / IMU 50 Hz. Those literals used to live
+    in the Tier 0 adapter, the synthetic helper, the live-loopback test, the
+    pod coordinator and the validator's own gate thresholds, so each of them
+    asserted the wrong rates — and the validator would have failed a
+    *conforming* pod on the bench. Every checked file must derive the rate
+    from the manifest, except lines explicitly marked ``contract-exempt``.
+    """
+    for path, label, derivation_marker in _RATE_LITERAL_TARGETS:
+        if not path.is_file():
+            report.check(False, f"{label} is missing: {path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        report.check(
+            derivation_marker in text,
+            f"{label} ({path.name}) must derive rates from the manifest via '{derivation_marker}'",
+        )
+        for pattern, description in _FORBIDDEN_RATE_LITERALS:
+            hits = [
+                f"{path.name}:{lineno}"
+                for lineno, line in enumerate(text.splitlines(), 1)
+                if _legacy_rate_reason(line) == description
+            ]
+            report.check(
+                not hits,
+                f"{description} found in {label} ({', '.join(hits)}); "
+                f"rates come from config/hardware.yaml only",
+            )
+        # The dict-form check reports through the sampling_rate branch above;
+        # surface any remaining sampling_rate lines carrying a stale value.
+        dict_hits = [
+            f"{path.name}:{lineno}"
+            for lineno, line in enumerate(text.splitlines(), 1)
+            if "sampling_rate" in line and re.search(r"\b(?:64|100)\b", line)
+        ]
+        report.check(
+            not dict_hits,
+            f"legacy rate literal in a sampling_rate structure found in {label} "
+            f"({', '.join(dict_hits)}); rates come from config/hardware.yaml only",
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verbose", action="store_true")
@@ -280,6 +404,7 @@ def main() -> int:
     check_research_service_uuids(hw, report)
     check_raw_frame_contract(hw, report)
     check_canonical_firmware_paths(report)
+    check_no_legacy_rate_literals(report)
 
     if args.verbose:
         print(f"ran {report.checks_run} contract checks")

@@ -280,6 +280,34 @@ def test_device_clock_wraps_monotonically() -> None:
     assert clock.wraps == 1
 
 
+def test_decoder_reset_survives_a_reconnect() -> None:
+    """A pod that reconnects restarts its sequences; that is not a loss."""
+    frames = [
+        encode_frame(RawStream.ECG, seq, 1000 + seq, 0, RawFormat.S16, [10, 20, 30])
+        for seq in (0, 1, 2, 3)
+    ]
+
+    decoder = ResearchStreamDecoder()
+    for frame in frames:
+        decoder.feed(frame)
+
+    # The pod drops off and comes back with the same frames: without a reset
+    # the decoder compares sequence 0 against the previous session's 3 and
+    # reports ~65533 lost frames per stream. That is the reconnect bug.
+    for frame in frames:
+        decoder.feed(frame)
+    assert not decoder.is_clean(), "a restart without reset must be visible as a loss"
+
+    decoder.reset()
+    assert decoder.is_clean(), "reset must clear the previous session's expectations"
+
+    # And a fresh session after reset is clean, which is what the validator
+    # does at every recording start.
+    for frame in frames:
+        decoder.feed(frame)
+    assert decoder.is_clean(), f"a reconnect after reset must be clean: {decoder.drops}"
+
+
 def test_every_frame_is_versioned_bytes_not_dict() -> None:
     pod = SyntheticPod(duration_s=0.2)
     for _stream, frame in pod.frames():

@@ -4,12 +4,13 @@ Architecture.md decoupled pod/hub 23-31, tiered acquisition 33-43,
 energy 55-62, drift risk 92; Roadmap.md Phase 1 138 + LSL-from-day-one 151.
 
 Proves with 0 EUR spend: synthetic Tier 0 at NORMATIVE rates
-(ECG 500Hz / PPG 64Hz / IMU 100Hz per config/hardware.yaml forearm hub)
 -> LSL-clock timestamps -> real-time HR/HRV + PPG SQI/MAP
 -> XDF zero-drop at full 60 s native scale -> Tier-0 sync + 24 h budget.
 
-Normative rates: hardware.yaml is single source of truth.
-ESP32Tier0Config + synthetic helper must match it; no silent resampling.
+Normative rates: config/hardware.yaml is single source of truth and this
+test reads them from there — no literals. The rates used to be hardcoded
+in this file (64/100) and silently diverged from the manifest (50/50), so
+the test enforced the drift instead of catching it.
 """
 
 from __future__ import annotations
@@ -20,10 +21,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
 # Normative Tier 0 rates — config/hardware.yaml forearm hub (single source of truth).
-NORM_ECG_HZ = 500
-NORM_PPG_HZ = 64
-NORM_IMU_HZ = 100
+_NORM = forearm_hub_normative_rates()
+NORM_ECG_HZ = _NORM["ecg_hz"]
+NORM_PPG_HZ = _NORM["ppg_hz"]
+NORM_IMU_HZ = _NORM["imu_hz"]
 
 
 class TestNormativeRates:

@@ -6,9 +6,10 @@ per Architecture.md §92 clock drift risk mitigation.
 Architecture Decision (Principal Architect):
 - Tier 0 (PPG/IMU/Temp): 10 ms tolerance, 60s sync interval
 - Tier 1 (EEG/fNIRS/ECG): 1.0 ms tolerance, 10s sync interval
-- Rationale: Tier 0's fastest signal (PPG 64Hz = 15.6ms period, IMU 100Hz = 10ms)
-  does not benefit from sub-ms precision; Tier 1's ECG 700Hz (1.43ms) + EEG 500Hz (2ms)
-  for cardio-neuro coherence genuinely requires ~1ms.
+- Rationale: Tier 0's fastest signal (PPG at the normative 50 Hz = 20 ms
+  period, IMU at 50 Hz = 20 ms) does not benefit from sub-ms precision;
+  Tier 1's ECG 500 Hz (2 ms) + EEG 500 Hz (2 ms) for cardio-neuro
+  coherence genuinely requires ~1 ms.
 """
 
 from __future__ import annotations
@@ -45,8 +46,8 @@ class TierSyncBudget:
     """Per-tier synchronization budget.
 
     Architecture.md §55-62, §92: Radio re-sync is dominant hidden cost.
-    Tier 0 tolerates 10ms (PPG 64Hz period = 15.6ms, IMU 100Hz = 10ms).
-    Tier 1 requires 1ms (ECG 700Hz = 1.43ms, EEG 500Hz = 2ms).
+    Tier 0 tolerates 10ms (fastest T0 signal is 20 ms at the normative
+    50 Hz PPG/IMU rates). Tier 1 requires 1ms (ECG/EEG at 500 Hz = 2 ms).
     """
 
     tier0_max_residual_drift_ms: float = 10.0

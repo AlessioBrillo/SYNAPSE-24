@@ -10,7 +10,7 @@ Roadmap.md §138: Live ECG+PPG+IMU streaming, synchronized in LSL
 
 Tests:
 1. BLE connection establishment
-2. Real-time streaming at normative rates (ECG 500Hz, PPG 64Hz, IMU 100Hz)
+2. Real-time streaming at the normative config/hardware.yaml rates
 3. Per-tier sync validation (T0=10ms, T1=1ms marker channel)
 4. XDF zero-drop round-trip proof
 5. Power budget projection
@@ -27,7 +27,11 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from synapse24.acquisition.live_lsl_sync import (
+from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+_NORM = forearm_hub_normative_rates()
+
+from synapse24.acquisition.live_lsl_sync import (  # noqa: E402
     LiveTwoPodConfig,
     LSLUnavailableError,
     run_live_2pod_sync,
@@ -170,9 +174,24 @@ def main() -> None:
     parser.add_argument(
         "--duration", type=float, default=30.0, help="Test duration in seconds (default: 30)"
     )
-    parser.add_argument("--ecg-fs", type=int, default=500, help="ECG sampling rate (default: 500)")
-    parser.add_argument("--ppg-fs", type=int, default=64, help="PPG sampling rate (default: 64)")
-    parser.add_argument("--imu-fs", type=int, default=100, help="IMU sampling rate (default: 100)")
+    parser.add_argument(
+        "--ecg-fs",
+        type=int,
+        default=_NORM["ecg_hz"],
+        help=f"ECG sampling rate (default: {_NORM['ecg_hz']}, from hardware.yaml)",
+    )
+    parser.add_argument(
+        "--ppg-fs",
+        type=int,
+        default=_NORM["ppg_hz"],
+        help=f"PPG sampling rate (default: {_NORM['ppg_hz']}, from hardware.yaml)",
+    )
+    parser.add_argument(
+        "--imu-fs",
+        type=int,
+        default=_NORM["imu_hz"],
+        help=f"IMU sampling rate (default: {_NORM['imu_hz']}, from hardware.yaml)",
+    )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for synthetic data (default: 42)"
     )
