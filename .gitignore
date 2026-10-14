@@ -81,3 +81,6 @@ firmware/**/build/
 firmware/**/managed_components/
 firmware/**/sdkconfig
 firmware/**/sdkconfig.old
+# Frontend dependencies (235 MB of installed packages)
+frontend/node_modules/
+frontend/dist/
