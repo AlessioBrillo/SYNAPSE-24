@@ -53,6 +53,11 @@ static const ble_uuid128_t RESEARCH_CHAR_MAG_UUID =
 static const ble_uuid128_t RESEARCH_CHAR_SYNC_UUID =
     BLE_UUID128_INIT(0x78, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
                      0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+// Power telemetry (INA219): voltage_mv, current_ma, power_mw, battery_pct at 1 Hz.
+// Declared in config/hardware.yaml `research_characteristics.power`.
+static const ble_uuid128_t RESEARCH_CHAR_POWER_UUID =
+    BLE_UUID128_INIT(0x79, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
+                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
 
 // Value handles, filled in by ble_gatts_count_cfg/add_svcs at registration.
 static uint16_t s_hdl_ecg;
@@ -60,6 +65,7 @@ static uint16_t s_hdl_ppg;
 static uint16_t s_hdl_acc;
 static uint16_t s_hdl_gyro;
 static uint16_t s_hdl_mag;
+static uint16_t s_hdl_power;
 static uint16_t s_hdl_sync;
 
 // Clock-sync response staged by the write path and read back by the host.
@@ -77,7 +83,8 @@ enum {
     STREAM_ACC = 2,
     STREAM_GYRO = 3,
     STREAM_MAG = 4,
-    STREAM_COUNT = 5,
+    STREAM_POWER = 5,
+    STREAM_COUNT = 6,
 };
 
 // ---------------------------------------------------------------------------
@@ -179,6 +186,13 @@ static const struct ble_gatt_svc_def research_svcs[] = {
                 .val_handle = &s_hdl_mag,
             },
             {
+                .uuid = &RESEARCH_CHAR_POWER_UUID.u,
+                .access_cb = stream_access,
+                .arg = &s_research.streams[STREAM_POWER],
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_hdl_power,
+            },
+            {
                 .uuid = &RESEARCH_CHAR_SYNC_UUID.u,
                 .access_cb = sync_access,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
@@ -238,6 +252,15 @@ static void init_stream_table(synapse_research_t *r)
         .unit_scale = SYNAPSE_RESEARCH_UNIT_CUT,
         .flush_at = 4,
     };
+    // Power telemetry 1 Hz, 4 channels (voltage_mv, current_ma, power_mw,
+    // battery_pct): one sample per frame, no buffering.
+    r->streams[STREAM_POWER] = (synapse_research_stream_t){
+        .stream_id = SYNAPSE_RAW_STREAM_POWER,
+        .format = SYNAPSE_RAW_FORMAT_S32,
+        .channels = 4,
+        .unit_scale = SYNAPSE_RESEARCH_UNIT_MILLI,
+        .flush_at = 1,
+    };
     r->stream_count = STREAM_COUNT;
 }
 
@@ -249,6 +272,7 @@ static uint16_t stream_handle(const synapse_research_stream_t *stream)
     if (stream == &s_research.streams[STREAM_ACC]) return s_hdl_acc;
     if (stream == &s_research.streams[STREAM_GYRO]) return s_hdl_gyro;
     if (stream == &s_research.streams[STREAM_MAG]) return s_hdl_mag;
+    if (stream == &s_research.streams[STREAM_POWER]) return s_hdl_power;
     return 0;
 }
 
@@ -436,6 +460,42 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             flush_stream(&s_research, s);
         }
     }
+}
+
+void synapse_research_service_submit_power(float voltage_mv, float current_ma, float battery_pct)
+{
+    if (!s_research.initialized) {
+        return;
+    }
+    // esp_timer_get_time() is the same monotonic source the ECG path uses, so
+    // power frames and biosignal frames share one device timeline.
+    int64_t now_us = esp_timer_get_time();
+    if (now_us < s_research.last_sample_us) {
+        return;  // stale sample, the clock is monotonic
+    }
+    if ((uint32_t)now_us < (uint32_t)s_research.last_sample_us) {
+        s_research.epoch_wraps++;
+    }
+    s_research.last_sample_us = now_us;
+
+    synapse_research_stream_t *s = &s_research.streams[STREAM_POWER];
+    if (s->pending != 0) {
+        return;  // 1 Hz: a sample is still unflushed; drop, never overwrite
+    }
+    s->first_ts_us = now_us;
+    // Four channels in one frame: voltage_mv, current_ma, power_mw,
+    // battery_pct. Power is derived here rather than sent separately so the
+    // host's energy accounting is one multiplication, not three fields to
+    // reconcile. The ring carries up to RING_DEPTH * 3 int32 values, and a
+    // single 4-channel sample fits well inside that.
+    float power_mw = voltage_mv * current_ma / 1000.0f;
+    s->ring[0] = quantise_s16(voltage_mv, (float)SYNAPSE_RESEARCH_UNIT_MILLI);
+    s->ring[1] = quantise_s16(current_ma, (float)SYNAPSE_RESEARCH_UNIT_MILLI);
+    s->ring[2] = quantise_s16(power_mw, (float)SYNAPSE_RESEARCH_UNIT_MILLI);
+    s->ring[3] = quantise_s16(battery_pct, (float)SYNAPSE_RESEARCH_UNIT_MILLI);
+    s->pending = 1;
+
+    flush_stream(&s_research, s);
 }
 
 esp_err_t synapse_research_service_set_transmitting(bool enable)

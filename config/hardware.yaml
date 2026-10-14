@@ -59,6 +59,7 @@ pods:
         acc:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73"
         gyro: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74"
         mag:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75"
+        power: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C79"
         sync: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
       # NOTE: skin temperature is carried by the consumer feature-stream
       # characteristic (synapse_feature_stream_t.temperature), not by the
@@ -199,6 +200,7 @@ raw_frame:
     gyro: 0x04
     mag: 0x05
     temp: 0x06
+    power: 0x07
     sync: 0x10
   sample_formats:
     s8: 0x01
@@ -223,6 +225,7 @@ raw_frame:
     acc: 320
     gyro: 320
     mag: 320
+    power: 64
   aggregate_bytes_per_second_budget: 3000
 
 # Sync configuration (Architecture.md §92)

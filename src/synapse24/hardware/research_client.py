@@ -54,6 +54,7 @@ UNIT_DIVISOR: dict[RawStream, float] = {
     RawStream.GYRO: 1000.0,  # mrad/s
     RawStream.MAG: 100.0,  # 0.01 uT
     RawStream.TEMP: 1.0,  # 0.01 degC
+    RawStream.POWER: 1.0,  # mV, mA, mW, % — already engineering units
     RawStream.SYNC: 1.0,
 }
 
@@ -65,6 +66,7 @@ LSL_STREAM_NAMES: dict[RawStream, str] = {
     RawStream.GYRO: "SYNAPSE_GYRO_T0",
     RawStream.MAG: "SYNAPSE_MAG_T0",
     RawStream.TEMP: "SYNAPSE_TEMP_T0",
+    RawStream.POWER: "SYNAPSE_Power",
     RawStream.SYNC: "SYNAPSE_SYNC_T0",
 }
 

@@ -66,6 +66,7 @@ typedef enum {
     SYNAPSE_RESEARCH_UNIT_MRAD_S = 1000,  /**< millirad/s   (GYRO, rad/s)    */
     SYNAPSE_RESEARCH_UNIT_CUT = 100,      /**< 0.01 uT      (MAG, from uT)   */
     SYNAPSE_RESEARCH_UNIT_COUNT = 1,      /**< raw ADC code (PPG)            */
+    SYNAPSE_RESEARCH_UNIT_MILLI = 1,      /**< mV, mA, mW, % (POWER)         */
 } synapse_research_unit_t;
 
 /** Per-stream runtime state. */
@@ -116,6 +117,23 @@ esp_err_t synapse_research_service_init(void);
  * @param sample Sample produced by firmware/common scheduler drivers.
  */
 void synapse_research_service_submit(const sensor_sample_t *sample);
+
+/**
+ * @brief Submit one power-telemetry sample (INA219) as a raw frame.
+ *
+ * The energy budget is a functional requirement (Architecture.md §55-62): a
+ * bench PSU measurement is a one-off calibration, not the per-session
+ * consumption the 24-hour feasibility claim rests on. At 1 Hz with four
+ * channels the sample fits in one frame, so it bypasses the scheduler ring
+ * rather than borrowing the ECG/PPG/IMU queues.
+ *
+ * Runs in the power task context: allocation-free.
+ *
+ * @param voltage_mv  Bus voltage in millivolts
+ * @param current_ma  Shunt current in milliamperes (may be negative)
+ * @param battery_pct State of charge, 0-100
+ */
+void synapse_research_service_submit_power(float voltage_mv, float current_ma, float battery_pct);
 
 /** @brief Start or stop raw streaming (host writes the control characteristic). */
 esp_err_t synapse_research_service_set_transmitting(bool enable);

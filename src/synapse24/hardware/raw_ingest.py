@@ -39,6 +39,7 @@ OUTLET_BY_STREAM = {
     RawStream.ACC: "SYNAPSE_ACC_T0",
     RawStream.GYRO: "SYNAPSE_GYRO_T0",
     RawStream.MAG: "SYNAPSE_MAG_T0",
+    RawStream.POWER: "SYNAPSE_Power",
 }
 
 # (outlet name, channel values, timestamp in seconds)
@@ -70,6 +71,7 @@ def _normative_stream_rates() -> dict[RawStream, float]:
         RawStream.ACC: float(rates["imu_hz"]),
         RawStream.GYRO: float(rates["imu_hz"]),
         RawStream.MAG: float(rates["imu_hz"]),
+        RawStream.POWER: 1.0,  # one telemetry frame per second
     }
 
 

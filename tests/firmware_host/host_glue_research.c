@@ -66,6 +66,10 @@ int synapse_host_smoke_main(void)
     /* Calling the public API before init must be a no-op, not a crash: the
      * real call site is a FreeRTOS task. */
     synapse_research_service_submit(NULL);
+
+    /* Power telemetry must also be safe before init, and must not depend on
+     * the scheduler ring (it builds its own single frame). */
+    synapse_research_service_submit_power(3700.0f, 120.0f, 80.0f);
     return 0;
 }
 

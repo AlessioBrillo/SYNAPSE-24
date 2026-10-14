@@ -50,6 +50,7 @@ class RawStream(IntEnum):
     GYRO = 0x04
     MAG = 0x05
     TEMP = 0x06
+    POWER = 0x07
     SYNC = 0x10
 
 
@@ -74,6 +75,7 @@ STREAM_CHANNELS: dict[RawStream, int] = {
     RawStream.GYRO: 3,
     RawStream.MAG: 3,
     RawStream.TEMP: 1,
+    RawStream.POWER: 4,  # voltage_mv, current_ma, power_mw, battery_pct
     RawStream.SYNC: 1,
 }
 

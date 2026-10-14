@@ -40,6 +40,7 @@ bringup:
       acc:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73"
       gyro: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74"
       mag:  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75"
+      power: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C79"
       sync: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
       # A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C76 (temp) is declared in
       # firmware/esp32_band/ble/ble_research_service.h but unused in band-core:

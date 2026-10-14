@@ -21,6 +21,12 @@ endif()
 if(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
     target_sources(${COMPONENT_LIB} PRIVATE "temp_tmp117.c")
 endif()
+# INA219 power monitor: the measured-current telemetry the energy budget
+# (Architecture.md §55-62) needs per session. Compiled in band-core because the
+# smoke-kit rig is where the budget is first measured.
+if(CONFIG_SYNAPSE_FEATURE_POWER_MONITOR)
+    target_sources(${COMPONENT_LIB} PRIVATE "ina219.c")
+endif()
 # imu_processor must run at the real IMU ODR (Kconfig); triage needs 50 Hz (triage_features_init checks).
 if(DEFINED CONFIG_SYNAPSE_IMU_ACCEL_ODR_HZ)
     target_compile_definitions(${COMPONENT_LIB} PUBLIC IMU_PROCESSOR_SAMPLE_RATE_HZ=${CONFIG_SYNAPSE_IMU_ACCEL_ODR_HZ})

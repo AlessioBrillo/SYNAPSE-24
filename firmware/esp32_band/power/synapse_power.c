@@ -17,6 +17,9 @@
 #include "esp_timer.h"
 #include "synapse_power.h"
 #include "synapse_config.h"
+#ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
+#include "ina219.h"
+#endif
 
 static const char *TAG = "SYNAPSE_POWER";
 
@@ -27,6 +30,11 @@ static adc_channel_t g_bat_adc_channel = ADC_CHANNEL_3; // ADC1 CH3 = GPIO4 on E
 static float g_voltage_divider = 2.0f;
 static bool g_charging = false;
 static bool g_initialized = false;
+static synapse_power_telemetry_sink_t g_telemetry_sink = NULL;
+
+#ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
+static bool g_ina_present = false;
+#endif
 
 // Battery voltage to percentage mapping (LiPo 3.7V)
 static const struct {
@@ -85,6 +93,26 @@ esp_err_t synapse_power_init(void) {
                  esp_err_to_name(cali_ret));
         g_cali_handle = NULL;
     }
+
+#ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
+    // INA219 on the shared I2C bus: real current, not a tier-model estimate.
+    // A missing breakout is not an error — the rig runs, and the status says
+    // the current figure is a model rather than a measurement.
+    ina219_config_t ina_cfg = {
+        .i2c_port = CONFIG_SYNAPSE_INA219_I2C_PORT,
+        .i2c_addr = CONFIG_SYNAPSE_INA219_I2C_ADDR,
+        .shunt_ohm = CONFIG_SYNAPSE_INA219_SHUNT_MOHM / 1000.0f,
+        .max_expected_a = CONFIG_SYNAPSE_INA219_MAX_CURRENT_MA / 1000.0f,
+    };
+    esp_err_t ina_ret = ina219_init(&ina_cfg);
+    if (ina_ret == ESP_OK) {
+        g_ina_present = true;
+        ESP_LOGI(TAG, "INA219 power monitor active: measured current telemetry enabled");
+    } else {
+        ESP_LOGW(TAG, "INA219 not available (%s): current draw stays a tier-model estimate",
+                 esp_err_to_name(ina_ret));
+    }
+#endif
     
     // Initialize status from config
     g_status.battery_capacity_mah = hw_cfg.hub_battery_mah;
@@ -119,6 +147,24 @@ void synapse_power_tick(void) {
     g_status.voltage_v = 0.9f * g_status.voltage_v + 0.1f * voltage_v;
     g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
     
+#ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
+    // Measured current replaces the tier-model estimate (Architecture.md §55-62:
+    // the budget is validated against what the pod actually draws, and the
+    // per-session figure is streamed with the recording).
+    if (g_ina_present) {
+        ina219_data_t meas = {0};
+        if (ina219_read_once(&meas) == ESP_OK) {
+            g_status.voltage_v = meas.bus_voltage_v;
+            g_status.current_ma = meas.current_a * 1000.0f;  // A -> mA
+            g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
+            if (g_telemetry_sink != NULL) {
+                g_telemetry_sink(g_status.voltage_v * 1000.0f, g_status.current_ma,
+                                 (float)g_status.battery_level_pct);
+            }
+        }
+    }
+#endif
+
     // Estimate current draw based on current tier
     synapse_hw_config_t hw_cfg;
     synapse_config_get(&hw_cfg);
@@ -126,8 +172,7 @@ void synapse_power_tick(void) {
     float current_mw = hw_cfg.t0_avg_mw;  // Default Tier 0
     // In a full implementation, would get current tier from acquisition FSM
     
-    g_status.current_ma = (current_mw / g_status.voltage_v);  // mA
-    
+    g_status.current_ma = (current_mw / g_status.voltage_v);  // mA    
     // Update remaining capacity (simple coulomb counting)
     static int64_t last_tick = 0;
     int64_t now = esp_timer_get_time();
@@ -179,6 +224,19 @@ void synapse_power_on_tier_change(int from_tier, int to_tier) {
     
     // Log tier change
     ESP_LOGI(TAG, "Tier change: %d -> %d", from_tier, to_tier);
+}
+
+void synapse_power_set_telemetry_sink(synapse_power_telemetry_sink_t sink) {
+    g_telemetry_sink = sink;
+    ESP_LOGI(TAG, "power telemetry sink %s", sink ? "attached" : "detached");
+}
+
+bool synapse_power_has_measured_current(void) {
+#ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
+    return g_ina_present;
+#else
+    return false;
+#endif
 }
 
 bool synapse_power_can_afford_tier1(float duration_h) {
