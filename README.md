@@ -312,7 +312,7 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
 | **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | ✅ **COMPLETE** |
-| Phase 1 | Months 2-5 | €90 ECG+PPG+IMU rig, LSL sync | 🔄 **Ready to Start** |
+| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software ready — kit orderable** (smoke kit per `docs/hardware/PROCUREMENT.md`; G0 closed, every gate CI-provable without hardware) |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |
 

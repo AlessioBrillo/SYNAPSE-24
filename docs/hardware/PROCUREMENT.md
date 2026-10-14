@@ -40,21 +40,41 @@ reason.
 |---|---|---|---|---|---|
 | 1 | ESP32-S3 DevKitC-1 | 1 | **N8R8: 8 MB Flash + 8 MB PSRAM** | 12–15 | PSRAM is mandatory for the TFLM triage arena (~60 KB model + activations). ESP32-C3 has none and will OOM. ESP32-S3 also has no usable GPIO 21–25, which is why the I²C bus is on 8/9. N8R8 (WROOM-1) is the mainstream module — do **not** buy N16R8V: that is WROOM-2 with 1.8 V octal flash/PSRAM, a different part for the same price. `partitions.csv` uses a 6 MB layout, which fits the 8 MB chip as-is. |
 | 2 | AD8232 ECG breakout | 1 | Generic clone, snap-electrode header | 3–7 | The de-facto DIY single-lead front-end. Fine for HR/HRV; not diagnostic. |
-| 3 | MAX30102 breakout | 1 | Red + IR photodiode, I²C | 2–6 | Cheapest credible PPG. Shield from ambient light. |
+| 3 | MAX30102 PPG breakout | 1 | Red + IR photodiode, I²C | 2–6 | Cheapest credible PPG. Shield from ambient light. |
 | 4 | ICM-20948 breakout | **2** | 9-axis, I²C | 10–15 ea | ⚠️ **EOL**: TDK PCN-000570 (Mar 2026) — last-time-buy Apr 2026, last-time-ship **30 Oct 2026**. Distributor and clone stock remains fine for a one-off bringup rig, so buy 2 (one spare). A **firmware migration to ICM-42688-P (+ AK09918 magnetometer) or ICM-45608+ICT-15318 is a Phase-2 gated task** — no pin-compatible replacement and no driver exists in-tree yet. |
 | 5 | Ag/AgCl snap electrodes | 50-pack | Gel, single-use | 8–15 | Skin prep is the single biggest determinant of ECG SNR. |
-| 6 | Breadboard 830-pt + Dupont jumpers (M/M, M/F, F/F) | 1 | — | 15–25 | |
-| 7 | Micro-USB **data** cable | 2 | Must carry data, not charge-only | 3–5 | Charge-only cables are the #1 cause of "flash failed". |
-| 8 | LiPo 3.7 V 500 mAh, JST-PH 2-pin | 1 | With protection PCB | 5–8 | Only needed for the untethered power measurement. |
+| 6 | Breadboard 830-pt + Dupont jumpers (M/M, M/F, F/F) | **2** | — | 15–25 ea | One for the Tier-0 rig, one for the two-pod sync bench (see the addendum below). |
+| 7 | Micro-USB **data** cable | **3** | Must carry data, not charge-only | 3–5 | Charge-only cables are the #1 cause of "flash failed"; the third is for the second pod. |
+| 8 | LiPo 3.7 V 500 mAh, JST-PH 2-pin | **2** | With protection PCB | 5–8 | One for the untethered power measurement, one for the second pod's battery soak. |
+| 9 | **INA219 current/power monitor breakout** | 1 | I²C, 0.1 Ω shunt, address 0x40 | 2–5 | Closes the energy budget: per-session measured current, streamed on the research service's POWER stream (`firmware/esp32_band/sensors/ina219.c`). A bench PSU reading is a one-off; the 24-hour feasibility claim needs the *actual* consumption logged with the recording. |
+| 10 | **ESP32-S3 DevKitC-1 (second pod)** | 1 | N8R8, same as row 1 | 12–15 | The G1→G2 sync criterion is **pod↔pod** (head pod vs forearm hub) — impossible with one board. A second devkit running the same `band-core` firmware, GPIO 27 wired between them, exercises the real scenario and produces the first two-pod XDF *before* the €350 Cerelog is ordered. |
 
-**Subtotal: €58–90.** Contingency for shipping (~€5–7 from CN) and a
-replacement sensor or two: **budget €100.**
+**Subtotal: ~€80–125.**
+
+### Two additions to the kit, and the evidence for them
+
+**A second ESP32 (row 10).** G2's criterion #1 is *≤10 ms residual drift over
+30 minutes*, and the figure that matters for the Cerelog is pod↔pod alignment,
+not pod↔host. Buying the €12 board now and rehearsing the two-pod sync bench
+is the readiness-gate logic one level down: the problem costs €12 today
+instead of €350 plus a weekend later.
+
+**The INA219 (row 9).** Architecture.md §55-62 makes the energy budget a
+functional requirement. Without the monitor the pod reports a tier *model*;
+with it, the recording carries the measurement, and the SOP's power rows
+become data instead of a single spot check. At 1 Hz it costs ~28 B/s against
+its declared 64 B/s budget.
+
+Budget: the two rows above add ~€20 to the original €100 contingency:
+**budget €125**, ordered in one shipment (CN shipping is ~€5–7 per item, 2–4
+weeks lead time).
 
 ### Not needed yet (deliberately excluded)
 
-TMP117, MAX-M10S GPS, second ESP32, soldering gear, oscilloscope. The
+TMP117, MAX-M10S GPS, soldering gear, oscilloscope, a Raspberry Pi. The
 instrumentation you already own (bench PSU, multimeter, scope) covers every
-measurement in the SOP below.
+measurement in the SOP below. (A *second* ESP32 **is** included — see row 10 —
+because the sync criterion that gates the Cerelog order needs two pods.)
 
 ---
 
@@ -78,13 +98,18 @@ contract and clock-sync path built for the Band can be reused for the head
 pod instead of rebuilt around a Pi.
 
 **Decision criteria to re-check at G1** (all measured, all must pass):
-1. Does the smoke kit hold ≤10 ms residual drift over 30 min? If not, the
-   EEG rig's 1 ms Tier-1 budget is unreachable and the sync design must be
-   fixed *before* spending €350 on a second pod.
-2. Does raw PPG at 50 Hz fit the ≤0.6 kB/s BLE budget with ECG at 500 Hz
-   included? If not, either the rates or the framing change now — not after
-   the Cerelog arrives.
+1. Does the smoke kit hold ≤10 ms residual drift over 30 min, **pod↔host and
+   pod↔pod** (two pods, GPIO 27 wired)? If not, the EEG rig's 1 ms Tier-1
+   budget is unreachable and the sync design must be fixed *before* spending
+   €350 on a second pod.
+2. Does raw PPG at 50 Hz fit the per-stream BLE budget with ECG at 500 Hz
+   included (aggregate ~2.4 kB/s, per `hardware.yaml` `raw_frame`)? If not,
+   either the rates or the framing change now — not after the Cerelog arrives.
 3. Does the firmware hold zero dropped samples for 30 min continuous?
+4. Does the measured Tier-0 current (INA219, POWER stream) agree with the
+   ≤5 mW `hardware.yaml` T0 profile? If the rig draws materially more, the
+   24-hour target is a budget problem, not a software one, and it must be
+   known before committing to the EEG build.
 
 ### Explicitly deferred past G2
 
@@ -110,9 +135,15 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 | 5 | HR vs manual pulse count | Stopwatch + timer | MAE ≤ 2 bpm. |
 | 6 | RMSSD vs NeuroKit2 reference on the same recording | NeuroKit2 | MAE < 5 ms. |
 | 7 | PPG SQI / MAP, seated and still | `signal_quality.ppg` | SQI ≥ 0.3 sustained >30 s, MAP ≤ 0.5. |
-| 8 | Clock residual drift vs host NTP | `acquisition/clock_sync` | ≤10 ms (T0), ≤1 ms (T1). |
+| 8 | Clock residual drift vs host (pod↔host) **and pod↔pod** | `PodClockModel.status()` via the SYNC characteristic; ACC cross-correlation for pod↔pod | ≤10 ms (T0), ≤1 ms (T1). The pod↔pod number is the one that gates the Cerelog. |
 | 9 | XDF integrity | `utils.validate_xdf` | Zero dropped samples, monotonic timestamps. |
 | 10 | On-device triage latency | Serial log | ≤5 ms per inference. |
+| 11 | Measured Tier-0 power over the soak | POWER stream / `gate_report.json` (`clock_residual_drift_ms`, `ble_throughput_bytes_per_s`, `dropped_frames` are filled automatically) | Average ≤5 mW per the `hardware.yaml` T0 profile; the per-session figure is the input to the 24-hour claim. |
+
+The validator writes rows 3, 4, 8, 9, 11 itself into
+`data/live_validation/gate_report.json`; rows 1, 2, 5, 6, 7, 10 are bench
+measurements recorded by hand into the same file (`"source": "bench"` marks
+the unfilled ones, so a half-filled report is visibly a half-filled report).
 
 Run it as:
 
@@ -123,15 +154,25 @@ uv run python scripts/validate_phase1_entry.py --live-hardware \
     --config config/hardware_bringup.yaml
 ```
 
+For the overnight MVP soak (6 h, battery, zero drops) add `--soak`, which
+records continuously through LabRecorderCLI:
+
+```bash
+uv run python scripts/validate_phase1_entry.py --live-hardware --soak \
+    --duration 21600 --config config/hardware_bringup.yaml
+```
+
 ## Order of operations
 
 1. **Today:** work the G0 blocker. Zero cost, and it is the only thing that
-   can invalidate the entire €100 order.
-2. **Then:** order the smoke kit.
+   can invalidate the entire kit order. (**G0 is CLOSED — 2026-10-12.**)
+2. **Then:** order the smoke kit (rows above, one shipment).
 3. **On arrival:** follow `docs/hardware/BRINGUP_SOP.md`, then run the SOP
-   table above and record every number in `data/live_validation/`.
+   table above and record every number in `data/live_validation/`
+   (`gate_report.json` is written by the validator; the bench rows are typed
+   into it by hand).
 4. **When G1 passes:** order the Cerelog ESP-EEG with the criteria above
-   re-checked.
+   re-checked — including the pod↔pod sync number and the measured power.
 5. **When G2 passes:** the readme/roadmap status flips and the next gate's
    hardware becomes orderable.
 
