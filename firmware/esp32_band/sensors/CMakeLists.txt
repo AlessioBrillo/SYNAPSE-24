@@ -22,7 +22,7 @@ if(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
     target_sources(${COMPONENT_LIB} PRIVATE "temp_tmp117.c")
 endif()
 # INA219 power monitor: the measured-current telemetry the energy budget
-# (Architecture.md §55-62) needs per session. Compiled in band-core because the
+# (Architecture.md sec. 55-62, energy budget) needs per session. Compiled in band-core
 # smoke-kit rig is where the budget is first measured.
 if(CONFIG_SYNAPSE_FEATURE_POWER_MONITOR)
     target_sources(${COMPONENT_LIB} PRIVATE "ina219.c")

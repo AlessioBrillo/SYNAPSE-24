@@ -12,6 +12,7 @@
 
 #include <string.h>
 #include "ina219.h"
+#include "synapse_power.h"
 
 #include "esp_err.h"
 #include "driver/i2c.h"
@@ -198,4 +199,42 @@ float ina_host_power_w(void) { return s_last_data.power_w; }
 int ina_host_read_once_raw(ina219_data_t *out)
 {
     return ina219_read_once(out) == ESP_OK ? 0 : 1;
+}
+
+/* --- power-module stubs ------------------------------------------------
+ * synapse_power.c is an ESP-IDF component (ADC + config); the glue provides
+ * the two functions the wiring check needs, so the *signature* is verified
+ * against the real header. */
+static synapse_power_telemetry_sink_t s_sink;
+
+void synapse_power_set_telemetry_sink(synapse_power_telemetry_sink_t sink)
+{
+    s_sink = sink;
+}
+
+bool synapse_power_has_measured_current(void)
+{
+    return false;  /* no INA219 on this host: the honest answer is false */
+}
+
+/* --- wiring check -------------------------------------------------------
+ * app_main.c attaches synapse_research_service_submit_power as the power
+ * module's telemetry sink. The two declarations must have exactly the same
+ * signature or the build breaks in a place nobody looks until much later, so
+ * the host gate compiles the assignment. */
+#include "ble_research_service.h"
+
+int ina_host_wiring_smoke(void)
+{
+    synapse_power_telemetry_sink_t sink = synapse_research_service_submit_power;
+    synapse_power_set_telemetry_sink(sink);
+    if (sink != synapse_research_service_submit_power) {
+        return 1;
+    }
+    if (synapse_power_has_measured_current()) {
+        /* No INA219 on this host, so the honest answer is false. */
+        return 2;
+    }
+    synapse_power_set_telemetry_sink(NULL);
+    return 0;
 }

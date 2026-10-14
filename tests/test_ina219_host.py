@@ -22,6 +22,7 @@ import pytest
 from tests.firmware_host import ROOT, build, try_load
 
 BAND_SENSORS = ROOT / "firmware" / "esp32_band" / "sensors"
+BAND_BLE = ROOT / "firmware" / "esp32_band" / "ble"
 GLUE = ROOT / "tests" / "firmware_host" / "host_glue_ina219.c"
 
 SOURCES = [
@@ -29,9 +30,16 @@ SOURCES = [
     GLUE,
 ]
 
+# The glue's wiring check includes ble_research_service.h (which pulls in
+# synapse_raw_frame.h and the NimBLE stubs), so both band and common BLE
+# directories must be on the include path — exactly as the firmware build
+# graph connects them. Paths are bare: build() adds the -I prefix.
 INCLUDES = [
-    "-Itests/firmware_host/stubs",
-    "-Ifirmware/esp32_band/sensors",
+    str(BAND_SENSORS),
+    str(BAND_BLE),
+    str(ROOT / "firmware" / "common" / "ble"),
+    str(ROOT / "firmware" / "esp32_band" / "power"),
+    str(ROOT / "firmware" / "esp32_band" / "config"),
 ]
 
 
@@ -42,9 +50,7 @@ def lib() -> ctypes.CDLL | None:
     A missing compiler fails the build (never skips); only an OS that refuses
     to load a freshly built library yields None, and those tests skip.
     """
-    out = build(
-        ROOT / "build" / "firmware_host_ina219", SOURCES, extra_includes=[str(BAND_SENSORS)]
-    )
+    out = build(ROOT / "build" / "firmware_host_ina219", SOURCES, extra_includes=INCLUDES)
     return try_load(out)
 
 
@@ -92,6 +98,14 @@ class TestIna219HostGate:
         lib.ina_host_set_read_error(0x107)  # ESP_ERR_TIMEOUT
         rc = _read_once(lib)
         assert rc != 0, "a failed I2C read must not return ESP_OK"
+
+    def test_wiring_check_passes(self, lib) -> None:
+        """The power→research-service wiring must compile and behave."""
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_wiring_smoke.restype = ctypes.c_int
+        rc = lib.ina_host_wiring_smoke()
+        assert rc == 0, f"ina_host_wiring_smoke returned {rc}"
 
     def test_stats_track_reads_and_errors(self, lib) -> None:
         if lib is None:
