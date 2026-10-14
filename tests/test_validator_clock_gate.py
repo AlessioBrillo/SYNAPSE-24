@@ -1,7 +1,7 @@
 """Validator raw-path wiring: the gates must measure, not assume.
 
-These tests drive the *assembled* validator — decode path, clock model, sync
-gate — against a synthetic pod that speaks the real research-service frame
+These tests drive the *assembled* validator â€” decode path, clock model, sync
+gate â€” against a synthetic pod that speaks the real research-service frame
 format with a known clock offset. This is the seam where "synchronized"
 would otherwise be claimed without a measurement, so it is the seam the
 tests pin:
@@ -62,7 +62,7 @@ class SyntheticPodTransport:
     epoch) with a configurable drift and radio jitter, so the host-side clock
     model has exact ground truth to recover and the sync gate has a real
     number to judge. ``host_jitter_us`` widens the observed round trip
-    without moving the pod's stamps — the radio-noise case that must fail an
+    without moving the pod's stamps â€” the radio-noise case that must fail an
     honest gate.
     """
 
@@ -193,7 +193,7 @@ class TestValidatorClockGate:
     def test_noisy_link_fails_the_tier0_gate(self) -> None:
         """Radio jitter no exchange can see through must FAIL the budget."""
         validator = Phase1Validator(CONFIG, _logger())
-        # ±40 ms of observed round-trip jitter: the offset evidence scatters
+        # Â±40 ms of observed round-trip jitter: the offset evidence scatters
         # by half of it on alternating exchanges, far outside the 10 ms budget.
         _drive(validator, SyntheticPodTransport(host_jitter_us=40_000.0))
 
@@ -263,3 +263,104 @@ class TestValidatorClockGate:
         assert ppg_ts.size > 10
         assert ppg_ts[0] > 999.0
         assert (np.diff(ppg_ts) > 0).all()
+
+
+class TestTimeCompressedSoak:
+    """The 6-hour soak, compressed: 8 hours of device time in milliseconds.
+
+    The SOP's soak bar exists because the pod's 32-bit microsecond counter
+    wraps every ~71.6 minutes: a one-minute gate cannot see the wrap, the
+    reconstructed 64-bit timeline, or the clock model's behaviour across it.
+    Rather than generating eight hours of *samples* (millions of frames and
+    minutes of CI), this generates a sparse timeline spanning eight hours —
+    the wrap logic, the DeviceClock reconstruction and the clock model care
+    about timestamps, not about how many samples sit between them.
+    """
+
+    N_HOURS = 8.0
+    FRAME_SPACING_S = 240.0  # a frame every 4 minutes: the wrap lands mid-stream
+
+    def _long_session(self) -> Phase1Validator:
+        validator = Phase1Validator(CONFIG, _logger())
+        lsl_clock = lambda: float(LSL_NOW[0])  # noqa: E731
+        validator.lsl_clock_fn = lsl_clock
+        validator.raw_ingestor.lsl_clock_fn = lsl_clock
+
+        from synapse24.hardware.raw_codec import RawFormat, RawStream, encode_frame
+
+        n_frames = int(self.N_HOURS * 3600.0 // self.FRAME_SPACING_S)
+
+        async def scenario() -> None:
+            validator._create_lsl_outlets()
+            validator._setup_clock_sync()
+            validator._setup_acquisition_controller()
+            validator.client = SyntheticPodTransport()
+            # Calibrate first: without it the opening frames carry arrival
+            # timestamps, exactly what the SOP's connect-time burst avoids.
+            await validator._calibrate_clock_model()
+            for i in range(n_frames):
+                LSL_NOW[0] += self.FRAME_SPACING_S
+                pod_us = int(POD_EPOCH_US + i * self.FRAME_SPACING_S * 1_000_000)
+                ecg = encode_frame(
+                    RawStream.ECG,
+                    i % 65536,
+                    pod_us & 0xFFFFFFFF,
+                    0,
+                    RawFormat.S16,
+                    [10, 20, 30],
+                )
+                validator._notification_handler(
+                    _Char(GATT_CHAR_UUIDS[RawStream.ECG]), bytearray(ecg)
+                )
+                await validator._run_sync_exchange()
+
+        import asyncio
+
+        asyncio.run(scenario())
+        return validator
+
+    def test_eight_hours_of_device_time_stays_monotonic_and_mapped(self) -> None:
+        validator = self._long_session()
+
+        ts = np.asarray(validator.lsl_manager.stream_timestamps["SYNAPSE_ECG_T0"])
+        assert ts.size >= int(self.N_HOURS * 3600 / self.FRAME_SPACING_S) * 3 - 1
+        diffs = np.diff(ts)
+        assert (diffs > 0).all(), "the reconstructed timeline went backwards across a wrap"
+        # Each frame carries three samples 2 ms apart, then jumps four
+        # minutes: the mapped spacing must be the *device* spacing, not the
+        # arrival spacing (which would make every diff in a frame zero and
+        # every jump meaningless).
+        inter_frame = diffs[2::3]  # the frame-to-frame jumps
+        assert inter_frame.size >= 5
+        assert float(np.median(inter_frame)) == pytest.approx(self.FRAME_SPACING_S, rel=0.01), (
+            "the frame-to-frame spacing collapsed across the wrap"
+        )
+        intra_frame = diffs[0::3]
+        assert float(np.median(intra_frame)) == pytest.approx(1.0 / 500.0, rel=0.01)
+        # Still in the LSL domain, not the pod's boot epoch.
+        assert ts.min() >= 1000.0
+        assert ts.max() < 1000.0 + self.N_HOURS * 3600.0 + self.FRAME_SPACING_S
+
+    def test_clock_model_survives_the_soak(self) -> None:
+        validator = self._long_session()
+        status = validator.clock_model.status()
+        assert status["calibrated"] is True
+        assert float(status["residual_ms"]) < 1.0, status
+        assert float(status.get("span_s", 0.0)) >= (self.N_HOURS - 1) * 3600.0
+
+    def test_no_frame_loss_over_the_soak(self) -> None:
+        validator = self._long_session()
+        assert validator.raw_ingestor.is_clean(), validator.raw_ingestor.drop_summary()
+
+    def test_wrap_actually_occurred(self) -> None:
+        """The point of the soak: the 32-bit counter must have wrapped."""
+        from synapse24.hardware.research_client import DeviceClock
+
+        clock = DeviceClock()
+        for i in range(int(self.N_HOURS * 3600 // self.FRAME_SPACING_S)):
+            pod_us = int(POD_EPOCH_US + i * self.FRAME_SPACING_S * 1_000_000)
+            clock.extend(pod_us & 0xFFFFFFFF, 0)
+        assert clock.wraps >= 5, (
+            f"an 8-hour span at 240 s spacing must wrap the 32-bit counter "
+            f"several times; saw {clock.wraps}"
+        )

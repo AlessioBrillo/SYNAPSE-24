@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pytest
 
-from synapse24.acquisition.pod_clock_model import PodClockModel
+from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
 from synapse24.hardware.raw_codec import RawFormat, RawStream, encode_frame
 from synapse24.hardware.research_ble_client import (
     GATT_CHAR_UUIDS,
@@ -307,7 +307,7 @@ def test_sync_exchanges_feed_the_clock_model() -> None:
 
 
 def test_sync_exchanges_survive_a_rejected_exchange() -> None:
-    """An RTT-spiked exchange is logged and discarded, not fitted."""
+    """An exchange with a negative LSL-domain RTT is discarded, not fitted."""
     lsl_now = [2_000.0]
     transport = DriftingPodTransport(lsl_now=lsl_now)
     model = PodClockModel(pod_id="forearm_hub")
@@ -324,7 +324,17 @@ def test_sync_exchanges_survive_a_rejected_exchange() -> None:
     clean = model.fit()
     assert clean is not None
 
-    # Freeze the LSL clock backwards: the exchange becomes implausible.
-    lsl_now[0] -= 5_000.0
-    _run(client.sync_once())
+    # The pod claims to answer long before the request arrived: the LSL-domain
+    # round trip is negative, so the exchange is radio noise, not a
+    # measurement. It must never reach the fit.
+    now_us = int(lsl_now[0] * 1_000_000)
+    bogus = ClockExchange(
+        sequence=99,
+        pod_recv_us=now_us - 60_000_000,
+        pod_send_us=now_us - 59_000_000,
+        host_send_us=now_us,
+        host_recv_us=now_us + 2_000,
+    )
+    assert model.record_exchange(bogus) is False
+    assert model.n_exchanges == 5
     assert model.fit() == clean, "a rejected exchange must not move the model"

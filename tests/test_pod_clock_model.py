@@ -121,6 +121,46 @@ class TestOffsetAndDriftRecovery:
         assert abs(fit.offset_ms) < 1.0
         assert abs(fit.drift_ppm) < 10.0
 
+    def test_long_window_drift_is_not_rejected_as_outliers(self) -> None:
+        """An eight-hour soak must not lose half its samples to the filter.
+
+        The median-offset anchor (the second attempt at robust filtering)
+        treated a 35 ppm drift across eight hours — about one second of
+        accumulated offset — as an outlier, and kept only the exchanges that
+        happened to agree with the middle of the window. The robust line
+        filters residuals from a drift-aware line instead.
+        """
+        model = PodClockModel(pod_id="forearm_hub")
+        feed_session(model, n=120, interval_s=240.0)  # 8 hours at 4-minute spacing
+        assert model.is_calibrated
+
+        fit = model.fit()
+        assert fit is not None
+        assert fit.n_samples == 120, (
+            f"the drift filter must keep every sample of a clean soak; kept {fit.n_samples}"
+        )
+        assert fit.drift_ppm == pytest.approx(35.0, abs=10.0)
+        assert abs(fit.offset_ms - 12.5) < 2.0
+        assert float(fit.span_s) >= 119 * 240.0
+        assert fit.residual_us < 1000.0
+
+    def test_clean_soak_plus_one_gross_outlier(self) -> None:
+        """A single wild exchange must not survive, but must not cost the rest."""
+        model = PodClockModel(pod_id="forearm_hub")
+        feed_session(model, n=60, interval_s=240.0)
+        clean = model.fit()
+        assert clean is not None
+
+        wild = make_exchange(sequence=999, elapsed_s=60 * 240.0)
+        object.__setattr__(wild, "pod_recv_us", wild.pod_recv_us + 500_000_000)
+        object.__setattr__(wild, "pod_send_us", wild.pod_send_us + 500_000_000)
+        assert model.record_exchange(wild) is True, "a plausible RTT is accepted"
+
+        fitted = model.fit()
+        assert fitted is not None
+        assert fitted.n_samples == 60, "the wild sample must be filtered out, and only it"
+        assert fitted.slope == pytest.approx(clean.slope, rel=1e-6)
+
 
 class TestCalibrationRefusesToGuess:
     """An uncalibrated model must not claim a synchronized recording."""

@@ -1,11 +1,11 @@
-"""Pod→hub clock model: offset and drift from BLE sync exchanges.
+"""Podâ†’hub clock model: offset and drift from BLE sync exchanges.
 
 Guardian Principle 3 (LSL as the synchronization backbone) requires every
 timestamp to live in the ``pylsl.local_clock()`` domain. A pod's samples,
 however, are stamped by the pod's own microsecond counter, which (a) starts
 at zero at boot, (b) is 32-bit and wraps every ~71 minutes, and (c) runs at
-its own frequency error. Pushing raw pod stamps into LSL — as the validator
-used to do — puts two clock domains in one file: markers say one thing,
+its own frequency error. Pushing raw pod stamps into LSL â€” as the validator
+used to do â€” puts two clock domains in one file: markers say one thing,
 samples say another, and any drift analysis is fiction.
 
 This module bridges the two domains honestly:
@@ -45,7 +45,7 @@ __all__ = [
 # An exchange whose round-trip time exceeds this is radio noise, not a
 # measurement: BLE connection intervals and Windows Bluetooth stack latency
 # routinely add tens of milliseconds; 200 ms is already generous and still
-# bounds the offset error to ~±100 ms before rejection.
+# bounds the offset error to ~Â±100 ms before rejection.
 DEFAULT_RTT_BUDGET_US = 200_000.0
 
 # Samples further than this from the fit are dropped and the fit is recomputed
@@ -88,7 +88,7 @@ class ClockExchange:
 
     @property
     def offset_us(self) -> float:
-        """Estimated (pod clock − host clock) offset in microseconds."""
+        """Estimated (pod clock âˆ’ host clock) offset in microseconds."""
         return (
             (self.pod_recv_us - self.host_send_us) + (self.pod_send_us - self.host_recv_us)
         ) / 2.0
@@ -112,9 +112,9 @@ class PodClockFit:
 
     slope: float  # host seconds per pod second; 1.0 + drift
     intercept_s: float  # host seconds at pod time 0
-    offset_ms: float  # (pod − host) at the first sample of the fit window, ms
-    drift_ppm: float  # pod frequency error, parts per million (pod − host rate)
-    residual_us: float  # worst |fit − observed| across the samples used
+    offset_ms: float  # (pod âˆ’ host) at the first sample of the fit window, ms
+    drift_ppm: float  # pod frequency error, parts per million (pod âˆ’ host rate)
+    residual_us: float  # worst |fit âˆ’ observed| across the samples used
     n_samples: int
     median_rtt_us: float
     span_s: float  # host time covered by the fit; 0 means drift is unidentified
@@ -126,7 +126,7 @@ class PodClockFit:
 
 @dataclass
 class PodClockModel:
-    """Linear pod→hub clock model estimated from sync exchanges.
+    """Linear podâ†’hub clock model estimated from sync exchanges.
 
     Args:
         pod_id: Pod identifier, for logging and gate reporting.
@@ -137,7 +137,10 @@ class PodClockModel:
     """
 
     pod_id: str
-    max_samples: int = 64
+    # A 6-hour soak at the 60 s Tier-0 interval is 360 exchanges; the default
+    # history must span the whole session, not the last hour, or the drift
+    # estimate silently describes a window the recording outgrew.
+    max_samples: int = 4096
     rtt_budget_us: float = DEFAULT_RTT_BUDGET_US
     residual_outlier_us: float = DEFAULT_RESIDUAL_OUTLIER_US
     exchanges: deque[ClockExchange] = field(default_factory=deque)
@@ -194,7 +197,15 @@ class PodClockModel:
         # Offset reported at the FIRST sample of the fit window, not at its
         # mean: at the mean the number silently accumulates the drift, which
         # is a separate, explicitly reported quantity. Sign convention
-        # matches ClockExchange.offset_us and DriftEstimate: pod − host.
+        # matches ClockExchange.offset_us and DriftEstimate: pod âˆ’ host.
+        pod_first_s = pod_s[0] if pod_s else 0.0
+        offset_s = pod_first_s - (slope * pod_first_s + intercept_s)
+
+        median_rtt = _median([ex.rtt_us for ex in usable])
+        # Offset reported at the FIRST sample of the fit window, not at its
+        # mean: at the mean the number silently accumulates the drift, which
+        # is a separate, explicitly reported quantity. Sign convention
+        # matches ClockExchange.offset_us and DriftEstimate: pod âˆ’ host.
         pod_first_s = pod_s[0] if pod_s else 0.0
         offset_s = pod_first_s - (slope * pod_first_s + intercept_s)
 
@@ -248,38 +259,58 @@ class PodClockModel:
     def _reject_offset_outliers(
         self, exchanges: list[ClockExchange]
     ) -> tuple[list[float], list[float], int]:
-        """Drop exchanges whose offset deviates from the robust median.
+        """Drop exchanges that deviate from a robust line, then refit.
 
-        The first rejection attempt in this project compared each sample's
-        residual against a *first-pass least-squares fit* — and a single
-        grossly wrong sample drags that fit so far that the good samples
-        become the outliers and the contaminated fit gets returned. Anchoring
-        on the median offset instead is what actually survives one wild
-        exchange. Returns (pod_seconds, host_seconds, n_used).
+        Two earlier attempts here were both wrong, in opposite directions:
+
+        1. Residuals against a *first-pass least-squares* fit — a single
+           grossly wrong sample drags the fit so far that the good samples
+           become the outliers and the contaminated fit is returned.
+        2. Anchoring on the *median offset* — correct for isolated faults,
+           but over a long soak the drift legitimately spreads the offsets
+           (35 ppm across eight hours is about one second), and the median
+           then discards half the healthy samples.
+
+        The robust line fixes both: the **median of consecutive slopes**
+        survives a single wild exchange (it can corrupt at most two of
+        them), the line is anchored at the median sample so the intercept
+        is robust, and the residuals filtered are residuals from *that*
+        line — drift-insensitive by construction. Returns
+        (pod_seconds, host_seconds, n_used).
         """
-        offsets_us = [ex.pod_mid_us - ex.host_mid_us for ex in exchanges]
-        median_offset = _median(offsets_us)
+        pod_s = [ex.pod_mid_us / 1_000_000.0 for ex in exchanges]
+        host_s = [ex.host_mid_us / 1_000_000.0 for ex in exchanges]
 
-        kept = [
-            ex
-            for ex in exchanges
-            if abs((ex.pod_mid_us - ex.host_mid_us) - median_offset) <= self.residual_outlier_us
+        consecutive: list[float] = []
+        for i in range(len(exchanges) - 1):
+            dp = pod_s[i + 1] - pod_s[i]
+            if dp > 0:
+                consecutive.append((host_s[i + 1] - host_s[i]) / dp)
+        slope = _median(consecutive) if consecutive else 1.0
+
+        pod_med = _median(pod_s)
+        host_med = _median(host_s)
+        intercept_s = host_med - slope * pod_med
+
+        keep_idx = [
+            i
+            for i, (p, h) in enumerate(zip(pod_s, host_s))
+            if abs(slope * p + intercept_s - h) * 1_000_000.0 <= self.residual_outlier_us
         ]
-        if len(kept) < 2:
-            # Degenerate case: keep the two samples closest to the median so
-            # the fit is still an honest two-point estimate.
+        if len(keep_idx) < 2:
+            # Degenerate case: keep the two samples closest to the robust
+            # line so the fit is still an honest two-point estimate.
             ordered = sorted(
-                exchanges, key=lambda ex: abs((ex.pod_mid_us - ex.host_mid_us) - median_offset)
+                range(len(exchanges)),
+                key=lambda i: abs(slope * pod_s[i] + intercept_s - host_s[i]),
             )
-            kept = ordered[:2]
+            keep_idx = ordered[:2]
 
-        pod_s = [ex.pod_mid_us / 1_000_000.0 for ex in kept]
-        host_s = [ex.host_mid_us / 1_000_000.0 for ex in kept]
-        return pod_s, host_s, len(kept)
+        return [pod_s[i] for i in keep_idx], [host_s[i] for i in keep_idx], len(keep_idx)
 
 
 def _linear_fit(x: list[float], y: list[float]) -> tuple[float, float, float]:
-    """Plain least squares y = a*x + b; returns (a, b, worst |residual| in µs)."""
+    """Plain least squares y = a*x + b; returns (a, b, worst |residual| in Âµs)."""
     n = len(x)
     if n == 0:
         return 1.0, 0.0, 0.0
