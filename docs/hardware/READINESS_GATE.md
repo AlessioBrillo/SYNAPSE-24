@@ -85,11 +85,48 @@ side of the wire:
 
 ## What is left
 
-| Gate | Blocker | Cost to clear | State (2026-10-14) |
+| Gate | Blocker | Cost to clear | State (2026-10-15) |
 |---|---|---|---|
-| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY, `band-core` and `band-full` both compile locally. CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
-| **G1** | Smoke kit not bought/measured | ~€125 + a weekend | ⛔ **Software side closed** — the SOP is executable end to end and every gate is CI-provable without hardware (see "MVP live-path closure" below). Only the physical kit and the bench measurements remain. |
+| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY (with the environment activated; on this machine it reports BLOCKED until `export.bat`/`export.ps1` ran — see the note below), `band-core` and `band-full` both compile locally. CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
+| **G1** | Smoke kit not bought/measured | ~€140 + a weekend | ⛔ **Software side CLOSED (pre-hardware closure increment)** — the SOP is executable end to end, the research service now *transmits* (it did not: three independent preconditions were dead), the wire convention matches the host codec (it did not: multi-channel frames decoded at 1/channels), measured power rows exist and fill from the recording, the 10-hour wrap/reconnect path runs in CI in milliseconds, and the two energy budgets are separated. **Only the physical kit and the bench measurements remain** — see "Pre-hardware closure" below. |
 | **G2** | Cerelog order | ~€350, after G1 | ⛔ Not started |
+
+### Pre-hardware closure increment (this branch)
+
+The remaining risk before spending money was not "does it compile" (G0) but
+"does it *work*" on the real path. Four defects, all invisible to the
+existing gates, are now fixed and each has a test that fails if it returns:
+
+1. **The research service was silent.** `transmitting` was never set,
+   `stream->enabled` was never set for any stream, and `conn_handle` was never
+   updated from the GAP events — three independent preconditions, all
+   permanently false on the real firmware. The pod registered seven
+   characteristics and emitted nothing. Fixed (`ble_gatt_server.c` wiring +
+   `init()` arms the service) and pinned by `tests/test_research_service_host.py`,
+   which drives the service against NimBLE stubs and decodes the captured
+   frames with the host codec.
+2. **The ring depth was smaller than the flush threshold.** ECG's
+   `flush_at` is 50 samples into a 32-deep ring: the ring overflowed before a
+   frame could leave the pod, and ring loss is invisible to the host's
+   sequence-gap check. Fixed (depth 64) with an overflow counter the bench
+   can read.
+3. **The wire format and the host decoder disagreed on `sample_count`.**
+   The firmware counted physical samples; the codec counts values
+   (channel-minor). PPG, IMU and POWER frames therefore decoded at 1/2, 1/3
+   and 1/4 of the payload — ECG (single channel) was the only correct stream,
+   which is exactly why the parity tests passed.
+4. **The power gate was unmeasurable.** `estimated_bytes()` multiplied the
+   frame count by the 244-byte MTU payload (2–6× the real volume, so the BLE
+   budget row reported guaranteed false negatives), and `gate_report.json`
+   never extracted the POWER stream (the "measured power" row stayed a bench
+   TODO). Both fixed; `docs/hardware/POWER_BUDGET.md` separates the
+   budget-kit (150–600 mW, what G1 measures) from the budget-system (5 mW
+   T0 profile, what the 24 h claim targets and G3 must prove), so G1 can no
+   longer fail against a target the rig was never built to meet.
+
+One environment note: `check_toolchain.py` reports BLOCKED unless ESP-IDF's
+environment is active in the shell (it looks at `IDF_PATH`/PATH, not at the
+default `~/esp/esp-idf` install). G0 is closed — run the exporter first.
 
 ### MVP live-path closure (what was added after G0)
 

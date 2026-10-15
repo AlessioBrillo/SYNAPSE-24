@@ -33,6 +33,7 @@ from synapse24.hardware.raw_codec import (
     RawHeader,
     RawStream,
     decode_frame,
+    format_size,
 )
 
 __all__ = [
@@ -128,6 +129,12 @@ class ResearchStreamDecoder:
     clocks: dict[RawStream, DeviceClock] = field(default_factory=dict)
     frames_seen: int = 0
     frames_rejected: int = 0
+    # Actual payload volume decoded from the wire (header + sample block of
+    # every accepted frame). The previous estimate multiplied the frame count
+    # by the 244-byte MTU payload, which over-reported real streams 2-6x
+    # (an ECG frame is 112 bytes, a PPG frame 76) and made the BLE budget
+    # gate judge the full rig against numbers it never sent.
+    bytes_seen: int = 0
     # Extended (64-bit) timestamp of the most recent accepted frame, in
     # microseconds. The frame header only carries the low 32 bits of the
     # pod's counter, so anything mapping pod time into the host domain must
@@ -156,6 +163,10 @@ class ResearchStreamDecoder:
             self._check_sequence(header)
             self._buffer(header, samples)
             self.frames_seen += 1
+            # Wire truth: header + count values of the declared format.
+            self.bytes_seen += HEADER_SIZE + int(header.sample_count) * format_size(
+                header.sample_format
+            )
         else:
             self.frames_rejected += 1
         return header
@@ -236,11 +247,12 @@ class ResearchStreamDecoder:
         self.drops.clear()
         self.frames_seen = 0
         self.frames_rejected = 0
+        self.bytes_seen = 0
         self.last_first_us = 0
 
     def estimated_bytes(self) -> int:
-        """Rough BLE payload volume, for checking the §55-62 budget."""
-        return self.frames_seen * MAX_PAYLOAD
+        """Actual payload volume seen on the wire, for the §55-62 budget."""
+        return self.bytes_seen
 
 
 def validate_notification_size(payload: bytes) -> None:

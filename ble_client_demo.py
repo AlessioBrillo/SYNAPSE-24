@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""BLE Client demo.
+"""DEPRECATED — do not use with the current firmware.
 
-Clock Sync Ping-Pong Protocol companion to firmware/esp32_tier0/main/ble/ble_lsl_bridge.cpp.
+This demo speaks the legacy Nordic-UART (6E400001-...) protocol of the retired
+`firmware/esp32_tier0` project. The canonical pod streams the Synapse Research
+Service frames on service A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70; these UUIDs and
+this clock-sync protocol do nothing against `firmware/esp32_band`. Kept only as
+a historical record.
+
+The supported host client is src/synapse24/hardware/research_ble_client.py
+(used by `scripts/validate_phase1_entry.py --live-hardware`); the procedure
+lives in docs/hardware/BRINGUP_SOP.md.
+"""
 
 Protocol:
   1. Client writes [uint32 seq, int64 pod_send_us] to Sync characteristic (handle +1)

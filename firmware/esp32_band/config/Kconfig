@@ -74,6 +74,17 @@ config SYNAPSE_FEATURE_RESEARCH_SERVICE
         "feature stream" (HR/RR/SQI/stress) used by the Averyn product
         integration, which carries features only.
 
+config SYNAPSE_FEATURE_WIRED_SYNC
+    bool "Enable wired GPIO sync (pod<->hub hardware marker)"
+    default y
+    help
+        Compile the wired-sync driver (GPIO 27) used to align two pods with a
+        hardware pulse. The smoke kit's two-pod bench is where the pod<->pod
+        residual is measured; the feature itself is gated behind G2 (a real
+        head pod on a second body site), so the driver ships early and stays
+        unused until then. The single-pod G1 bringup never asserts the line
+        as an input, and a missing wire is therefore harmless.
+
 endmenu
 
 menu "Synapse Band Hardware Configuration"

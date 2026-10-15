@@ -51,10 +51,12 @@ extern "C" {
 #define SYNAPSE_SYNC_REQUEST_SIZE 12u
 #define SYNAPSE_SYNC_RESPONSE_SIZE 20u
 
-/** Ring depth per stream, in samples. At 50 Hz and a 4-sample flush threshold
- *  this is ~640 ms of buffering — enough to ride out a slow BLE event without
- *  dropping, small enough to stay in internal RAM. */
-#define SYNAPSE_RESEARCH_RING_DEPTH 32u
+/** Ring depth per stream, in samples. Sized so the SLOWEST stream's flush
+ *  threshold fits: ECG flushes at 50 samples (100 ms at 500 Hz), so a 32-deep
+ *  ring overflowed before the frame ever left the pod and the samples vanished
+ *  without a sequence gap the host could see. 64 keeps ~128 ms of ECG buffer
+ *  (3 x 8 streams x 64 x 4 B = 6 kB, trivial in internal RAM). */
+#define SYNAPSE_RESEARCH_RING_DEPTH 64u
 #define SYNAPSE_RESEARCH_MAX_CHANNELS 3u
 
 /** Unit scaling applied before quantising to the frame format. Values are
@@ -83,6 +85,9 @@ typedef struct {
     uint16_t flush_at;      /**< emit a frame once pending reaches this     */
     int32_t ring[SYNAPSE_RESEARCH_RING_DEPTH * SYNAPSE_RESEARCH_MAX_CHANNELS];
     int64_t first_ts_us;    /**< device timestamp of the oldest buffered sample */
+    uint32_t last_flushed_ts_low; /**< low 32 bits of the previous frame's    *
+                                  *  first timestamp: the wrap witness        */
+    bool has_flushed;       /**< at least one frame emitted for this stream  */
 } synapse_research_stream_t;
 
 /** Module state (single instance, owned by this translation unit). */
@@ -96,7 +101,12 @@ typedef struct {
     int64_t last_sample_us;
     synapse_research_stream_t streams[8];
     size_t stream_count;
-    uint32_t dropped_frames;
+    uint32_t dropped_frames;           /**< notifications the stack refused    */
+    uint32_t ring_overflow;            /**< samples dropped on a full ring;    *
+                                      *  invisible to the host sequence-gap   *
+                                      *  check, so they are counted, not     *
+                                      *  silently discarded                  */
+    uint32_t power_dropped;            /**< 1 Hz telemetry samples skipped     */
 } synapse_research_t;
 
 /**
@@ -155,6 +165,46 @@ uint16_t synapse_research_service_get_mtu(void);
  * accepting a hole in the dataset.
  */
 uint32_t synapse_research_service_dropped_frames(void);
+
+/**
+ * @brief Enable or disable one stream (GATT subscription wiring).
+ *
+ * A stream only ever leaves the pod after the host has subscribed to its
+ * characteristic: CCCD writes arrive as BLE_GAP_EVENT_SUBSCRIBE and are routed
+ * here through synapse_research_service_handle_subscribe(). With everything
+ * disabled nothing is transmitted — that is the fail-safe default, and the
+ * host-side gate (tests/test_research_service_host.py) proves all three
+ * transmission preconditions (transmitting / connected / enabled) are
+ * required, so none of them can silently regress again.
+ *
+ * @param stream_id  One of synapse_raw_stream_t.
+ * @param enabled    True to stream, false to stop (and drop pending samples).
+ */
+void synapse_research_service_set_stream_enabled(uint8_t stream_id, bool enabled);
+
+/**
+ * @brief Route a GATT subscription event to the matching research stream.
+ *
+ * Called from the GAP event handler with the raw attribute handle; matching
+ * handles are the ones captured at service registration. Handles that belong
+ * to other services are ignored.
+ *
+ * @param attr_handle  Attribute handle from BLE_GAP_EVENT_SUBSCRIBE.
+ * @param notify       cur_notify: true when the host enabled notifications.
+ */
+void synapse_research_service_handle_subscribe(uint16_t attr_handle, bool notify);
+
+/** @brief Record the negotiated ATT MTU (BLE_GAP_EVENT_MTU). */
+void synapse_research_service_set_mtu(uint16_t mtu);
+
+/** @brief Samples dropped because a stream ring was full (diagnostics). */
+uint32_t synapse_research_service_ring_overflow(void);
+
+/** @brief 1 Hz power-telemetry samples skipped (diagnostics). */
+uint32_t synapse_research_service_power_dropped(void);
+
+/** @brief Zero the drop counters (diagnostics; e.g. per recording session). */
+void synapse_research_service_reset_counters(void);
 
 #ifdef __cplusplus
 }
