@@ -1077,8 +1077,6 @@ class Phase1Validator:
         """Tier-0 sync exchange interval, from the manifest's tier budgets."""
         sync_cfg = self.config["bringup"]["sync"]
         return float(sync_cfg["tier_budgets"]["T0"]["sync_interval_s"])
-        sync_cfg = self.config["bringup"]["sync"]
-        return float(sync_cfg["tier_budgets"]["T0"]["sync_interval_s"])
 
     async def _run_sync_exchange(self) -> None:
         """One BLE SYNC exchange, recorded in the LSL clock domain.
@@ -1161,14 +1159,50 @@ class Phase1Validator:
             except Exception:  # noqa: BLE001 - as above
                 self.logger.warning("PPG quality computation failed", exc_info=True)
 
+        # 11: measured Tier-0 power, carried inside the recording itself by
+        # the INA219 POWER stream (Architecture.md §55-62: the 24-hour claim
+        # rests on per-session measurement, not on a tier model). When the
+        # stream is absent the row says so instead of inventing a number.
+        power_stats = self._power_stream_stats()
+
         return {
             "run_id": report.run_id,
             "timestamp": report.timestamp,
             "duration_s": duration,
             "measurements": {
-                # 1-2: bench PSU / power meter, recorded by hand.
+                # 1: bench PSU / power meter, recorded by hand.
                 "idle_current_ma": {"value": None, "source": "bench"},
+                # 2: bench average over the same session as the soak, by hand.
+                # The automatic equivalent below is the POWER-stream row: the
+                # recording carries its own consumption measurement.
                 "tier0_avg_current_ma": {"value": None, "source": "bench"},
+                # 11: measured Tier-0 power from the INA219 POWER stream of
+                # THIS recording (empty when the stream is not subscribed).
+                "measured_tier0_current_ma": {
+                    "value": (power_stats.get("current_ma") or {}).get("mean"),
+                    "min": (power_stats.get("current_ma") or {}).get("min"),
+                    "max": (power_stats.get("current_ma") or {}).get("max"),
+                    "n_samples": power_stats.get("n_samples", 0),
+                    "source": (
+                        "POWER stream (INA219), decoded from this recording"
+                        if power_stats
+                        else "POWER stream absent from this recording"
+                    ),
+                },
+                "measured_tier0_power_mw": {
+                    "value": (power_stats.get("power_mw") or {}).get("mean"),
+                    "min": (power_stats.get("power_mw") or {}).get("min"),
+                    "max": (power_stats.get("power_mw") or {}).get("max"),
+                    "source": "POWER stream (INA219), decoded from this recording"
+                    if power_stats
+                    else "POWER stream absent from this recording",
+                },
+                "measured_battery_pct": {
+                    "value": (power_stats.get("battery_pct") or {}).get("mean"),
+                    "source": "POWER stream (INA219), decoded from this recording"
+                    if power_stats
+                    else "POWER stream absent from this recording",
+                },
                 # 3: BLE throughput of the raw research service.
                 "ble_throughput_bytes_per_s": {
                     "value": round(throughput / duration, 1) if duration > 0 else 0.0,
@@ -1241,6 +1275,34 @@ class Phase1Validator:
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1)
         return arr if channel is None else arr[:, channel]
+
+    def _power_stream_stats(self) -> dict[str, Any]:
+        """Aggregate the decoded INA219 POWER stream of this recording.
+
+        The firmware packs four channels per frame in the raw stream
+        (voltage_mv, current_ma, power_mw, battery_pct); the decoder's unit
+        divisor is 1 so these are already engineering units. An empty result
+        means the stream was not subscribed — reported, never invented.
+        """
+        import numpy as np
+
+        if self.raw_ingestor is None:
+            return {}
+        samples, _timestamps = self.raw_ingestor.decoder.arrays(RawStream.POWER)
+        if samples.size == 0:
+            return {}
+        block = samples.reshape(-1, 4)
+        names = ("voltage_mv", "current_ma", "power_mw", "battery_pct")
+        stats: dict[str, Any] = {}
+        for idx, name in enumerate(names):
+            column = block[:, idx]
+            stats[name] = {
+                "mean": float(np.mean(column)),
+                "min": float(np.min(column)),
+                "max": float(np.max(column)),
+            }
+        stats["n_samples"] = int(block.shape[0])
+        return stats
 
     @staticmethod
     def _finite(value: Any) -> float | None:

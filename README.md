@@ -119,7 +119,6 @@ SYNAPSE-24/
 │       │   ├── quantization.py     # INT8/Float16 quantization
 │       │   ├── training.py         # Model training
 │       │   ├── wesad_int8_closure.py # WESAD INT8 closure gate
-│       │   └── wesad_fusion_closure.py # WESAD fusion closure
 │       ├── hardware/       # Hardware abstraction layer
 │       │   ├── __init__.py
 │       │   ├── base.py           # Board adapter base classes
@@ -184,6 +183,9 @@ SYNAPSE-24/
 │   ├── test_tier_promotion_cycle.py # Tier promotion cycle tests
 │   ├── test_tier_durations.py       # Tier duration tracking tests
 │   ├── test_tier1_xdf_drift_correction.py # Tier 1 XDF drift correction
+│   ├── test_live_wrap_timecompression.py # Time-compressed 32-bit wrap / soak / reconnect
+│   ├── test_sop_end_to_end.py       # The assembled SOP against a synthetic pod
+│   ├── test_research_service_host.py # Behavioural gate: the pod must TRANSMIT
 │   ├── test_wesad_fusion_closure.py # WESAD fusion closure tests
 │   ├── test_wesad_int8_closure.py   # WESAD INT8 closure tests
 │   └── test_xdf_correction.py       # XDF timestamp correction tests
@@ -305,14 +307,30 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 - [x] Tier 0 sync ≤10ms residual drift, Tier 1 sync ≤1ms
 - [x] Edge AI triage model INT8 quantization with measured accuracy drop
 - [x] Power budget physics validated for 24h T0 + 10h T1
-- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass
+- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass (592 tests, 82.6% coverage)
+
+## Hardware Readiness (pre-purchase)
+
+The Phase 1 software side is closed: every property the smoke-kit bench would
+discover is provable in CI today. One command answers "can I order the kit?":
+
+```bash
+uv run python tools/pre_acquisto_gate.py
+# "PRE-ACQUISITION GATE: ORDER THE SMOKE KIT" (exit 0)
+# or "DO NOT ORDER — the following gates failed"      (exit 1)
+```
+
+Its scope is `docs/hardware/READINESS_GATE.md`; what to buy and on what
+evidence is `docs/hardware/PROCUREMENT.md`; the bench procedure is
+`docs/hardware/BRINGUP_SOP.md`; the two energy budgets (kit measured vs
+system target) are `docs/hardware/POWER_BUDGET.md`.
 
 ## Roadmap Alignment
 
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
 | **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | ✅ **COMPLETE** |
-| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software ready — kit orderable** (smoke kit per `docs/hardware/PROCUREMENT.md`; G0 closed, every gate CI-provable without hardware) |
+| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software closed pre-purchase; kit orderable** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget €140; G0 closed, every gate CI-provable without hardware — see `docs/hardware/READINESS_GATE.md` and `docs/hardware/POWER_BUDGET.md`) |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |
 
@@ -320,6 +338,8 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 
 - **Architecture**: [Architecture.md](Architecture.md) — Decoupled sensor/hub, tiered acquisition, edge triage
 - **Roadmap**: [Roadmap.md](Roadmap.md) — Budget, milestones, dataset references
+- **Hardware gates**: [docs/hardware/READINESS_GATE.md](docs/hardware/READINESS_GATE.md) — what must be true before spending money on sensors
+- **Hardware bringup**: [docs/hardware/BRINGUP_SOP.md](docs/hardware/BRINGUP_SOP.md) — box-to-XDF procedure
 - **WESAD**: Schmidt et al., ICMI 2018, DOI 10.1145/3242969.3242985
 - **MIT-BIH**: Moody & Mark, 2001, PhysioNet
 - **LSL**: Kothe et al., Imaging Neuroscience 2025, DOI 10.1162/IMAG.a.136

@@ -1,5 +1,21 @@
 # SYNAPSE-24 Phase 1 Hardware Bringup Guide
 
+> ⚠️ **SUPERSEDED — kept for history only.**
+> This file is the *original* Phase-1 bringup guide and now contradicts the
+> current hardware contract in two ways that matter: it specifies a **16 MB
+> Flash** ESP32-S3 (the current contract is **N8R8: 8 MB Flash + 8 MB PSRAM**,
+> and `docs/hardware/PROCUREMENT.md` explicitly warns *against* N16R8V), and
+> its BOM omits the second pod, the INA219 and the soak battery the current
+> gates need. Do not order from this list.
+>
+> The current, gate-driven documents are:
+> - `docs/hardware/PROCUREMENT.md` — what to buy, when, on what evidence
+> - `docs/hardware/BRINGUP_SOP.md` — box-to-XDF procedure
+> - `docs/hardware/POWER_BUDGET.md` — kit vs system energy budgets
+> - `docs/hardware/ESP-IDF_SETUP.md` — toolchain
+>
+> `PHASE1_NEXT_STEPS.md` carries the same superseded status.
+
 > **Target:** Live ECG+PPG+IMU streams synchronized via LSL, validated HR/HRV, zero-drop XDF export
 > **Hardware Cost:** ~€90–120
 > **Time to First Valid XDF:** ~2 hours (including wiring)

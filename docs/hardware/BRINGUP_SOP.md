@@ -9,6 +9,14 @@ as corrupted data rather than as a broken build.
 > without a toolchain check is how you burn an afternoon on a driver bug that
 > was never installed.
 
+> **Soak mode needs LabRecorderCLI.** The 6-hour soak (`--soak`) records
+> continuously through LabRecorderCLI, which is *not* installable from this
+> repository: download it from
+> <https://github.com/labstreaminglayer/App-LabRecorder> (Windows: run the
+> installer; the default path is already searched), then either leave it on
+> PATH or point `SYNAPSE_LABRECORDER_CLI` at it. Doing this after the rig is
+> wired is a wasted evening; do it with the rest of the prerequisites.
+
 ## 0. Wiring
 
 ESP32-S3 DevKitC-1 ← sensor breakouts. **I²C on GPIO 8 (SDA) / 9 (SCL)** —
@@ -27,12 +35,29 @@ octal-PSRAM S3 modules.
 | All VCC | 3V3 |
 | All GND | GND |
 
+**INA219 goes in series with the rig's supply, not on a tap.** The monitor
+measures the current through its shunt: battery+ → INA219 `VIN+`, INA219
+`VIN−` → the rail that feeds the ESP32-S3 and every sensor (or the ESP32's
+`5V/VIN` input if you ring-fence the MCU only — document which you did). With
+only the I²C wires attached the POWER stream will happily report `0 mA`, and a
+zero reading is indistinguishable from a working measurement. Before the first
+session, verify the reading against a **known load** (a resistor drawing a
+known current from the same rail); the ratio measured/expected must be ~1
+(§4a). `hardware.yaml` declares the 0.1 Ω shunt and address 0x40; a shunt of a
+different value is a config fix, not a firmware one.
+
 Add 4.7 kΩ pull-ups on SDA/SCL if your breakouts do not include them — a
 missing pull-up presents as `ESP_ERR_NOT_FOUND` on the PPG PART_ID.
 
 Electrodes: RA (red) proximal near the elbow, LA (yellow) distal near the
 wrist, RL (green) on a bony prominence as reference. Clean the skin with
 alcohol; a wet electrode is the difference between a clean QRS and noise.
+
+> **`ecg_config.gpio_drdy: 4` in `hardware.yaml` is optional.** The driver
+> uses it as the lead-off sense pin. If your AD8232 clone has no DRDY/LO pin
+> free on GPIO 4, leave it unconnected (the internal pull-up then reads as
+> "lead-off" permanently — noisy logs, but no effect on streaming), or set
+> `gpio_drdy: -1` in `config/hardware.yaml`. Do not rewire the I²C bus over it.
 
 ## 1. Build and flash
 
@@ -110,6 +135,32 @@ fragment into 9 link-layer packets each and the budget collapses. If DLE is
 missing on the pod side, set the preferred data length after connect
 (`esp_ble_gap_set_data_length`) — one function call in the research service.
 
+### 3b. Two-pod bench — the number that actually gates the Cerelog
+
+G2's criterion #1 is **pod↔pod** alignment, not pod↔host. The second devkit
+from the kit plus the ACC cross-correlation method make that measurable today,
+for €0:
+
+1. Wire the two devkits **rigidly coupled** to the same support (both boards
+   on one block, or taped to the same rigid object). The method is
+   cross-correlation of accelerometer streams: two pods moving as one body is
+   the only configuration where `min_acc_correlation: 0.7` is physically
+   attainable — pods on different body sites (head vs forearm) see different
+   motion and will never correlate, whatever the clocks do.
+2. Flash both with `band-core`; they advertise as two `SYNAPSE-BAND` devices.
+3. Subscribe to ECG+PPG+ACC on both; run the validator once per pod; align
+   the two recordings via `PodClockModel`/`ACC cross-correlation` and record
+   the residual. **≤10 ms over 30 min PASSES** the sync precondition for the
+   Cerelog order.
+4. The wired-sync line (GPIO 27 between the pods) is driven by the hub-side
+   driver already compiled into band-core, but *emitting* the pulse is a G2
+   feature (real head pod, second body site): for the bench measurement above
+   leave GPIO 27 unconnected.
+
+Write the residual into `gate_report.json` under `sync.pod_pair_residual_ms`
+— `PROCUREMENT.md` treats the pod↔pod number, not pod↔host, as the evidence
+for spending €350.
+
 ## 4. Record the numbers
 
 Write every measured value into `data/live_validation/gate_report.json` —
@@ -118,16 +169,28 @@ treats those numbers as the only legitimate basis for the Phase 2 order.
 
 ### 4a. Bench characterization (before wearing the rig)
 
-Two cheap bench numbers that make the G1 dataset interpretable later:
+Three cheap bench numbers that make the G1 dataset interpretable later:
 
 1. **AD8232 noise floor**: electrodes unplugged, RA/LA/RL shorted together,
-   60 s of recording. Record the std of the raw stream in µV-equivalent units
-   (after the fixed gain of 6 and the vref scaling from `hardware.yaml`). This
-   is the number every future ECG SNR claim hangs on — a generic clone varies
-   unit to unit.
-2. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
+   60 s of recording. Record the std of the raw stream in µV-equivalent units.
+   *The µV-equivalent is only true once the AD8232's gain is calibrated
+   (next): use the ADC counts until it is.*
+2. **AD8232 gain calibration (per-rig).** Generic clones' gain is set by
+   their instrumentation resistors, not by `hardware.yaml`'s `gain: 6.0`
+   placeholder. Feed a known signal into the electrode inputs (a function
+   generator through a divider, or a 1 mVpp 10 Hz sine), read the ECG stream,
+   and compute `gain_measured = (mV measured at the output) / (mV applied)`.
+   Write it into `config/hardware.yaml` (`ecg_config.gain_measured`); the µV
+   scale of every ECG SNR claim hangs on this number, so it is per-rig and
+   recalibrated whenever a breakout is replaced.
+3. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
    pull-ups on SDA/SCL before replacing sensors — see the troubleshooting
-   table.
+   table. (The kit assumes your breakouts include them; if not, add them
+   before blaming the sensors.)
+4. **INA219 reality check**: with the known load from §0 (wiring), the POWER
+   stream's `current_ma` must match the resistor's expected current within a
+   few percent; a zero or wildly low reading means the shunt is miswired, not
+   that the pod is efficient.
 
 ### 4b. Motion session (informational, not a gate)
 
@@ -140,12 +203,28 @@ have seen. Save it alongside the gate report; do not let it annul a green run.
 
 The SOP's 30-minute zero-drop run is a proxy. The project promises 24/7
 Tier-0, and the pod's 32-bit microsecond timestamp wraps every ~71,6 minutes —
-so only a multi-hour run exercises `DeviceClock` for real.
+so only a multi-hour run exercises `DeviceClock` for real. (The wrap path is
+also exercised in CI by `tests/test_live_wrap_timecompression.py` — 10 hours
+of device clock compressed into milliseconds, with the wrap flag on *and*
+off — so the bench run is the physical confirmation, not the only witness.)
 
 **MVP criterion: one 6-hour continuous recording (overnight is fine) with
 zero dropped frames, monotonic XDF, and the pod on battery.** Passing that,
-plus the ten SOP numbers in `data/live_validation/gate_report.json`, is what
+plus the SOP numbers in `data/live_validation/gate_report.json`, is what
 unlocks the G2 order.
+
+Two rules that keep the bar honest:
+
+- **Zero means zero.** Any dropped frame fails the run; a recording with a
+  hole is worse than one that stopped, because the hole is silent. If drops
+  appear, diagnose with the staged subscription of §3a (ECG first), fix the
+  cause, and **re-run** — every attempt goes into the gate report, green or
+  red. A half-empty history is a signal; a deleted history is a lie.
+- **Size the battery before the run, not after.** The kit envelope is
+  150–600 mW (`docs/hardware/POWER_BUDGET.md`): on a 500 mAh cell that is
+  4.3–7.4 h of runtime. A soak that dies at hour three is a gate that never
+  ran. Use the 1000+ mAh cell from the kit for the 6-hour soak, or log the
+  battery percentage at start and end (`measured_battery_pct`) and say so.
 
 ## Troubleshooting
 
@@ -163,4 +242,5 @@ unlocks the G2 order.
 
 - `ESP-IDF_SETUP.md` — toolchain and build variants
 - `PROCUREMENT.md` — the gates and the measurement SOP
-- `../hardware.yaml` — the contract every pin and rate comes from
+- `POWER_BUDGET.md` — the two energy budgets (kit measured vs system target)
+- `../../config/hardware.yaml` — the contract every pin and rate comes from

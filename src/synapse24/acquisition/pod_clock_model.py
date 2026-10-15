@@ -1,11 +1,11 @@
-"""Podâ†’hub clock model: offset and drift from BLE sync exchanges.
+"""Pod→hub clock model: offset and drift from BLE sync exchanges.
 
 Guardian Principle 3 (LSL as the synchronization backbone) requires every
 timestamp to live in the ``pylsl.local_clock()`` domain. A pod's samples,
 however, are stamped by the pod's own microsecond counter, which (a) starts
 at zero at boot, (b) is 32-bit and wraps every ~71 minutes, and (c) runs at
-its own frequency error. Pushing raw pod stamps into LSL â€” as the validator
-used to do â€” puts two clock domains in one file: markers say one thing,
+its own frequency error. Pushing raw pod stamps into LSL — as the validator
+used to do — puts two clock domains in one file: markers say one thing,
 samples say another, and any drift analysis is fiction.
 
 This module bridges the two domains honestly:
@@ -45,7 +45,7 @@ __all__ = [
 # An exchange whose round-trip time exceeds this is radio noise, not a
 # measurement: BLE connection intervals and Windows Bluetooth stack latency
 # routinely add tens of milliseconds; 200 ms is already generous and still
-# bounds the offset error to ~Â±100 ms before rejection.
+# bounds the offset error to ~±100 ms before rejection.
 DEFAULT_RTT_BUDGET_US = 200_000.0
 
 # Samples further than this from the fit are dropped and the fit is recomputed
@@ -126,7 +126,7 @@ class PodClockFit:
 
 @dataclass
 class PodClockModel:
-    """Linear podâ†’hub clock model estimated from sync exchanges.
+    """Linear pod→hub clock model estimated from sync exchanges.
 
     Args:
         pod_id: Pod identifier, for logging and gate reporting.
@@ -197,15 +197,7 @@ class PodClockModel:
         # Offset reported at the FIRST sample of the fit window, not at its
         # mean: at the mean the number silently accumulates the drift, which
         # is a separate, explicitly reported quantity. Sign convention
-        # matches ClockExchange.offset_us and DriftEstimate: pod âˆ’ host.
-        pod_first_s = pod_s[0] if pod_s else 0.0
-        offset_s = pod_first_s - (slope * pod_first_s + intercept_s)
-
-        median_rtt = _median([ex.rtt_us for ex in usable])
-        # Offset reported at the FIRST sample of the fit window, not at its
-        # mean: at the mean the number silently accumulates the drift, which
-        # is a separate, explicitly reported quantity. Sign convention
-        # matches ClockExchange.offset_us and DriftEstimate: pod âˆ’ host.
+        # matches ClockExchange.offset_us and DriftEstimate: pod - host.
         pod_first_s = pod_s[0] if pod_s else 0.0
         offset_s = pod_first_s - (slope * pod_first_s + intercept_s)
 
@@ -310,7 +302,7 @@ class PodClockModel:
 
 
 def _linear_fit(x: list[float], y: list[float]) -> tuple[float, float, float]:
-    """Plain least squares y = a*x + b; returns (a, b, worst |residual| in Âµs)."""
+    """Plain least squares y = a*x + b; returns (a, b, worst |residual| in µs)."""
     n = len(x)
     if n == 0:
         return 1.0, 0.0, 0.0

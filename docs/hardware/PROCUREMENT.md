@@ -47,9 +47,12 @@ reason.
 | 7 | Micro-USB **data** cable | **3** | Must carry data, not charge-only | 3–5 | Charge-only cables are the #1 cause of "flash failed"; the third is for the second pod. |
 | 8 | LiPo 3.7 V 500 mAh, JST-PH 2-pin | **2** | With protection PCB | 5–8 | One for the untethered power measurement, one for the second pod's battery soak. |
 | 9 | **INA219 current/power monitor breakout** | 1 | I²C, 0.1 Ω shunt, address 0x40 | 2–5 | Closes the energy budget: per-session measured current, streamed on the research service's POWER stream (`firmware/esp32_band/sensors/ina219.c`). A bench PSU reading is a one-off; the 24-hour feasibility claim needs the *actual* consumption logged with the recording. |
-| 10 | **ESP32-S3 DevKitC-1 (second pod)** | 1 | N8R8, same as row 1 | 12–15 | The G1→G2 sync criterion is **pod↔pod** (head pod vs forearm hub) — impossible with one board. A second devkit running the same `band-core` firmware, GPIO 27 wired between them, exercises the real scenario and produces the first two-pod XDF *before* the €350 Cerelog is ordered. |
+| 10 | **ESP32-S3 DevKitC-1 (second pod)** | 1 | N8R8, same as row 1 | 12–15 | The G1→G2 sync criterion is **pod↔pod** (head pod vs forearm hub) — impossible with one board. A second devkit running the same `band-core` firmware, wired GPIO 27 between them, exercises the real scenario and produces the first two-pod XDF *before* the €350 Cerelog is ordered. |
+| 11 | Resistor/capacitor kit + 4,7 kΩ pull-ups (pack) | 1 | — | 5–10 | The SOP assumes SDA/SCL pull-ups if your breakouts lack them (missing pull-ups read as `ESP_ERR_NOT_FOUND` on the PPG), and the INA219 check in §4a needs a known load. Not "if needed": they ARE needed the day the first sensor is silent. |
+| 12 | LiPo 3.7 V **1000+ mAh**, JST-PH 2-pin, with protection PCB | 1 | — | 8–12 | The kit envelope draws 150–600 mW (`docs/hardware/POWER_BUDGET.md`): on 500 mAh that is 4.3–7.4 h of runtime, and the MVP **6-hour** soak must not die mid-run. One bigger cell makes the soak a gate instead of a coin flip. |
 
-**Subtotal: ~€80–125.**
+**Subtotal: ~€90–140.** Budget **€140** (was €125; the two additions above
+are the pull-up/load kit and the soak battery).
 
 ### Two additions to the kit, and the evidence for them
 
@@ -65,8 +68,8 @@ with it, the recording carries the measurement, and the SOP's power rows
 become data instead of a single spot check. At 1 Hz it costs ~28 B/s against
 its declared 64 B/s budget.
 
-Budget: the two rows above add ~€20 to the original €100 contingency:
-**budget €125**, ordered in one shipment (CN shipping is ~€5–7 per item, 2–4
+Budget: the rows above bring the original ~€100 contingency to
+**budget €140**, ordered in one shipment (CN shipping is ~€5–7 per item, 2–4
 weeks lead time).
 
 ### Not needed yet (deliberately excluded)
@@ -99,17 +102,24 @@ pod instead of rebuilt around a Pi.
 
 **Decision criteria to re-check at G1** (all measured, all must pass):
 1. Does the smoke kit hold ≤10 ms residual drift over 30 min, **pod↔host and
-   pod↔pod** (two pods, GPIO 27 wired)? If not, the EEG rig's 1 ms Tier-1
-   budget is unreachable and the sync design must be fixed *before* spending
-   €350 on a second pod.
+   pod↔pod**? The pod↔pod number is measured on the two-pod bench of
+   `BRINGUP_SOP.md` §3b (two devkits rigidly coupled; ACC cross-correlation
+   — the method only works on a rigid bench, pods on different body sites
+   never correlate). If it does not hold, the EEG rig's 1 ms Tier-1 budget is
+   unreachable and the sync design must be fixed *before* spending €350 on a
+   second pod.
 2. Does raw PPG at 50 Hz fit the per-stream BLE budget with ECG at 500 Hz
    included (aggregate ~2.4 kB/s, per `hardware.yaml` `raw_frame`)? If not,
    either the rates or the framing change now — not after the Cerelog arrives.
 3. Does the firmware hold zero dropped samples for 30 min continuous?
-4. Does the measured Tier-0 current (INA219, POWER stream) agree with the
-   ≤5 mW `hardware.yaml` T0 profile? If the rig draws materially more, the
-   24-hour target is a budget problem, not a software one, and it must be
-   known before committing to the EEG build.
+4. Does the measured Tier-0 draw sit inside the **budget-kit** envelope
+   (150–600 mW, `docs/hardware/POWER_BUDGET.md`)? It is *expected* to miss
+   the 5 mW T0 profile by two orders of magnitude: the kit streams raw. What
+   matters is (a) the number is inside the envelope, and (b) the battery math
+   on the measured figure — projected 24 h runtime vs. the
+   `power_budget.hub_battery_mah` target — identifies the gap that G3
+   (compress-before-transmit) has to close. The 5 mW profile is not a G1
+   criterion and must not block the order.
 
 ### Explicitly deferred past G2
 
@@ -129,7 +139,7 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 | # | Measurement | Instrument | Pass criterion |
 |---|---|---|---|
 | 1 | Idle current, deep sleep between BLE events | Bench PSU + series R / USB power meter | As low as achievable; record the number, this is the number that decides 24 h feasibility. |
-| 2 | Average Tier-0 current, streaming raw | Same | ≤5 mW average (the `hardware.yaml` T0 budget). |
+| 2 | Average Tier-0 current, streaming raw | Same | Inside the **budget-kit** envelope 150–600 mW mean (`docs/hardware/POWER_BUDGET.md` for the component derivation). The `hardware.yaml` 5 mW T0 profile is the optimised-system target and is explicitly NOT a G1 criterion. |
 | 3 | BLE throughput, the raw research service | Host + `decoder.estimated_bytes()` | Per-stream budgets: ECG ≤1,1 kB/s, PPG ≤0,45 kB/s, each IMU sub-stream ≤0,32 kB/s; aggregate ≤3 kB/s sustained. The old "≤600 B/s" figure only ever applied to the PPG stream alone (raw volume of the full rig is ~2,3–2,4 kB/s — see `config/hardware.yaml` `raw_frame.*`). |
 | 4 | **Dropped frames over 30 min** | `ResearchStreamDecoder.drops` | **Zero.** Any gap fails the recording — see `research_client.py`. |
 | 5 | HR vs manual pulse count | Stopwatch + timer | MAE ≤ 2 bpm. |
@@ -138,10 +148,13 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 | 8 | Clock residual drift vs host (pod↔host) **and pod↔pod** | `PodClockModel.status()` via the SYNC characteristic; ACC cross-correlation for pod↔pod | ≤10 ms (T0), ≤1 ms (T1). The pod↔pod number is the one that gates the Cerelog. |
 | 9 | XDF integrity | `utils.validate_xdf` | Zero dropped samples, monotonic timestamps. |
 | 10 | On-device triage latency | Serial log | ≤5 ms per inference. |
-| 11 | Measured Tier-0 power over the soak | POWER stream / `gate_report.json` (`clock_residual_drift_ms`, `ble_throughput_bytes_per_s`, `dropped_frames` are filled automatically) | Average ≤5 mW per the `hardware.yaml` T0 profile; the per-session figure is the input to the 24-hour claim. |
+| 11 | Measured Tier-0 power over the soak | POWER stream / `gate_report.json` (`measured_tier0_current_ma`, `measured_tier0_power_mw`, `measured_battery_pct`, `clock_residual_drift_ms`, `ble_throughput_bytes_per_s`, `dropped_frames` are filled automatically) | Inside the **budget-kit** envelope 150–600 mW (derivation: `docs/hardware/POWER_BUDGET.md`). NOT the 5 mW T0 profile: that is the optimised-system target, proven later by G3. The per-session figure is the input to the 24-hour model claim. |
 
 The validator writes rows 3, 4, 8, 9, 11 itself into
-`data/live_validation/gate_report.json`; rows 1, 2, 5, 6, 7, 10 are bench
+`data/live_validation/gate_report.json` — including the measured power rows
+(`measured_tier0_current_ma`, `measured_tier0_power_mw`,
+`measured_battery_pct`) decoded from the POWER stream of the recording
+itself; rows 1, 2, 5, 6, 7, 10 are bench
 measurements recorded by hand into the same file (`"source": "bench"` marks
 the unfilled ones, so a half-filled report is visibly a half-filled report).
 

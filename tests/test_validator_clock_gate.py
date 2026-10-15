@@ -75,6 +75,7 @@ class SyntheticPodTransport:
         drift_ppm: float = 0.0,
         host_jitter_us: float = 0.0,
         duration_s: float = 1.0,
+        power: bool = False,
     ):
         self.offset_ms = offset_ms
         self.drift_ppm = drift_ppm
@@ -82,7 +83,7 @@ class SyntheticPodTransport:
         self._sequence = 0
         self._n_exchanges = 0
         self._frames: list[tuple[str, bytes]] = []
-        pod = SyntheticPod(duration_s=duration_s, seed=13)
+        pod = SyntheticPod(duration_s=duration_s, seed=13, power_stream=power)
         by_stream: dict = {}
         for stream, frame in pod.frames():
             by_stream.setdefault(stream, []).append(frame)

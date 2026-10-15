@@ -20,6 +20,7 @@
 
 #include "ble_gatt_server.h"
 #include "ble_research_service.h"
+#include "wired_sync_handler.h"
 #include "fit_writer.h"
 #include "synapse_provisioning.h"
 #include "synapse_ota.h"
@@ -31,6 +32,10 @@
 #include "synapse_power.h"
 
 static const char *TAG = "SYNAPSE_BAND";
+
+#if defined(CONFIG_SYNAPSE_FEATURE_WIRED_SYNC)
+static synapse_wired_sync_t s_wired_sync = {0};
+#endif
 
 // Event bits for system state
 #define WIFI_CONNECTED_BIT      BIT0
@@ -140,6 +145,18 @@ void app_main(void)
     //      stream. The power module stays BLE-agnostic: the wiring happens
     //      here (Architecture.md §23-31 decoupled pod/hub).
     synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
+
+    // 12c. Wired sync (GPIO 27) as HUB output: the forearm hub is the tier
+    //      reference for a second pod. The driver ships now so the two-pod
+    //      bench in the SOP can measure the pod↔pod residual; emitting the
+    //      pulse is a G2 feature (real head pod on a second body site), so
+    //      nothing drives the line during single-pod bringup.
+#if defined(CONFIG_SYNAPSE_FEATURE_WIRED_SYNC)
+    esp_err_t wired_rc = synapse_wired_sync_init(&s_wired_sync, SYNAPSE_SYNC_ROLE_HUB);
+    if (wired_rc != ESP_OK) {
+        ESP_LOGW(TAG, "wired sync init failed: %s", esp_err_to_name(wired_rc));
+    }
+#endif
 
     // 13. Check if provisioning is needed
     bool provisioned = synapse_provisioning_is_complete();

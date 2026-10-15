@@ -75,7 +75,11 @@ pods:
         lead_off_plus: 39
         lead_off_minus: 34
         vref_mv: 1100
-        gain: 6.0                      # AD8232 fixed instrumentation gain
+        gain: 6.0                      # nominal AD8232 module gain — NOT verified for
+                                       # generic clones; see gain_measured below
+        gain_measured: null            # bench-calibrated gain (BRINGUP_SOP §4a). Empty
+                                       # until the kit is on the desk: the µV scale of
+                                       # every ECG SNR claim hangs on this per-rig number.
         format: "s16"                  # see src/synapse24/hardware/raw_codec.py
         lsl_stream: "SYNAPSE_ECG_T0"
       ppg_config:

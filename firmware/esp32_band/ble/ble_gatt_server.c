@@ -19,6 +19,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "ble_gatt_server.h"
 #include "ble_gatt_server_priv.h"
+#include "ble_research_service.h"
 #include "synapse_provisioning.h"
 #include "synapse_config.h"
 
@@ -216,6 +217,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
             g_feat_seq = 0;
+            // The research service owns its own connection handle: without
+            // this the raw stream path had BLE_HS_CONN_HANDLE_NONE forever
+            // and silently transmitted nothing (Fase 1, bloccante B1).
+            synapse_research_service_on_connect(event->connect.conn_handle);
             ESP_LOGI(BLE_TAG, "Connected handle=%d", g_conn_handle);
         } else {
             ESP_LOGW(BLE_TAG, "Connection failed: %d", event->connect.status);
@@ -228,6 +233,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         g_feat_subscribed = false;
         g_prov_subscribed = false;
+        synapse_research_service_on_disconnect();
         if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
         else synapse_ble_gatt_start_advertising_normal();
         return 0;
@@ -239,9 +245,14 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         } else if (event->subscribe.attr_handle == s_prov_handle) {
             g_prov_subscribed = event->subscribe.cur_notify;
         }
+        // Route research-service CCCDs to the raw stream table: a stream only
+        // transmits once its characteristic has been subscribed.
+        synapse_research_service_handle_subscribe(event->subscribe.attr_handle,
+                                                  event->subscribe.cur_notify);
         return 0;
     case BLE_GAP_EVENT_MTU:
         g_mtu = event->mtu.value;
+        synapse_research_service_set_mtu(event->mtu.value);
         return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:
         ESP_LOGI(BLE_TAG, "Advertising complete");

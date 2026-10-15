@@ -22,8 +22,14 @@ import os
 import shutil
 import subprocess
 
+import numpy as np
 import pytest
 
+from synapse24.hardware.raw_codec import (  # noqa: E402
+    RawFormat,
+    RawHeader,
+    RawStream,
+)
 from tests.firmware_host import COMMON, ROOT, run_compiler, try_load  # noqa: E402
 
 BAND_BLE = ROOT / "firmware" / "esp32_band" / "ble"
@@ -186,3 +192,182 @@ def test_unit_scale_constants_fit_their_field() -> None:
     ):
         assert constant in header, f"{constant} must be declared"
         assert constant in source, f"{constant} must be used by the stream table"
+
+
+# ---------------------------------------------------------------------------
+# Behavioural bench: the service must TRANSMIT, and only under all three
+# preconditions (transmitting, connected, subscribed).
+#
+# Before the pre-hardware closure increment all three were permanently false
+# on the real firmware: the research service registered its characteristics
+# and emitted nothing, and no test noticed because every existing gate proved
+# compilation, idempotence and NULL-safety — never transmission. These tests
+# drive the public API through the glue and decode the captured notifications
+# with the host codec, so a regression to "compiles but silent" now fails CI.
+# ---------------------------------------------------------------------------
+
+_MODE_TRANSMITTING = 0x01
+_MODE_CONNECTED = 0x02
+_MODE_BIO_ENABLED = 0x04
+_MODE_POWER_ENABLED = 0x08
+_MODE_SUBSCRIBE_PATH = 0x10
+
+
+def _bind_bench(service: ctypes.CDLL) -> None:
+    service.synapse_host_bench_reset.restype = ctypes.c_int
+    service.synapse_host_bench_reset.argtypes = []
+    service.synapse_host_bench_run.restype = ctypes.c_int
+    service.synapse_host_bench_run.argtypes = [ctypes.c_int, ctypes.c_int]
+    service.synapse_host_bench_run_subscribe_ecg.restype = ctypes.c_int
+    service.synapse_host_bench_run_subscribe_ecg.argtypes = []
+    service.synapse_host_bench_frame_count.restype = ctypes.c_int
+    service.synapse_host_bench_frame_count.argtypes = []
+    service.synapse_host_bench_frame_len.restype = ctypes.c_int
+    service.synapse_host_bench_frame_len.argtypes = [ctypes.c_int]
+    service.synapse_host_bench_copy_frame.restype = ctypes.c_int
+    service.synapse_host_bench_copy_frame.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    service.synapse_host_bench_dropped_frames.restype = ctypes.c_uint32
+    service.synapse_host_bench_dropped_frames.argtypes = []
+    service.synapse_host_bench_ring_overflow.restype = ctypes.c_uint32
+    service.synapse_host_bench_ring_overflow.argtypes = []
+    service.synapse_host_bench_power_dropped.restype = ctypes.c_uint32
+    service.synapse_host_bench_power_dropped.argtypes = []
+
+
+def _decoded_frames(service: ctypes.CDLL) -> list[tuple[RawHeader, np.ndarray]]:
+    """Capture every notification and decode it with the host codec."""
+    from synapse24.hardware.raw_codec import decode_frame
+
+    count = service.synapse_host_bench_frame_count()
+    frames = []
+    for i in range(count):
+        length = service.synapse_host_bench_frame_len(i)
+        assert length > 0, f"frame {i} has no bytes"
+        buf = ctypes.create_string_buffer(length)
+        copied = service.synapse_host_bench_copy_frame(i, buf, length)
+        assert copied == length
+        frames.append(decode_frame(bytes(buf.raw[:length])))
+    return frames
+
+
+def test_service_transmits_when_fully_open(service: ctypes.CDLL) -> None:
+    """All preconditions met: the pod must emit decodable raw frames."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run(
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED | _MODE_POWER_ENABLED, 60
+    )
+    assert sent > 0, "no notifications captured: the research service is silent"
+
+    frames = _decoded_frames(service)
+    assert len(frames) == sent
+
+    # Per-stream expectations from init_stream_table(): flush thresholds
+    # ECG 50, PPG 8, ACC/GYRO/MAG 4, POWER 1; the bench submits 60/20/20.
+    # sample_count counts VALUES (channel-minor): PPG red+IR doubles the
+    # count, the IMU sub-streams triple it, POWER quadruples it.
+    by_stream: dict[int, list[int]] = {}
+    for header, _samples in frames:
+        by_stream.setdefault(header.stream, []).append(header.sample_count)
+
+    assert set(by_stream) == {
+        RawStream.ECG,
+        RawStream.PPG,
+        RawStream.ACC,
+        RawStream.GYRO,
+        RawStream.MAG,
+        RawStream.POWER,
+    }
+    # One frame per threshold hit: ECG 1x50, PPG 2x(8x2), ACC/GYRO/MAG 5x(4x3),
+    # POWER 2x(1x4).
+    values_per_stream = {stream: sum(v) for stream, v in by_stream.items()}
+    assert values_per_stream == {
+        RawStream.ECG: 50,
+        RawStream.PPG: 32,
+        RawStream.ACC: 60,
+        RawStream.GYRO: 60,
+        RawStream.MAG: 60,
+        RawStream.POWER: 8,
+    }
+
+    # Wire format per stream must match the contract.
+    formats = {int(header.sample_format) for header, _ in frames if header.stream == RawStream.ECG}
+    assert formats == {int(RawFormat.S16)}
+    formats = {int(header.sample_format) for header, _ in frames if header.stream == RawStream.PPG}
+    assert formats == {int(RawFormat.S32)}
+    formats = {
+        int(header.sample_format) for header, _ in frames if header.stream == RawStream.POWER
+    }
+    assert formats == {int(RawFormat.S32)}
+
+    # The power frame's first value is the voltage in mV (the glue submits
+    # 3700.0f mV; the codec must reproduce exactly what was submitted).
+    power_samples = [s for header, s in frames if header.stream == RawStream.POWER]
+    assert power_samples[0][0] == 3700
+    assert power_samples[0][1] == 120
+
+    # Nothing was lost or silently dropped while streaming.
+    assert service.synapse_host_bench_dropped_frames() == 0
+    assert service.synapse_host_bench_ring_overflow() == 0
+
+
+def test_no_transmitting_no_frames(service: ctypes.CDLL) -> None:
+    """transmitting=false must silence the service completely."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run(_MODE_CONNECTED | _MODE_BIO_ENABLED, 60)
+    assert sent == 0, f"transmitted {sent} frames while transmitting was off"
+
+
+def test_not_connected_no_frames(service: ctypes.CDLL) -> None:
+    """Without a GAP link nothing may leave the pod."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 60)
+    assert sent == 0, f"transmitted {sent} frames without a connection"
+
+
+def test_not_subscribed_no_frames(service: ctypes.CDLL) -> None:
+    """A stream nobody subscribed to is not streamed."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED, 60)
+    assert sent == 0, f"transmitted {sent} frames with no stream subscribed"
+
+
+def test_power_stream_transmits_when_subscribed(service: ctypes.CDLL) -> None:
+    """The INA219 telemetry path streams only after subscription."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run(
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 60
+    )
+    assert sent == 2, f"expected two 1 Hz power frames, got {sent}"
+    frames = _decoded_frames(service)
+    streams_seen = {header.stream for header, _ in frames}
+    assert streams_seen == {RawStream.POWER}, f"unexpected streams transmitted: {streams_seen}"
+    assert all(samples.size == 4 for _, samples in frames)
+
+
+def test_subscribe_handler_enables_the_stream(service: ctypes.CDLL) -> None:
+    """The CCCD route (handle_subscribe) is what the real stack calls."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run_subscribe_ecg()
+    assert sent == 1, f"subscription path produced {sent} frames, expected the ECG frame only"
+    frames = _decoded_frames(service)
+    assert frames[0][0].stream == RawStream.ECG
+    assert frames[0][0].sample_count == 50
+
+
+def test_ring_overflow_is_counted_when_the_link_stalls(service: ctypes.CDLL) -> None:
+    """Samples lost to a full ring must be visible, not silently discarded."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    # transmitting + subscribed, but no connection: flush_stream cannot emit,
+    # the 64-sample ring fills, and the extra ECG samples must be counted.
+    # The host's sequence-gap check cannot see this loss, so the counter is
+    # the only witness.
+    service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 200)
+    overflow = service.synapse_host_bench_ring_overflow()
+    assert overflow > 0, "ring overflow not counted: 200 samples were fed with no link"

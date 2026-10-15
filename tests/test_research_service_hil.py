@@ -49,6 +49,9 @@ class SyntheticPod:
     seed: int = 7
     # Fault injection.
     corrupt_version_every: int | None = None
+    # INA219 power telemetry: 1 Hz frames of 4 channels, like the firmware's
+    # STREAM_POWER (flush_at = 1).
+    power_stream: bool = False
 
     def __post_init__(self) -> None:
         self.rng = np.random.default_rng(self.seed)
@@ -95,6 +98,27 @@ class SyntheticPod:
         return np.concatenate([acc * 1000.0, gyr * 1000.0, mag * 100.0], axis=1).astype(np.int32)
 
     # -- framing -------------------------------------------------------------
+
+    def _power_frames(self, base_us: int) -> list[tuple[RawStream, bytes]]:
+        """1 Hz INA219 telemetry: one frame per second, 4 channels per frame.
+
+        Values are already engineering units (mV, mA, mW, %) — the firmware's
+        unit divisor for the POWER stream is 1.
+        """
+        frames: list[tuple[RawStream, bytes]] = []
+        for i in range(max(1, int(self.duration_s))):
+            current_ma = 120 + i
+            values = [3700, current_ma, (3700 * current_ma) // 1000, 80]
+            frame = encode_frame(
+                RawStream.POWER,
+                i,
+                (base_us + i * 1_000_000) & 0xFFFFFFFF,
+                0,
+                RawFormat.S32,
+                values,
+            )
+            frames.append((RawStream.POWER, frame))
+        return frames
 
     def frames(self) -> list[tuple[RawStream, bytes]]:
         """Encode the whole session as a list of (stream, notification) pairs."""
@@ -161,6 +185,12 @@ class SyntheticPod:
                 seq += 1
                 ts += int(n * 1_000_000 / IMU_HZ)
 
+        # Power telemetry: one frame per second, four channels, like the
+        # firmware's STREAM_POWER (flush_at = 1). Values are already
+        # engineering units (mV, mA, mW, %) — no unit divisor.
+        if self.power_stream:
+            out.extend(self._power_frames(base_us))
+
         # Interleave by stream order of arrival: ECG fastest, then PPG, then IMU.
         def sort_key(item: tuple[RawStream, bytes]) -> tuple[int, int]:
             stream, frame = item
@@ -171,6 +201,7 @@ class SyntheticPod:
                 RawStream.ACC: 2,
                 RawStream.GYRO: 3,
                 RawStream.MAG: 4,
+                RawStream.POWER: 5,
             }
             return (order[stream], seq)
 

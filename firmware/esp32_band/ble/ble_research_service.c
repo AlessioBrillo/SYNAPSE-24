@@ -296,25 +296,38 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
     }
 
     size_t channels = stream->channels ? stream->channels : 1;
-    uint16_t count = stream->pending;
-    uint16_t limit = synapse_raw_max_samples(stream->format);
-    if (limit != 0u && count > limit) {
-        count = limit;
+    /* The wire codec's sample_count counts VALUES (channel-minor), not
+     * physical samples: PPG red+IR is one sample but two values, the IMU
+     * sub-streams one sample but three. Counting physical samples here made
+     * the host decoder read only 1/channels of every multi-channel frame —
+     * the C<->Python parity tests never caught it because they exercise the
+     * codec directly, and only ECG (1 channel) was unaffected on the wire. */
+    uint16_t samples = stream->pending;
+    uint16_t limit_values = synapse_raw_max_samples(stream->format);
+    if (limit_values != 0u && (uint16_t)(samples * channels) > limit_values) {
+        samples = (uint16_t)(limit_values / channels);
     }
+    uint16_t count = (uint16_t)(samples * channels);
 
     // Widen the int32 ring into the wire format's fixed-width samples.
     uint8_t staging[SYNAPSE_RAW_FRAME_MAX_PAYLOAD];
     size_t size = synapse_raw_format_size(stream->format);
-    for (uint16_t i = 0; i < (uint16_t)(count * channels); i++) {
+    for (uint16_t i = 0; i < count; i++) {
         int32_t value = stream->ring[i];
         memcpy(staging + (size_t)i * size, &value, size);
     }
 
     uint8_t flags = 0;
-    if (stream->first_ts_us < r->last_sample_us - (int64_t)UINT32_MAX) {
-        // The buffered sample predates the most recent 32-bit wrap.
+    // Wrap witness: the frame's low-32 timestamp stepping backwards against
+    // the previous frame of THIS stream. The old comparison against a 71.6
+    // minute-old buffer could never fire, which made the flag dead code and
+    // left the host relying on the numeric regression alone.
+    uint32_t ts_low = (uint32_t)((uint64_t)stream->first_ts_us & 0xFFFFFFFFu);
+    if (stream->has_flushed && ts_low < stream->last_flushed_ts_low) {
         flags |= SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED;
     }
+    stream->last_flushed_ts_low = ts_low;
+    stream->has_flushed = true;
 
     int rc = synapse_raw_frame_encode(
         stream->stream_id,
@@ -344,12 +357,12 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
         }
     }
 
-    uint16_t consumed = (uint16_t)(count * channels);
+    uint16_t consumed = count;  /* ring values consumed by this frame */
     uint16_t remaining = (uint16_t)(stream->pending * channels - consumed);
     if (remaining > 0) {
         memmove(stream->ring, &stream->ring[consumed], (size_t)remaining * sizeof(int32_t));
     }
-    stream->pending = (uint16_t)(stream->pending - count);
+    stream->pending = (uint16_t)(stream->pending - samples);
     stream->first_ts_us = r->last_sample_us;
 }
 
@@ -366,6 +379,11 @@ esp_err_t synapse_research_service_init(void)
     memset(&s_research, 0, sizeof(s_research));
     s_research.conn_handle = BLE_HS_CONN_HANDLE_NONE;
     init_stream_table(&s_research);
+    // The service exists to transmit: leave it armed so a disabled default can
+    // never again mean "the pod streams nothing and nothing complains". The
+    // remaining preconditions are connect + per-stream subscription, wired in
+    // ble_gatt_server.c and proven by tests/test_research_service_host.py.
+    s_research.transmitting = true;
 
     int rc = ble_gatts_count_cfg(research_svcs);
     if (rc != 0) {
@@ -408,6 +426,11 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             }
             s->ring[s->pending++] = quantise_s16(sample->data.ecg.voltage_mv,
                                                  (float)SYNAPSE_RESEARCH_UNIT_UV);
+        } else {
+            // Ring full: a notification could not be emitted (BLE budget).
+            // The host's sequence-gap check will NOT see this, so count it
+            // for the bench diagnostics instead of losing it silently.
+            s_research.ring_overflow++;
         }
         break;
     }
@@ -420,6 +443,8 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             s->ring[s->pending * 2 + 0] = (int32_t)lroundf(sample->data.ppg.red);
             s->ring[s->pending * 2 + 1] = (int32_t)lroundf(sample->data.ppg.ir);
             s->pending++;
+        } else {
+            s_research.ring_overflow++;
         }
         break;
     }
@@ -428,6 +453,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         synapse_research_stream_t *gyr = &s_research.streams[STREAM_GYRO];
         synapse_research_stream_t *mag = &s_research.streams[STREAM_MAG];
         if (acc->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
+            s_research.ring_overflow++;
             return;
         }
         if (acc->pending == 0) {
@@ -467,22 +493,22 @@ void synapse_research_service_submit_power(float voltage_mv, float current_ma, f
     if (!s_research.initialized) {
         return;
     }
-    // esp_timer_get_time() is the same monotonic source the ECG path uses, so
-    // power frames and biosignal frames share one device timeline.
-    int64_t now_us = esp_timer_get_time();
-    if (now_us < s_research.last_sample_us) {
-        return;  // stale sample, the clock is monotonic
-    }
-    if ((uint32_t)now_us < (uint32_t)s_research.last_sample_us) {
-        s_research.epoch_wraps++;
-    }
-    s_research.last_sample_us = now_us;
 
     synapse_research_stream_t *s = &s_research.streams[STREAM_POWER];
-    if (s->pending != 0) {
-        return;  // 1 Hz: a sample is still unflushed; drop, never overwrite
+    // Nothing can leave the pod without a link, transmitting on, and a
+    // subscriber. When any of those is missing, drop the 1 Hz sample into the
+    // counter instead of parking it in `pending`, where it would block every
+    // later sample with "a sample is still unflushed" and make the first
+    // seconds after subscription look like data loss.
+    if (!s_research.transmitting || !s->enabled) {
+        s_research.power_dropped++;
+        return;
     }
-    s->first_ts_us = now_us;
+    if (s->pending != 0) {
+        s_research.power_dropped++;  // 1 Hz: previous frame still unflushed
+        return;
+    }
+    s->first_ts_us = esp_timer_get_time();
     // Four channels in one frame: voltage_mv, current_ma, power_mw,
     // battery_pct. Power is derived here rather than sent separately so the
     // host's energy accounting is one multiplication, not three fields to
@@ -527,6 +553,9 @@ void synapse_research_service_on_disconnect(void)
     s_research.connected = false;
     s_research.conn_handle = BLE_HS_CONN_HANDLE_NONE;
     for (size_t i = 0; i < s_research.stream_count; i++) {
+        // Subscriptions die with the link: pending samples are stale, and the
+        // host must re-subscribe before anything streams again.
+        s_research.streams[i].enabled = false;
         s_research.streams[i].pending = 0;
     }
     ESP_LOGI(TAG, "disconnected");
@@ -540,4 +569,66 @@ uint16_t synapse_research_service_get_mtu(void)
 uint32_t synapse_research_service_dropped_frames(void)
 {
     return s_research.dropped_frames;
+}
+
+void synapse_research_service_set_stream_enabled(uint8_t stream_id, bool enabled)
+{
+    if (!s_research.initialized) {
+        return;
+    }
+    for (size_t i = 0; i < s_research.stream_count; i++) {
+        synapse_research_stream_t *s = &s_research.streams[i];
+        if (s->stream_id == stream_id) {
+            s->enabled = enabled;
+            if (!enabled) {
+                // Drop the pending buffer: stale samples must not be flushed as
+                // soon as the host re-subscribes.
+                s->pending = 0;
+            }
+            ESP_LOGI(TAG, "stream 0x%02x %s", stream_id,
+                     enabled ? "enabled (subscribed)" : "disabled");
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "stream 0x%02x not found in the stream table", stream_id);
+}
+
+void synapse_research_service_handle_subscribe(uint16_t attr_handle, bool notify)
+{
+    if (!s_research.initialized) {
+        return;
+    }
+    for (size_t i = 0; i < s_research.stream_count; i++) {
+        synapse_research_stream_t *s = &s_research.streams[i];
+        uint16_t handle = stream_handle(s);
+        if (handle != 0 && handle == attr_handle) {
+            synapse_research_service_set_stream_enabled(s->stream_id, notify);
+            return;
+        }
+    }
+    // Handles outside the research service (feature stream, provisioning) are
+    // not ours: ignore them.
+}
+
+void synapse_research_service_set_mtu(uint16_t mtu)
+{
+    s_research.mtu = mtu;
+    ESP_LOGI(TAG, "negotiated ATT MTU: %u bytes", mtu);
+}
+
+uint32_t synapse_research_service_ring_overflow(void)
+{
+    return s_research.ring_overflow;
+}
+
+uint32_t synapse_research_service_power_dropped(void)
+{
+    return s_research.power_dropped;
+}
+
+void synapse_research_service_reset_counters(void)
+{
+    s_research.dropped_frames = 0;
+    s_research.ring_overflow = 0;
+    s_research.power_dropped = 0;
 }

@@ -1,36 +1,15 @@
 #!/usr/bin/env python3
-"""BLE Client demo.
+"""DEPRECATED - do not use with the current firmware.
 
-Clock Sync Ping-Pong Protocol companion to firmware/esp32_tier0/main/ble/ble_lsl_bridge.cpp.
+This demo speaks the legacy Nordic-UART (6E400001-...) protocol of the retired
+`firmware/esp32_tier0` project. The canonical pod streams the Synapse Research
+Service frames on service A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70; these UUIDs and
+this clock-sync protocol do nothing against `firmware/esp32_band`. Kept only as
+a historical record.
 
-Protocol:
-  1. Client writes [uint32 seq, int64 pod_send_us] to Sync characteristic (handle +1)
-  2. Server (ESP32) responds by updating the Sync characteristic value to:
-     [uint32 seq, int64 hub_recv_us, int64 hub_send_us]
-  3. Client reads Sync characteristic to get the reply timestamps
-  4. Client computes offset = ((hub_recv - pod_send) + (hub_send - pod_recv)) / 2
-     but since pod_recv is when we read (approximately hub_send + RTT/2),
-     simplified: offset ≈ hub_recv - pod_send - (hub_send - hub_recv)/2
-
-   More precisely, using the NTP-style algorithm from clock_sync.cpp:
-     offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2
-   where pod_recv_us is the time the pod received our request (not directly known,
-   but we can approximate or use the round-trip time).
-
-   Actually, the way the firmware works:
-   - Pod writes [seq, pod_send_us] to sync char
-   - Hub receives it, records hub_recv_us = esp_timer_get_time(), hub_send_us = esp_timer_get_time() + small_delay
-   - Hub stores in sync_history[idx] = {sequence, pod_send_us, hub_recv_us, hub_send_us, 0, 0, 0.0}
-   - Pod reads sync char, gets [seq, hub_recv_us, hub_send_us]
-   - Pod then computes: offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2
-     but pod_recv_us is approximately the time the pod read the characteristic,
-     which is close to hub_send_us + BLE_rtt/2
-
-   The firmware stores pod_recv_us when the pod reads the characteristic response.
-   Looking at the code more carefully... the pod reads the characteristic to get the
-   hub timestamps, then those are used for the drift estimation.
-
-   Let me just implement a working client that does the exchange and prints results.
+The supported host client is src/synapse24/hardware/research_ble_client.py
+(used by `scripts/validate_phase1_entry.py --live-hardware`); the procedure
+lives in docs/hardware/BRINGUP_SOP.md.
 """
 
 from __future__ import annotations
