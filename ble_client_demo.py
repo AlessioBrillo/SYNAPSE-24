@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DEPRECATED — do not use with the current firmware.
+"""DEPRECATED - do not use with the current firmware.
 
 This demo speaks the legacy Nordic-UART (6E400001-...) protocol of the retired
 `firmware/esp32_tier0` project. The canonical pod streams the Synapse Research
@@ -10,36 +10,6 @@ a historical record.
 The supported host client is src/synapse24/hardware/research_ble_client.py
 (used by `scripts/validate_phase1_entry.py --live-hardware`); the procedure
 lives in docs/hardware/BRINGUP_SOP.md.
-"""
-
-Protocol:
-  1. Client writes [uint32 seq, int64 pod_send_us] to Sync characteristic (handle +1)
-  2. Server (ESP32) responds by updating the Sync characteristic value to:
-     [uint32 seq, int64 hub_recv_us, int64 hub_send_us]
-  3. Client reads Sync characteristic to get the reply timestamps
-  4. Client computes offset = ((hub_recv - pod_send) + (hub_send - pod_recv)) / 2
-     but since pod_recv is when we read (approximately hub_send + RTT/2),
-     simplified: offset ≈ hub_recv - pod_send - (hub_send - hub_recv)/2
-
-   More precisely, using the NTP-style algorithm from clock_sync.cpp:
-     offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2
-   where pod_recv_us is the time the pod received our request (not directly known,
-   but we can approximate or use the round-trip time).
-
-   Actually, the way the firmware works:
-   - Pod writes [seq, pod_send_us] to sync char
-   - Hub receives it, records hub_recv_us = esp_timer_get_time(), hub_send_us = esp_timer_get_time() + small_delay
-   - Hub stores in sync_history[idx] = {sequence, pod_send_us, hub_recv_us, hub_send_us, 0, 0, 0.0}
-   - Pod reads sync char, gets [seq, hub_recv_us, hub_send_us]
-   - Pod then computes: offset = ((hub_recv_us - pod_send_us) + (hub_send_us - pod_recv_us)) / 2
-     but pod_recv_us is approximately the time the pod read the characteristic,
-     which is close to hub_send_us + BLE_rtt/2
-
-   The firmware stores pod_recv_us when the pod reads the characteristic response.
-   Looking at the code more carefully... the pod reads the characteristic to get the
-   hub timestamps, then those are used for the drift estimation.
-
-   Let me just implement a working client that does the exchange and prints results.
 """
 
 from __future__ import annotations

@@ -152,7 +152,10 @@ void app_main(void)
     //      pulse is a G2 feature (real head pod on a second body site), so
     //      nothing drives the line during single-pod bringup.
 #if defined(CONFIG_SYNAPSE_FEATURE_WIRED_SYNC)
-    synapse_wired_sync_init(&s_wired_sync, SYNAPSE_SYNC_ROLE_HUB);
+    esp_err_t wired_rc = synapse_wired_sync_init(&s_wired_sync, SYNAPSE_SYNC_ROLE_HUB);
+    if (wired_rc != ESP_OK) {
+        ESP_LOGW(TAG, "wired sync init failed: %s", esp_err_to_name(wired_rc));
+    }
 #endif
 
     // 13. Check if provisioning is needed

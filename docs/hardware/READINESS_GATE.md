@@ -128,6 +128,22 @@ One environment note: `check_toolchain.py` reports BLOCKED unless ESP-IDF's
 environment is active in the shell (it looks at `IDF_PATH`/PATH, not at the
 default `~/esp/esp-idf` install). G0 is closed — run the exporter first.
 
+## Known failures on the dev host (pre-existing, out of this increment)
+
+`scripts/validate_baseline.py --dataset both` fails **on `master` as well**
+(verified against a clean worktree, identical output): WESAD 3-class scores
+0.000 and the RMSSD full-cohort characterization misses its target. Root
+cause is not the model: `verify_all_datasets(Path("data"))` reports
+**`wesad: False, sleep_edf: False`** — the local copies fail integrity, and
+the baseline script scores the (empty/partial) data instead of failing
+loudly on unverified input. MIT-BIH (integral) passes every gate.
+
+This does not touch the G1 critical path (the raw streaming path), but it
+does contradict the README's "Phase 0 COMPLETE / WESAD ≥80%" claim on this
+machine, so it is recorded here and tracked as an issue: re-download the
+datasets (`scripts/download_datasets.py`) and make the baseline script fail
+closed on unverified data rather than scoring it 0.
+
 ### MVP live-path closure (what was added after G0)
 
 The remaining risk was that "the firmware compiles" and "the SOP can run" were
