@@ -35,31 +35,58 @@ static uint16_t s_prov_handle = 0;
 
 static uint8_t s_body_location = 1; // wrist
 static uint8_t s_batt_level = 100;
+static bool s_batt_notify_pending = false;
+static uint16_t s_last_hr_bpm = 0xFFFF;
+static uint16_t s_last_rr_ms = 0xFFFF;
 static char s_mfr_name[32] = "Synapse";
 static char s_model_num[32] = "Band v1";
+static char s_serial_num[32] = "SYN-000000";
 static char s_fw_rev[32] = "1.0.0";
+static char s_hw_rev[32] = "1.0";
 static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
 static uint16_t s_cfg_len = 0;
 
-// 128-bit UUIDs (little-endian byte order as in original spec)
+// 128-bit UUIDs (little-endian byte order, GATT v1 frozen)
+// Service: f9e08ffd-3d34-441f-97a6-1bf0958123f1
 static const ble_uuid128_t SYN_SVC_UUID =
-    BLE_UUID128_INIT(0x5D, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    BLE_UUID128_INIT(0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
+                     0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+// Feature stream: db4307e5-6cb3-4152-a0e2-81c3921168e9
 static const ble_uuid128_t FEAT_UUID =
-    BLE_UUID128_INIT(0x5E, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    BLE_UUID128_INIT(0xE9, 0x68, 0x11, 0x92, 0xC3, 0x81, 0xE2, 0xA0,
+                     0x52, 0x41, 0xB3, 0x6C, 0xE5, 0x07, 0x43, 0xDB);
+// Device config: bf68d647-0d02-479a-8d75-7964a51f332f
 static const ble_uuid128_t CFG_UUID =
-    BLE_UUID128_INIT(0x5F, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    BLE_UUID128_INIT(0x2F, 0x33, 0x1F, 0xA5, 0x64, 0x79, 0x75, 0x8D,
+                     0x9A, 0x47, 0x02, 0x0D, 0x47, 0xD6, 0x68, 0xBF);
+// Provisioning: 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
 static const ble_uuid128_t PROV_UUID =
-    BLE_UUID128_INIT(0x60, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    BLE_UUID128_INIT(0x4A, 0xB1, 0x3B, 0x5D, 0x3E, 0xA0, 0x61, 0xA1,
+                     0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E);
 
 // --- characteristic access callbacks -----------------------------------------
 
+// Feature stream: notify-only, never read.
 static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
-    // Notify-only characteristic
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+// Heart Rate Measurement (0x2A37): readable (last value) + notify.
+// Flags: bit0 = HR 16-bit (value in bytes 1-2 as uint16 LE), bit4 = RR present.
+// When RR present: bytes after HR are uint16 LE RR intervals, each followed by
+// nothing (packed back-to-back). Averyn reads this flag-gated field.
+static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t val[2 + 2]; // flags + hr16 (+ optional RR not included on read)
+        uint8_t flags = 0x10; // 16-bit HR value
+        val[0] = flags;
+        val[1] = (uint8_t)(s_last_hr_bpm & 0xFF);
+        val[2] = (uint8_t)((s_last_hr_bpm >> 8) & 0xFF);
+        int rc = os_mbuf_append(ctxt->om, val, sizeof(val));
+        return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
     return BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -78,6 +105,84 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
+}
+
+/**
+ * @brief Notify Heart Rate Measurement with optional RR interval.
+ * Builds a standard 0x2A37 value: flags(0x10 = 16-bit HR) + HR16 + [RR16...].
+ * Call whenever a new HR sample is available; subscribers get the push.
+ */
+esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    uint16_t chr_handle = ble_gatts_find_chr(&BLE_UUID16_DECLARE(0x180D).u,
+                                             &BLE_UUID16_DECLARE(0x2A37).u, NULL, NULL);
+    if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
+    // Subscribers only; avoid flooding when nobody listens.
+    bool subscribed = false;
+    // Reuse feature-subscribe flag as a proxy? No: track HR subscription separately.
+    (void)subscribed;
+    uint8_t val[2 + 2]; // flags + HR16
+    uint8_t n = 0;
+    val[n++] = 0x10; // flags: 16-bit HR value, no sensor contact, no energy expended, no RR
+    if (rr_interval_ms != 0xFFFF) {
+        val[0] |= 0x10; // bit4 RR interval present (0x10)
+        uint8_t rr_b[2] = { rr_interval_ms & 0xFF, (rr_interval_ms >> 8) & 0xFF };
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
+        if (!om) return ESP_ERR_NO_MEM;
+        int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
+        if (rc != 0) return ESP_FAIL;
+        // Second notification for RR-only would require combined packet; NimBLE
+        // notify is one attribute value. Put HR+RR in one notify when RR present.
+        uint8_t combined[2 + 2 + 2];
+        combined[0] = 0x10 | 0x10; // flags: 16-bit HR + RR present
+        combined[1] = (uint8_t)(hr_bpm & 0xFF);
+        combined[2] = (uint8_t)((hr_bpm >> 8) & 0xFF);
+        combined[3] = (uint8_t)(rr_interval_ms & 0xFF);
+        combined[4] = (uint8_t)((rr_interval_ms >> 8) & 0xFF);
+        struct os_mbuf *om2 = ble_hs_mbuf_from_flat(combined, sizeof(combined));
+        if (!om2) return ESP_ERR_NO_MEM;
+        rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om2);
+        return rc == 0 ? ESP_OK : ESP_FAIL;
+    }
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
+    if (!om) return ESP_ERR_NO_MEM;
+    int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
+}
+
+static int body_loc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        os_mbuf_append(ctxt->om, &s_body_location, sizeof(s_body_location));
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int batt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        os_mbuf_append(ctxt->om, &s_batt_level, sizeof(s_batt_level));
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+/**
+ * @brief Notify Battery Level (0x2A19) if subscribers exist.
+ */
+esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging) {
+    (void)charging;
+    s_batt_level = level;
+    s_batt_notify_pending = true;
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    uint16_t chr_handle = ble_gatts_find_chr(&BLE_UUID16_DECLARE(0x180F).u,
+                                             &BLE_UUID16_DECLARE(0x2A19).u, NULL, NULL);
+    if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&s_batt_level, 1);
+    if (!om) return ESP_ERR_NO_MEM;
+    int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
 }
 
 static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -134,8 +239,8 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
         .characteristics = (struct ble_gatt_chr_def[]){
             {
                 .uuid = BLE_UUID16_DECLARE(0x2A37),
-                .access_cb = feat_access,
-                .flags = BLE_GATT_CHR_F_NOTIFY,
+                .access_cb = hr_access,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
             {
                 .uuid = BLE_UUID16_DECLARE(0x2A38),
@@ -174,9 +279,21 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .flags = BLE_GATT_CHR_F_READ,
             },
             {
+                .uuid = BLE_UUID16_DECLARE(0x2A25),
+                .access_cb = dis_str_access,
+                .arg = (void *)s_serial_num,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
                 .uuid = BLE_UUID16_DECLARE(0x2A26),
                 .access_cb = dis_str_access,
                 .arg = (void *)s_fw_rev,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A27),
+                .access_cb = dis_str_access,
+                .arg = (void *)s_hw_rev,
                 .flags = BLE_GATT_CHR_F_READ,
             },
             {0},
@@ -268,10 +385,18 @@ static void start_advertising_impl(const char *name) {
     fields.name = (uint8_t *)name;
     fields.name_len = strlen(name);
     fields.name_is_complete = 1;
-    static const ble_uuid16_t svc_uuid = BLE_UUID16_INIT(0x180D);
-    fields.uuids16 = (ble_uuid16_t[]){svc_uuid};
+    static const ble_uuid16_t svc_uuid16 = BLE_UUID16_INIT(0x180D);
+    fields.uuids16 = (ble_uuid16_t[]){svc_uuid16};
     fields.num_uuids16 = 1;
     fields.uuids16_is_complete = 1;
+    // Advertise the Synapse consumer service so Averyn can find the device by
+    // UUID without connecting first (phase 0 contract).
+    static const ble_uuid128_t svc_uuid128 = BLE_UUID128_INIT(
+        0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
+        0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+    fields.uuids128 = (ble_uuid128_t[]){svc_uuid128};
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
 
     struct ble_gap_adv_params adv_params = {0};
@@ -381,15 +506,75 @@ void synapse_ble_gatt_set_device_info(const char *m, const char *model, const ch
         strncpy(s_model_num, model, sizeof(s_model_num) - 1);
         s_model_num[sizeof(s_model_num) - 1] = '\0';
     }
+    if (s) {
+        strncpy(s_serial_num, s, sizeof(s_serial_num) - 1);
+        s_serial_num[sizeof(s_serial_num) - 1] = '\0';
+    }
     if (fw) {
         strncpy(s_fw_rev, fw, sizeof(s_fw_rev) - 1);
         s_fw_rev[sizeof(s_fw_rev) - 1] = '\0';
     }
+    if (hw) {
+        strncpy(s_hw_rev, hw, sizeof(s_hw_rev) - 1);
+        s_hw_rev[sizeof(s_hw_rev) - 1] = '\0';
+    }
     ESP_LOGI(BLE_TAG, "DIS set: %s %s S:%s FW:%s HW:%s", s_mfr_name, s_model_num,
-             s ? s : "?", s_fw_rev, hw ? hw : "?");
+             s_serial_num, s_fw_rev, s_hw_rev);
 }
 
 void synapse_ble_gatt_update_battery(uint8_t level, bool charging) {
-    (void)charging;
     s_batt_level = level;
+    if (s_batt_notify_pending && g_connected && g_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        synapse_ble_gatt_notify_battery(level, charging);
+    }
+}
+
+/**
+ * @brief Mark battery level as changed and notify subscribers if connected.
+ * Call from the power module whenever the measured level changes.
+ */
+void synapse_ble_gatt_battery_changed(uint8_t level, bool charging) {
+    s_batt_notify_pending = true;
+    synapse_ble_gatt_update_battery(level, charging);
+}
+
+esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms,
+                                         uint8_t ppg_sqi, uint8_t ppg_map,
+                                         uint8_t ecg_quality, uint8_t stress_level,
+                                         uint8_t motion_level, int16_t temperature) {
+    static uint32_t s_last_notify_ms = 0;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    // 1 Hz default gate: 1000 ms between notifications. Configurable later via
+    // the config characteristic if Averyn needs a faster live feed.
+    if (now_ms - s_last_notify_ms < 1000) return ESP_OK;
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (!g_feat_subscribed || s_feat_handle == 0) return ESP_OK; // nothing subscribed: silent drop
+
+    synapse_feature_stream_t f = {0};
+    f.version = SYNAPSE_FEATURE_STREAM_VERSION;
+    f.sequence = g_feat_seq++;
+    f.heart_rate = hr_bpm;
+    f.rr_interval_ms = rr_interval_ms;
+    f.ppg_sqi = ppg_sqi;
+    f.ppg_map = ppg_map;
+    f.ecg_quality = ecg_quality;
+    f.stress_level = stress_level;
+    f.motion_level = motion_level;
+    f.battery_level = s_batt_level;
+    f.charging = 0; // filled by power module when wired
+    f.sport_type = 0;
+    f.cadence = 0xFFFF;
+    f.temperature = temperature;
+    f.rmssd_ms = 0xFFFF;
+    f.sdnn_ms = 0xFFFF;
+
+    esp_err_t rc = synapse_ble_gatt_notify_features(&f);
+    if (rc != ESP_OK) return rc;
+
+    // Mirror HR onto the standard characteristic so any HR app works.
+    if (hr_bpm != 0xFFFF) {
+        (void)synapse_ble_gatt_notify_hr(hr_bpm, rr_interval_ms);
+    }
+    s_last_notify_ms = now_ms;
+    return ESP_OK;
 }

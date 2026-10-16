@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_efuse.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -110,6 +111,18 @@ void app_main(void)
         return;
     }
 
+    // 8a. Device Information: serial derived from the public MAC so Averyn can
+    //     bind device -> owner (serial printed on box/QR). HW rev from Kconfig.
+    {
+        uint8_t mac[6] = {0};
+        esp_efuse_mac_get_default(mac);
+        char serial[16];
+        snprintf(serial, sizeof(serial), "SYN-%02X%02X%02X", mac[3], mac[4], mac[5]);
+        synapse_ble_gatt_set_device_info("Synapse", "Band v1", serial,
+                                         CONFIG_SYNAPSE_FIRMWARE_VERSION,
+                                         CONFIG_SYNAPSE_HARDWARE_VERSION);
+    }
+
     // 8b. Synapse Research Service: raw samples + on-device timestamps.
     //     This is the dataset path (config/hardware.yaml -> raw_frame) and is
     //     independent of the consumer feature stream registered above.
@@ -182,6 +195,16 @@ void app_main(void)
             synapse_signal_quality_process(&sample.base);
             synapse_research_service_submit(&sample.base);
         }
+
+        // --- Consumer feature stream (Averyn integration) --------------------
+        // The signal-quality / edge-AI module owns feature derivation. When a
+        // new frame is ready (default 1 Hz, max 10 Hz), call:
+        //   synapse_ble_gatt_push_feature(hr_bpm, rr_interval_ms, ppg_sqi,
+        //                                 ppg_map, ecg_quality, stress_level,
+        //                                 motion_level, temperature);
+        // The function rate-limits internally (1 Hz) and mirrors HR onto the
+        // standard 0x2A37 characteristic. Do NOT send placeholder values here.
+        // --------------------------------------------------------------------
 
         // Handle acquisition FSM tick (T0/T1/T2 state machine)
         synapse_acquisition_tick();

@@ -31,6 +31,7 @@ data/wesad/
 data/mitbih/
 data/sleep_edf/
 data/processed/
+data/live_validation/
 *.xdf
 *.edf
 *.dat
