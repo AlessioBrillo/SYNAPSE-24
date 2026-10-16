@@ -205,9 +205,11 @@ def _uuid_bytes_in_source(source: str, uuid_str: str) -> bool:
     be = parts[0].to_bytes(4, "big") + parts[1].to_bytes(2, "big") + parts[2].to_bytes(2, "big")
     be += parts[3].to_bytes(2, "big") + parts[4].to_bytes(6, "big")
     hex_le = ", ".join(f"0x{b:02X}" for b in reversed(be))
-    # The firmware wraps BLE_UUID128_INIT across two lines, so normalise the
-    # whitespace before matching.
-    flattened = re.sub(r",\s+", ", ", source)
+    # The firmware wraps BLE_UUID128_INIT across two lines, sometimes with a
+    # trailing backslash (header macros). Normalise whitespace and drop
+    # line-continuation backslashes before matching.
+    cleaned = source.replace("\\", "")
+    flattened = re.sub(r",\s+", ", ", cleaned)
     return hex_le in flattened
 
 
@@ -239,6 +241,66 @@ def check_raw_frame_contract(hw: dict, report: Report) -> None:
             expected in codec.upper(),
             f"raw_codec.py does not define RawFormat.{name.upper()} = 0x{int(value):02X}",
         )
+
+
+def check_consumer_service_contract(hw: dict, report: Report) -> None:
+    """The consumer feature stream (Averyn integration) must be coherent.
+
+    hardware.yaml declares the service/characteristic UUIDs, payload size and
+    rate. The firmware must declare the same UUIDs (little-endian byte arrays)
+    and a struct large enough to carry the payload. The deprecated 6-group UUID
+    string from the strategy docs must not appear anywhere.
+    """
+    ble = hw.get("ble", {})
+    fs = ble.get("feature_stream", {})
+    service = fs.get("service_uuid")
+    char = fs.get("characteristic_uuid")
+    payload = fs.get("payload_bytes")
+    rate = fs.get("rate_hz")
+    rate_max = fs.get("rate_max_hz")
+
+    report.check(
+        service is not None and char is not None,
+        "hardware.yaml ble.feature_stream must declare service_uuid and characteristic_uuid",
+    )
+    ble_sources = ""
+    for path in (GATT_H, RESEARCH_C):
+        if path.is_file():
+            ble_sources += path.read_text(encoding="utf-8") + "\n"
+    report.check(
+        service is not None and _uuid_bytes_in_source(ble_sources, service),
+        f"firmware BLE sources do not declare consumer service UUID {service}",
+    )
+    report.check(
+        char is not None and _uuid_bytes_in_source(ble_sources, char),
+        f"firmware BLE sources do not declare consumer characteristic UUID {char}",
+    )
+    report.check(
+        service != _pod(hw, "forearm_hub").get("metadata", {}).get("research_service_uuid"),
+        "consumer feature-stream service and research service must not share a UUID",
+    )
+    report.check(
+        isinstance(payload, int) and payload >= 20,
+        f"consumer payload_bytes must be an int >= 20, got {payload!r}",
+    )
+    report.check(
+        isinstance(rate, int) and isinstance(rate_max, int) and 0 < rate <= rate_max <= 10,
+        f"consumer rate must be 1..rate_max<=10 Hz, got rate={rate!r} max={rate_max!r}",
+    )
+
+    # The strategy input's malformed 6-group UUID (53594E41-...) must be gone
+    # from every source: it is not a valid UUID and UUID.fromString throws.
+    stale_uuid = "53594E41"
+    stale_hits = []
+    for path in [GATT_H, RESEARCH_C, RAW_CODEC_PY, HARDWARE_YAML]:
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            if stale_uuid in text:
+                stale_hits.append(path.name)
+    report.check(
+        not stale_hits,
+        f"deprecated 6-group UUID prefix {stale_uuid} still present in: {', '.join(stale_hits)}",
+    )
 
 
 def check_canonical_firmware_paths(report: Report) -> None:
@@ -402,6 +464,7 @@ def main() -> int:
     check_sampling_rates(hw, bringup, report)
     check_i2c_pins(hw, report)
     check_research_service_uuids(hw, report)
+    check_consumer_service_contract(hw, report)
     check_raw_frame_contract(hw, report)
     check_canonical_firmware_paths(report)
     check_no_legacy_rate_literals(report)

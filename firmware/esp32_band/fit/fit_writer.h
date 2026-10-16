@@ -167,13 +167,6 @@ esp_err_t synapse_fit_init(void);
 esp_err_t synapse_fit_start_session(const fit_session_config_t *config);
 
 /**
- * @brief Write a data record to the current session
- * @param record Record data
- * @return ESP_OK on success
- */
-esp_err_t synapse_fit_write_record(const fit_record_t *record);
-
-/**
  * @brief Write a record from feature stream (convenience)
  * @param feature Feature stream data from BLE
  * @param gps GPS data (optional, can be NULL)

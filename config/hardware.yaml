@@ -172,17 +172,27 @@ pods:
 # ---------------------------------------------------------------------
 ble:
   # Consumer feature stream (Averyn / product integration): features only,
-  # no raw samples. Mirrors firmware/esp32_band/ble/ble_gatt_server.h.
+  # no raw samples. Mirrors firmware/esp32_band/ble/ble_gatt_server.h (GATT v1).
+  # Frame: [version u8][sequence u16 LE][payload...], little-endian,
+  #   MTU-3 bytes max, default 1 Hz (cap 10 Hz).
   feature_stream:
-    service_uuid: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"
-    characteristic_uuid: "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5E"
-    payload_bytes: 20
+    service_uuid: "f9e08ffd-3d34-441f-97a6-1bf0958123f1"
+    characteristic_uuid: "db4307e5-6cb3-4152-a0e2-81c3921168e9"
+    device_config_uuid: "bf68d647-0d02-479a-8d75-7964a51f332f"
+    provisioning_uuid: "4e200cf1-94ac-4d63-a161-a03e5d3bb14a"
+    payload_bytes: 26
     version: 1
+    rate_hz: 1
+    rate_max_hz: 10
   # Standard GATT services exposed alongside (nRF Connect / LightBlue usable).
   standard_services:
     heart_rate: "180D"
     battery: "180F"
     device_information: "180A"
+  # Device Information characteristics read by Averyn for device->owner binding.
+  device_info_chars:
+    serial_number: "2A25"
+    hardware_revision: "2A27"
   mtu_target: 247
   conn_interval_min_ms: 7.5
   conn_interval_max_ms: 15.0

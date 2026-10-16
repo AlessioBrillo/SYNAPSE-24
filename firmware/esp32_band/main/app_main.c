@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_efuse.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -44,6 +45,11 @@ static synapse_wired_sync_t s_wired_sync = {0};
 #define ACQUISITION_RUNNING_BIT BIT3
 
 static EventGroupHandle_t s_system_events;
+
+// Consumer feature stream (Averyn integration).
+// synapse_ble_gatt_push_feature() is rate-limited to 1 Hz internally; we call
+// it every main-loop tick and let it drop when the gate is closed, so the
+// radio never dominates the power budget.
 
 void app_main(void)
 {
@@ -108,6 +114,18 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "BLE GATT init failed: %s", esp_err_to_name(ret));
         return;
+    }
+
+    // 8a. Device Information: serial derived from the public MAC so Averyn can
+    //     bind device -> owner (serial printed on box/QR). HW rev from Kconfig.
+    {
+        uint8_t mac[6] = {0};
+        esp_efuse_mac_get_default(mac);
+        char serial[16];
+        snprintf(serial, sizeof(serial), "SYN-%02X%02X%02X", mac[3], mac[4], mac[5]);
+        synapse_ble_gatt_set_device_info("Synapse", "Band v1", serial,
+                                         CONFIG_SYNAPSE_FIRMWARE_VERSION,
+                                         CONFIG_SYNAPSE_HARDWARE_VERSION);
     }
 
     // 8b. Synapse Research Service: raw samples + on-device timestamps.
@@ -182,6 +200,46 @@ void app_main(void)
             synapse_signal_quality_process(&sample.base);
             synapse_research_service_submit(&sample.base);
         }
+
+        // --- Consumer feature stream (Averyn integration) --------------------
+        // Push a real feature frame every main-loop tick; push_feature() rate-
+        // limits to 1 Hz internally and drops silently when nothing is
+        // subscribed. Values come from the signal-quality and edge-AI modules
+        // (no placeholders). When stress triage is not yet valid we emit
+        // stress_level=3 (unknown) so Averyn never shows a fabricated class.
+        {
+            ppg_quality_t ppg = {0};
+            stress_triage_t stress = {0};
+            (void)synapse_signal_quality_get_ppg(&ppg);
+            (void)synapse_edge_ai_get_latest_stress(&stress);
+
+            uint8_t stress_level = SYNAPSE_STRESS_UNKNOWN;
+            if (stress.valid) {
+                if (stress.predicted_class == 0) stress_level = 0;   // baseline
+                else if (stress.predicted_class == 1) stress_level = 1; // stress
+                else if (stress.predicted_class == 2) stress_level = 2; // artifact
+            }
+
+            uint8_t ppg_sqi = 0;
+            uint8_t ppg_map = 0;
+            uint8_t ecg_quality = 0;
+            if (ppg.valid) {
+                ppg_sqi = (uint8_t)(ppg.sqi * 255.0f);
+                ppg_map = (uint8_t)(ppg.motion_artifact_prob * 255.0f);
+            }
+
+            (void)synapse_ble_gatt_push_feature(
+                (uint16_t)ppg.hr_bpm,           // hr_bpm (0xFFFF if invalid)
+                0xFFFF,                         // rr_interval_ms (genuine RR only; not RMSSD)
+                ppg_sqi,
+                ppg_map,
+                ecg_quality,
+                stress_level,
+                0,                                // motion_level (placeholder until IMU feature wired)
+                0x7FFF                            // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
+            );
+        }
+        // --------------------------------------------------------------------
 
         // Handle acquisition FSM tick (T0/T1/T2 state machine)
         synapse_acquisition_tick();
