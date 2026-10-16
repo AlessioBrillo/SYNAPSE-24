@@ -289,31 +289,6 @@ esp_err_t synapse_fit_start_session(const fit_session_config_t *config) {
     return ESP_OK;
 }
 
-esp_err_t synapse_fit_write_record(const fit_record_t *record) {
-    if (!g_initialized || !g_session.active || !g_file) return ESP_ERR_INVALID_STATE;
-    if (!record) return ESP_ERR_INVALID_ARG;
-
-    // Data message: header (local msg type 0) + fields
-    uint8_t hdr = 0x00;
-    crc_write(&hdr, 1);
-    uint32_t ts = record->timestamp_utc;
-    uint8_t ts_b[4] = { ts & 0xFF, (ts>>8)&0xFF, (ts>>16)&0xFF, (ts>>24)&0xFF };
-    crc_write(ts_b, 4);
-    uint8_t hr = (record->heart_rate > 255) ? 255 : (uint8_t)record->heart_rate;
-    crc_write(&hr, 1);
-    uint16_t spd = (uint16_t)(record->speed * 1000.0f);
-    uint8_t spd_b[2] = { spd & 0xFF, (spd>>8)&0xFF };
-    crc_write(spd_b, 2);
-    crc_write(&record->stress_level, 1);
-    crc_write(&record->ppg_sqi, 1);
-    crc_write(&record->ppg_map, 1);
-
-    g_session.record_count++;
-    // Periodic flush for power-loss protection (every 10 records)
-    if ((g_session.record_count % 10) == 0) fflush(g_file);
-    return ESP_OK;
-}
-
 esp_err_t synapse_fit_write_from_feature(const synapse_feature_stream_t *feature,
                                           const double *gps_lat, const double *gps_lon,
                                           const double *gps_alt, const float *gps_speed,

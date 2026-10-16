@@ -372,96 +372,6 @@ def write_field_description(w: FitWriter) -> None:
         write_crc16(w.buf)
 
 
-def write_record(
-    w: FitWriter,
-    timestamp_s: int,
-    hr_bpm: int,
-    rr_ms: int,
-    ppg_sqi: int,
-    ppg_map: int,
-    ecg_quality: int,
-    stress: int,
-    sleep_stage: int,
-    rmssd_ms: int,
-    sdnn_ms: int,
-    lf_hf: int,
-    dev_local_msg_type: int,
-) -> None:
-    """FIT Record message (mesg 20) with standard + developer data fields.
-
-    Standard fields: timestamp(253,u32), heart_rate(3,u8).
-    Developer data follows in message 209 with the same timestamp.
-    """
-    # --- Record definition (local msg type = dev_local_msg_type) ---
-    w.write(mesg_header(dev_local_msg_type, True))
-    w.write_u8(0)
-    w.write_u8(0)
-    w.write_u16(FIT_MESG_RECORD)
-    # standard fields: timestamp + heart_rate
-    w.write_u8(2)
-    field_defs = [
-        (253, 4, FIT_BASE_TYPE_UINT32),   # timestamp
-        (3, 1, FIT_BASE_TYPE_UINT8),      # heart_rate
-    ]
-    for fnum, size, btype in field_defs:
-        w.write_u8(fnum)
-        w.write_u8(size)
-        w.write_u8(btype)
-    write_crc16(w.buf)
-
-    # --- Record data ---
-    w.write(mesg_header(dev_local_msg_type, False))
-    w.write_u32(timestamp_s)
-    w.write_u8(hr_bpm if hr_bpm != INVALID_U8 and hr_bpm <= 255 else INVALID_U8)
-    write_crc16(w.buf)
-
-    # --- Developer data (mesg 209) ---
-    # Definition: local msg type = dev_local_msg_type + 1
-    dev_def_type = dev_local_msg_type + 1
-    w.write(mesg_header(dev_def_type, True))
-    w.write_u8(0)
-    w.write_u8(0)
-    w.write_u16(FIT_MESG_DEVELOPER_DATA)
-    # fields: timestamp(253,u32) + developer_data_index(0,u8) + 8 dev fields
-    w.write_u8(10)
-    field_defs = [
-        (253, 4, FIT_BASE_TYPE_UINT32),   # timestamp
-        (0, 1, FIT_BASE_TYPE_UINT8),      # developer_data_index
-        (DEV_FIELD_NUM_STRESS, 1, FIT_BASE_TYPE_UINT8),
-        (DEV_FIELD_NUM_SQI, 1, FIT_BASE_TYPE_UINT8),
-        (DEV_FIELD_NUM_MAP, 1, FIT_BASE_TYPE_UINT8),
-        (DEV_FIELD_NUM_ECG_QUALITY, 1, FIT_BASE_TYPE_UINT8),
-        (DEV_FIELD_NUM_SLEEP_STAGE, 1, FIT_BASE_TYPE_UINT8),
-        (DEV_FIELD_NUM_RMSSD, 2, FIT_BASE_TYPE_UINT16),
-        (DEV_FIELD_NUM_SDNN, 2, FIT_BASE_TYPE_UINT16),
-        (DEV_FIELD_NUM_LF_HF, 2, FIT_BASE_TYPE_UINT16),
-    ]
-    for fnum, size, btype in field_defs:
-        w.write_u8(fnum)
-        w.write_u8(size)
-        w.write_u8(btype)
-    write_crc16(w.buf)
-
-    # Developer data values
-    w.write(mesg_header(dev_def_type, False))
-    w.write_u32(timestamp_s)
-    w.write_u8(0)  # developer_data_index 0 = our single app
-    dev_values = [stress, ppg_sqi, ppg_map, ecg_quality, sleep_stage, rmssd_ms, sdnn_ms, lf_hf]
-    for v in dev_values:
-        if isinstance(v, int):
-            if v == INVALID_U16:
-                w.write_u16(INVALID_U16)
-            elif v == INVALID_U8:
-                w.write_u8(INVALID_U8)
-            else:
-                # figure out size from context: last 3 are u16, others u8
-                pass
-        else:
-            w.write_u8(v & 0xFF)
-    # The loop above is a placeholder; sizes are determined below per field.
-    write_crc16(w.buf)
-
-
 RECORD_LOCAL_TYPE = 10
 DEV_DATA_LOCAL_TYPE = 11
 
@@ -517,7 +427,6 @@ def write_record_data(
     w: FitWriter,
     timestamp_s: int,
     hr_bpm: int,
-    rr_ms: int,
     ppg_sqi: int,
     ppg_map: int,
     ecg_quality: int,
@@ -661,7 +570,6 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
         lf_hf = int(round(lf_hf_raw * 100)) if lf_hf_raw is not None else INVALID_U16
 
         hr = int(round(hrv.get("hr_mean_bpm", INVALID_U8))) if hrv else INVALID_U8
-        rr_ms = int(round(hrv.get("mean_rr_ms", INVALID_U16))) if hrv else INVALID_U16
 
         ts_fit = fit_timestamp(datetime.fromtimestamp(win_t0, tz=timezone.utc))
 
@@ -669,7 +577,6 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
             w,
             timestamp_s=ts_fit,
             hr_bpm=hr,
-            rr_ms=rr_ms,
             ppg_sqi=INVALID_U8,
             ppg_map=INVALID_U8,
             ecg_quality=INVALID_U8,

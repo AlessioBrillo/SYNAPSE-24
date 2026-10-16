@@ -37,7 +37,6 @@ static uint8_t s_body_location = 1; // wrist
 static uint8_t s_batt_level = 100;
 static bool s_batt_notify_pending = false;
 static uint16_t s_last_hr_bpm = 0xFFFF;
-static uint16_t s_last_rr_ms = 0xFFFF;
 static char s_mfr_name[32] = "Synapse";
 static char s_model_num[32] = "Band v1";
 static char s_serial_num[32] = "SYN-000000";
@@ -117,32 +116,17 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     uint16_t chr_handle = ble_gatts_find_chr(&BLE_UUID16_DECLARE(0x180D).u,
                                              &BLE_UUID16_DECLARE(0x2A37).u, NULL, NULL);
     if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
-    // Subscribers only; avoid flooding when nobody listens.
-    bool subscribed = false;
-    // Reuse feature-subscribe flag as a proxy? No: track HR subscription separately.
-    (void)subscribed;
-    uint8_t val[2 + 2]; // flags + HR16
+    // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
+    uint8_t flags = 0x01; // 16-bit HR value
+    if (rr_interval_ms != 0xFFFF) flags |= 0x10; // RR interval present
+    uint8_t val[2 + 2]; // flags + HR16 [+ RR16]
     uint8_t n = 0;
-    val[n++] = 0x10; // flags: 16-bit HR value, no sensor contact, no energy expended, no RR
+    val[n++] = flags;
+    val[n++] = (uint8_t)(hr_bpm & 0xFF);
+    val[n++] = (uint8_t)((hr_bpm >> 8) & 0xFF);
     if (rr_interval_ms != 0xFFFF) {
-        val[0] |= 0x10; // bit4 RR interval present (0x10)
-        uint8_t rr_b[2] = { rr_interval_ms & 0xFF, (rr_interval_ms >> 8) & 0xFF };
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
-        if (!om) return ESP_ERR_NO_MEM;
-        int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
-        if (rc != 0) return ESP_FAIL;
-        // Second notification for RR-only would require combined packet; NimBLE
-        // notify is one attribute value. Put HR+RR in one notify when RR present.
-        uint8_t combined[2 + 2 + 2];
-        combined[0] = 0x10 | 0x10; // flags: 16-bit HR + RR present
-        combined[1] = (uint8_t)(hr_bpm & 0xFF);
-        combined[2] = (uint8_t)((hr_bpm >> 8) & 0xFF);
-        combined[3] = (uint8_t)(rr_interval_ms & 0xFF);
-        combined[4] = (uint8_t)((rr_interval_ms >> 8) & 0xFF);
-        struct os_mbuf *om2 = ble_hs_mbuf_from_flat(combined, sizeof(combined));
-        if (!om2) return ESP_ERR_NO_MEM;
-        rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om2);
-        return rc == 0 ? ESP_OK : ESP_FAIL;
+        val[n++] = (uint8_t)(rr_interval_ms & 0xFF);
+        val[n++] = (uint8_t)((rr_interval_ms >> 8) & 0xFF);
     }
     struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
     if (!om) return ESP_ERR_NO_MEM;
@@ -572,8 +556,10 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
     if (rc != ESP_OK) return rc;
 
     // Mirror HR onto the standard characteristic so any HR app works.
+    // rr_interval_ms is reserved for genuine RR intervals (not RMSSD); pass
+    // 0xFFFF unless a real RR is available.
     if (hr_bpm != 0xFFFF) {
-        (void)synapse_ble_gatt_notify_hr(hr_bpm, rr_interval_ms);
+        (void)synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF);
     }
     s_last_notify_ms = now_ms;
     return ESP_OK;

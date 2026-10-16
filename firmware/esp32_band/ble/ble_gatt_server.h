@@ -202,14 +202,6 @@ esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging);
 void synapse_ble_gatt_battery_changed(uint8_t level, bool charging);
 
 /**
- * @brief Set device info strings (called at init). Serial + HW rev are now
- * stored and exposed via Device Information service (0x2A25 / 0x2A27).
- */
-void synapse_ble_gatt_set_device_info(const char *manufacturer, const char *model,
-                                       const char *serial, const char *fw_rev,
-                                       const char *hw_rev);
-
-/**
  * @brief Build and notify a feature stream frame from raw inputs.
  * HR/RR are also pushed to the standard 0x2A37 characteristic.
  * Call from the feature/signal-quality module whenever a new frame is ready
@@ -239,18 +231,6 @@ bool synapse_ble_gatt_is_connected(void);
  * @return MTU in bytes (default 23, up to 517)
  */
 uint16_t synapse_ble_gatt_get_mtu(void);
-
-/**
- * @brief Set device info strings (called at init)
- */
-void synapse_ble_gatt_set_device_info(const char *manufacturer, const char *model,
-                                       const char *serial, const char *fw_rev,
-                                       const char *hw_rev);
-
-/**
- * @brief Update battery level (triggers notification if subscribed)
- */
-void synapse_ble_gatt_update_battery(uint8_t level, bool charging);
 
 #ifdef __cplusplus
 }

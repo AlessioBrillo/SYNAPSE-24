@@ -46,11 +46,10 @@ static synapse_wired_sync_t s_wired_sync = {0};
 
 static EventGroupHandle_t s_system_events;
 
-// Consumer feature stream state (Averyn integration).
+// Consumer feature stream (Averyn integration).
 // synapse_ble_gatt_push_feature() is rate-limited to 1 Hz internally; we call
 // it every main-loop tick and let it drop when the gate is closed, so the
 // radio never dominates the power budget.
-static uint32_t g_feature_last_push_ms = 0;
 
 void app_main(void)
 {
@@ -231,13 +230,13 @@ void app_main(void)
 
             (void)synapse_ble_gatt_push_feature(
                 (uint16_t)ppg.hr_bpm,           // hr_bpm (0xFFFF if invalid)
-                (uint16_t)ppg.rmssd_ms,         // rr_interval_ms proxy
+                0xFFFF,                         // rr_interval_ms (genuine RR only; not RMSSD)
                 ppg_sqi,
                 ppg_map,
                 ecg_quality,
                 stress_level,
                 0,                                // motion_level (placeholder until IMU feature wired)
-                0                                 // temperature (0.01°C, placeholder until TMP117 wired)
+                0x7FFF                            // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
             );
         }
         // --------------------------------------------------------------------
