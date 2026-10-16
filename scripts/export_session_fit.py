@@ -462,7 +462,58 @@ def write_record(
     write_crc16(w.buf)
 
 
-def write_record_v2(
+RECORD_LOCAL_TYPE = 10
+DEV_DATA_LOCAL_TYPE = 11
+
+
+def dev_size(field_id: int) -> int:
+    return 2 if field_id in (SYNAPSE_DEV_FIELD_RMSSD, SYNAPSE_DEV_FIELD_SDNN, SYNAPSE_DEV_FIELD_LF_HF) else 1
+
+
+def write_record_definitions(w: FitWriter) -> None:
+    """Write FIT definition messages once (record lt=10, developer data lt=11)."""
+
+    dev_fields = [
+        (DEV_FIELD_NUM_STRESS, SYNAPSE_DEV_FIELD_STRESS),
+        (DEV_FIELD_NUM_SQI, SYNAPSE_DEV_FIELD_SQI),
+        (DEV_FIELD_NUM_MAP, SYNAPSE_DEV_FIELD_MAP),
+        (DEV_FIELD_NUM_ECG_QUALITY, SYNAPSE_DEV_FIELD_ECG_QUALITY),
+        (DEV_FIELD_NUM_SLEEP_STAGE, SYNAPSE_DEV_FIELD_SLEEP_STAGE),
+        (DEV_FIELD_NUM_RMSSD, SYNAPSE_DEV_FIELD_RMSSD),
+        (DEV_FIELD_NUM_SDNN, SYNAPSE_DEV_FIELD_SDNN),
+        (DEV_FIELD_NUM_LF_HF, SYNAPSE_DEV_FIELD_LF_HF),
+    ]
+
+    # Record definition (local msg type 10)
+    w.write(mesg_header(RECORD_LOCAL_TYPE, True))
+    w.write_u8(0)
+    w.write_u8(0)
+    w.write_u16(FIT_MESG_RECORD)
+    w.write_u8(2)
+    for fnum, size, btype in ((253, 4, FIT_BASE_TYPE_UINT32), (3, 1, FIT_BASE_TYPE_UINT8)):
+        w.write_u8(fnum)
+        w.write_u8(size)
+        w.write_u8(btype)
+    write_crc16(w.buf)
+
+    # Developer data definition (local msg type 11)
+    w.write(mesg_header(DEV_DATA_LOCAL_TYPE, True))
+    w.write_u8(0)
+    w.write_u8(0)
+    w.write_u16(FIT_MESG_DEVELOPER_DATA)
+    w.write_u8(2 + len(dev_fields))
+    for fnum, size, btype in ((253, 4, FIT_BASE_TYPE_UINT32), (0, 1, FIT_BASE_TYPE_UINT8)):
+        w.write_u8(fnum)
+        w.write_u8(size)
+        w.write_u8(btype)
+    for fnum, fid in dev_fields:
+        w.write_u8(fnum)
+        w.write_u8(dev_size(fid))
+        w.write_u8(FIT_BASE_TYPE_UINT16 if dev_size(fid) == 2 else FIT_BASE_TYPE_UINT8)
+    write_crc16(w.buf)
+
+
+def write_record_data(
     w: FitWriter,
     timestamp_s: int,
     hr_bpm: int,
@@ -475,12 +526,8 @@ def write_record_v2(
     rmssd_ms: int,
     sdnn_ms: int,
     lf_hf: int,
-    local_msg_type: int,
 ) -> None:
-    """FIT Record + Developer Data (corrected sizes)."""
-
-    def dev_size(field_id: int) -> int:
-        return 2 if field_id in (SYNAPSE_DEV_FIELD_RMSSD, SYNAPSE_DEV_FIELD_SDNN, SYNAPSE_DEV_FIELD_LF_HF) else 1
+    """FIT Record + Developer Data messages (definitions already emitted)."""
 
     dev_fields = [
         (DEV_FIELD_NUM_STRESS, stress, SYNAPSE_DEV_FIELD_STRESS),
@@ -493,45 +540,16 @@ def write_record_v2(
         (DEV_FIELD_NUM_LF_HF, lf_hf, SYNAPSE_DEV_FIELD_LF_HF),
     ]
 
-    # Record definition
-    w.write(mesg_header(local_msg_type, True))
-    w.write_u8(0)
-    w.write_u8(0)
-    w.write_u16(FIT_MESG_RECORD)
-    w.write_u8(2)
-    for fnum, size, btype in ((253, 4, FIT_BASE_TYPE_UINT32), (3, 1, FIT_BASE_TYPE_UINT8)):
-        w.write_u8(fnum)
-        w.write_u8(size)
-        w.write_u8(btype)
-    write_crc16(w.buf)
-
-    # Record data
-    w.write(mesg_header(local_msg_type, False))
+    # Record data (local msg type 10)
+    w.write(mesg_header(RECORD_LOCAL_TYPE, False))
     w.write_u32(timestamp_s)
     w.write_u8(hr_bpm if (0 <= hr_bpm <= 255) else INVALID_U8)
     write_crc16(w.buf)
 
-    # Developer data definition
-    dev_def_type = local_msg_type + 1
-    w.write(mesg_header(dev_def_type, True))
-    w.write_u8(0)
-    w.write_u8(0)
-    w.write_u16(FIT_MESG_DEVELOPER_DATA)
-    w.write_u8(2 + len(dev_fields))
-    for fnum, size, btype in ((253, 4, FIT_BASE_TYPE_UINT32), (0, 1, FIT_BASE_TYPE_UINT8)):
-        w.write_u8(fnum)
-        w.write_u8(size)
-        w.write_u8(btype)
-    for fnum, val, fid in dev_fields:
-        w.write_u8(fnum)
-        w.write_u8(dev_size(fid))
-        w.write_u8(FIT_BASE_TYPE_UINT16 if dev_size(fid) == 2 else FIT_BASE_TYPE_UINT8)
-    write_crc16(w.buf)
-
-    # Developer data values
-    w.write(mesg_header(dev_def_type, False))
+    # Developer data values (local msg type 11)
+    w.write(mesg_header(DEV_DATA_LOCAL_TYPE, False))
     w.write_u32(timestamp_s)
-    w.write_u8(0)
+    w.write_u8(0)  # developer_data_index 0
     for fnum, val, fid in dev_fields:
         size = dev_size(fid)
         u = 0 if val is None else int(val)
@@ -615,8 +633,10 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
     write_developer_data_id(w)
     write_field_description(w)
 
+    # Record definitions once (record lt=10, developer data lt=11)
+    write_record_definitions(w)
+
     # Records: one per window_s seconds
-    local_msg_type = 10
     n_records = 0
 
     try:
@@ -645,7 +665,7 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
 
         ts_fit = fit_timestamp(datetime.fromtimestamp(win_t0, tz=timezone.utc))
 
-        write_record_v2(
+        write_record_data(
             w,
             timestamp_s=ts_fit,
             hr_bpm=hr,
@@ -658,9 +678,7 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
             rmssd_ms=int(rmssd) if rmssd != INVALID_U16 else INVALID_U16,
             sdnn_ms=int(sdnn) if sdnn != INVALID_U16 else INVALID_U16,
             lf_hf=lf_hf,
-            local_msg_type=local_msg_type,
         )
-        local_msg_type += 2
         n_records += 1
 
     # Fix data size in header (bytes 4-7)

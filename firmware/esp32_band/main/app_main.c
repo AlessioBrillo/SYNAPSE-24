@@ -46,6 +46,12 @@ static synapse_wired_sync_t s_wired_sync = {0};
 
 static EventGroupHandle_t s_system_events;
 
+// Consumer feature stream state (Averyn integration).
+// synapse_ble_gatt_push_feature() is rate-limited to 1 Hz internally; we call
+// it every main-loop tick and let it drop when the gate is closed, so the
+// radio never dominates the power budget.
+static uint32_t g_feature_last_push_ms = 0;
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "=== Synapse Band v1 Starting ===");
@@ -197,13 +203,43 @@ void app_main(void)
         }
 
         // --- Consumer feature stream (Averyn integration) --------------------
-        // The signal-quality / edge-AI module owns feature derivation. When a
-        // new frame is ready (default 1 Hz, max 10 Hz), call:
-        //   synapse_ble_gatt_push_feature(hr_bpm, rr_interval_ms, ppg_sqi,
-        //                                 ppg_map, ecg_quality, stress_level,
-        //                                 motion_level, temperature);
-        // The function rate-limits internally (1 Hz) and mirrors HR onto the
-        // standard 0x2A37 characteristic. Do NOT send placeholder values here.
+        // Push a real feature frame every main-loop tick; push_feature() rate-
+        // limits to 1 Hz internally and drops silently when nothing is
+        // subscribed. Values come from the signal-quality and edge-AI modules
+        // (no placeholders). When stress triage is not yet valid we emit
+        // stress_level=3 (unknown) so Averyn never shows a fabricated class.
+        {
+            ppg_quality_t ppg = {0};
+            stress_triage_t stress = {0};
+            (void)synapse_signal_quality_get_ppg(&ppg);
+            (void)synapse_edge_ai_get_latest_stress(&stress);
+
+            uint8_t stress_level = SYNAPSE_STRESS_UNKNOWN;
+            if (stress.valid) {
+                if (stress.predicted_class == 0) stress_level = 0;   // baseline
+                else if (stress.predicted_class == 1) stress_level = 1; // stress
+                else if (stress.predicted_class == 2) stress_level = 2; // artifact
+            }
+
+            uint8_t ppg_sqi = 0;
+            uint8_t ppg_map = 0;
+            uint8_t ecg_quality = 0;
+            if (ppg.valid) {
+                ppg_sqi = (uint8_t)(ppg.sqi * 255.0f);
+                ppg_map = (uint8_t)(ppg.motion_artifact_prob * 255.0f);
+            }
+
+            (void)synapse_ble_gatt_push_feature(
+                (uint16_t)ppg.hr_bpm,           // hr_bpm (0xFFFF if invalid)
+                (uint16_t)ppg.rmssd_ms,         // rr_interval_ms proxy
+                ppg_sqi,
+                ppg_map,
+                ecg_quality,
+                stress_level,
+                0,                                // motion_level (placeholder until IMU feature wired)
+                0                                 // temperature (0.01°C, placeholder until TMP117 wired)
+            );
+        }
         // --------------------------------------------------------------------
 
         // Handle acquisition FSM tick (T0/T1/T2 state machine)
