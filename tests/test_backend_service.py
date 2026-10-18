@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from backend.service import DataPlaneService, JobRunRequest, JobRunResponse  # noqa: E402
 from synapse24.utils import write_xdf  # noqa: E402
+
+
 def _crc16(data: bytes, crc: int = 0) -> int:
     for byte in data:
         crc ^= byte

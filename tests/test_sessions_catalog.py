@@ -72,7 +72,8 @@ def test_index_xdf_records_stream_metadata(tmp_path: Path) -> None:
     assert s.n_samples == 1000
     assert rec.started_at is None  # validate_xdf non fornisce orario di inizio assoluto
     assert rec.ended_at is None
-    assert rec.duration_s is not None and rec.duration_s > 0
+    assert rec.duration_s is not None
+    assert rec.duration_s > 0
 
 
 def test_index_fit_is_indexed_lightly(tmp_path: Path) -> None:

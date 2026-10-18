@@ -102,7 +102,7 @@ def build_session_report(
 
     # v1: raw waveforms are not embedded; the preview series is empty and the
     # decimation policy is declared so consumers know how to decimate on demand.
-    series = {"timestamps": [], "min": [], "max": []}
+    series: dict[str, list] = {"timestamps": [], "min": [], "max": []}
 
     report: dict[str, Any] = {
         "report_version": REPORT_VERSION,

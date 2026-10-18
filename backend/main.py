@@ -22,8 +22,6 @@ from backend.service import DataPlaneService, JobRunRequest, JobRunResponse  # n
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-connected_clients: set[Any] = set()
-
 _FASTAPI_AVAILABLE = True
 try:  # fastapi/uvicorn are runtime deps, not dev deps
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: F401
@@ -44,41 +42,9 @@ def _sessions_dir() -> Path:
     return Path(os.environ.get("SYNAPSE_SESSIONS_DIR", "data/sessions"))
 
 
-def create_app() -> Any:
-    """Build the FastAPI app. Requires fastapi."""
-    if not _FASTAPI_AVAILABLE:
-        raise RuntimeError("fastapi is not installed; install backend/requirements.txt")
+def _register_legacy_endpoints(application: Any) -> None:
+    """Register the legacy dashboard endpoints (kept functional)."""
 
-    from fastapi import FastAPI as _FA
-    from fastapi import WebSocket as _WS
-    from fastapi import WebSocketDisconnect as _WSD
-    from fastapi.middleware.cors import CORSMiddleware as _CORS
-
-    connected_clients_local: set[_WS] = set()
-
-    @asynccontextmanager
-    async def lifespan(application: _FA):
-        logger.info("SYNAPSE-24 Data Plane API started")
-        yield
-        logger.info("SYNAPSE-24 Data Plane API shut down")
-
-    application = _FA(
-        title="SYNAPSE-24 Data Plane API",
-        description="Read-side interfaces for Averyn: sessions, reports, worker jobs.",
-        version="1.0.0",
-        lifespan=lifespan,
-    )
-    application.add_middleware(
-        _CORS,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # ------------------------------------------------------------------
-    # Legacy dashboard endpoints (kept functional)
-    # ------------------------------------------------------------------
     @application.get("/api/health")
     async def health_check():
         return {"status": "ok", "service": "synapse24-data-plane"}
@@ -140,9 +106,10 @@ def create_app() -> Any:
                 return yaml.safe_load(fh)
         return {"error": "config/hardware.yaml not found"}
 
-    # ------------------------------------------------------------------
-    # Data plane (Averyn-facing) endpoints
-    # ------------------------------------------------------------------
+
+def _register_data_plane_endpoints(application: Any) -> None:
+    """Register the Averyn-facing data plane endpoints."""
+
     @application.get("/api/v1/sessions")
     async def list_sessions():
         svc = DataPlaneService(_sessions_dir())
@@ -210,11 +177,13 @@ def create_app() -> Any:
             job_id=result.get("job_id", ""),
         )
 
-    # ------------------------------------------------------------------
-    # WebSocket
-    # ------------------------------------------------------------------
+
+def _register_websocket(application: Any) -> None:
+    """Register the WebSocket live endpoint."""
+    connected_clients_local: set[WebSocket] = set()
+
     @application.websocket("/ws/live")
-    async def websocket_live(websocket: _WS):
+    async def websocket_live(websocket: WebSocket):
         await websocket.accept()
         connected_clients_local.add(websocket)
         try:
@@ -231,8 +200,38 @@ def create_app() -> Any:
                         },
                     }
                 )
-        except _WSD:
+        except WebSocketDisconnect:
             connected_clients_local.discard(websocket)
+
+
+def create_app() -> Any:
+    """Build the FastAPI app. Requires fastapi."""
+    if not _FASTAPI_AVAILABLE:
+        raise RuntimeError("fastapi is not installed; install backend/requirements.txt")
+
+    @asynccontextmanager
+    async def lifespan(application: Any):
+        logger.info("SYNAPSE-24 Data Plane API started")
+        yield
+        logger.info("SYNAPSE-24 Data Plane API shut down")
+
+    application = FastAPI(
+        title="SYNAPSE-24 Data Plane API",
+        description="Read-side interfaces for Averyn: sessions, reports, worker jobs.",
+        version="1.0.0",
+        lifespan=lifespan,
+    )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    _register_legacy_endpoints(application)
+    _register_data_plane_endpoints(application)
+    _register_websocket(application)
 
     return application
 

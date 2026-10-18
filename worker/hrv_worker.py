@@ -83,6 +83,75 @@ DEV_FIELD_INVALID_UINT16 = 0xFFFF
 # ---------------------------------------------------------------------------
 
 
+def _parse_dev_fields(data: bytes, pos: int, end: int) -> tuple[dict[str, int], int]:
+    """Parse the 8 Synapse developer fields at `pos`, returning (vals, new_pos)."""
+    vals: dict[str, int] = {}
+    for field_id in (
+        SYNAPSE_DEV_FIELD_STRESS,
+        SYNAPSE_DEV_FIELD_SQI,
+        SYNAPSE_DEV_FIELD_MAP,
+        SYNAPSE_DEV_FIELD_ECG_QUALITY,
+        SYNAPSE_DEV_FIELD_SLEEP_STAGE,
+        SYNAPSE_DEV_FIELD_RMSSD,
+        SYNAPSE_DEV_FIELD_SDNN,
+        SYNAPSE_DEV_FIELD_LF_HF,
+    ):
+        if pos + 1 > end:
+            break
+        v = data[pos]
+        pos += 1
+        if field_id in (
+            SYNAPSE_DEV_FIELD_RMSSD,
+            SYNAPSE_DEV_FIELD_SDNN,
+            SYNAPSE_DEV_FIELD_LF_HF,
+        ):
+            if pos + 1 > end:
+                break
+            v |= data[pos] << 8
+            pos += 1
+        vals[field_id] = v
+    return vals, pos
+
+
+def _parse_definition(
+    data: bytes,
+    pos: int,
+    end: int,
+    lt: int,
+    defs: dict[int, int],
+    def_data_len: dict[int, int],
+    dev_local_types: set[int],
+) -> int:
+    """Parse a FIT definition message; returns new position."""
+    # definition: reserved(1), arch(1), global mesg num(2), num fields(1)
+    if pos + 5 > end:
+        return pos
+    pos += 2  # reserved + arch
+    gnum = struct.unpack_from("<H", data, pos)[0]
+    pos += 2
+    nfields = data[pos]
+    pos += 1
+    defs[lt] = gnum  # type: ignore[name-defined]
+    if gnum == 209:
+        dev_local_types.add(lt)  # type: ignore[name-defined]
+    total = 0
+    for _ in range(nfields):
+        if pos + 3 > end:
+            break
+        _fnum = data[pos]
+        fsize = data[pos + 1]
+        ftype = data[pos + 2]
+        pos += 3
+        # Field size is declared explicitly in the definition; do not
+        # derive it from base_type (STRING is 17 bytes, base_type=7).
+        total += fsize
+    def_data_len[lt] = total  # type: ignore[name-defined]
+    # definition messages also carry a 2-byte CRC after the fields
+    if pos + 2 <= end:
+        pos += 2
+    return pos
+
+
 def read_fit_developer_records(path: Path) -> list[dict]:
     """Yield per-record developer field values from a FIT file.
 
@@ -104,78 +173,25 @@ def read_fit_developer_records(path: Path) -> list[dict]:
     # local msg types used for developer data (global mesg num 209)
     dev_local_types: set[int] = set()
 
-    def _field_bytes(base_type: int) -> int:
-        return {0: 1, 2: 1, 131: 1, 132: 2, 133: 4, 134: 4, 136: 4, 137: 8}.get(base_type, 1)
-
     while pos < end:
         b = data[pos]
         pos += 1
         is_def = bool(b & 0x80)
         lt = b & 0x3F
         if is_def:
-            # definition: reserved(1), arch(1), global mesg num(2), num fields(1)
-            if pos + 5 > end:
-                break
-            pos += 2  # reserved + arch
-            gnum = struct.unpack_from("<H", data, pos)[0]
-            pos += 2
-            nfields = data[pos]
-            pos += 1
-            defs[lt] = gnum
-            if gnum == 209:
-                dev_local_types.add(lt)
-            total = 0
-            for _ in range(nfields):
-                if pos + 3 > end:
-                    break
-                _fnum = data[pos]
-                fsize = data[pos + 1]
-                ftype = data[pos + 2]
-                pos += 3
-                # Field size is declared explicitly in the definition; do not
-                # derive it from base_type (STRING is 17 bytes, base_type=7).
-                total += fsize
-            def_data_len[lt] = total
-            # definition messages also carry a 2-byte CRC after the fields
-            if pos + 2 <= end:
-                pos += 2
+            pos = _parse_definition(data, pos, end, lt, defs, def_data_len, dev_local_types)
             continue
 
         # Data message: 1 byte header already consumed. If we know its size,
         # skip it unless it is the developer data block.
         if lt in dev_local_types:
-            # timestamp(u32) + developer_data_index(u8) + values
             if pos + 5 > end:
                 break
             ts = struct.unpack_from("<I", data, pos)[0]
             pos += 4
             dev_idx = data[pos]
             pos += 1
-            vals: dict[str, int] = {}
-            for field_id in (
-                SYNAPSE_DEV_FIELD_STRESS,
-                SYNAPSE_DEV_FIELD_SQI,
-                SYNAPSE_DEV_FIELD_MAP,
-                SYNAPSE_DEV_FIELD_ECG_QUALITY,
-                SYNAPSE_DEV_FIELD_SLEEP_STAGE,
-                SYNAPSE_DEV_FIELD_RMSSD,
-                SYNAPSE_DEV_FIELD_SDNN,
-                SYNAPSE_DEV_FIELD_LF_HF,
-            ):
-                if pos + 1 > end:
-                    break
-                v = data[pos]
-                pos += 1
-                if field_id in (
-                    SYNAPSE_DEV_FIELD_RMSSD,
-                    SYNAPSE_DEV_FIELD_SDNN,
-                    SYNAPSE_DEV_FIELD_LF_HF,
-                ):
-                    if pos + 1 > end:
-                        break
-                    v |= data[pos] << 8
-                    pos += 1
-                vals[field_id] = v
+            vals, pos = _parse_dev_fields(data, pos, end)
             records.append({"timestamp": ts, "dev": vals})
             # developer data also ends with a 2-byte CRC
             if pos + 2 <= end:

@@ -17,7 +17,8 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "validate_baseline.py"
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("validate_baseline_failclosed", SCRIPT)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["validate_baseline_failclosed"] = module
     spec.loader.exec_module(module)
@@ -45,7 +46,7 @@ def test_require_verified_datasets_passes_when_all_present(baseline_module, tmp_
     import scripts.download_datasets as dd  # noqa: PLC0415
 
     orig = dd.verify_all_datasets
-    dd.verify_all_datasets = lambda data_root: {"wesad": True, "mitbih": True, "sleep_edf": True}
+    dd.verify_all_datasets = lambda _: {"wesad": True, "mitbih": True, "sleep_edf": True}
     try:
         module.require_verified_datasets(tmp_path / "data", ["wesad", "mitbih", "sleep_edf"])
     finally:
@@ -79,7 +80,7 @@ def test_main_returns_zero_when_integrity_ok(baseline_module, monkeypatch):
     import scripts.download_datasets as dd  # noqa: PLC0415
 
     orig = dd.verify_all_datasets
-    dd.verify_all_datasets = lambda data_root: {"wesad": True, "mitbih": True, "sleep_edf": True}
+    dd.verify_all_datasets = lambda _: {"wesad": True, "mitbih": True, "sleep_edf": True}
     try:
         old_argv = sys.argv
         sys.argv = ["validate_baseline.py", "--data-dir", "data", "--dataset", "mitbih"]

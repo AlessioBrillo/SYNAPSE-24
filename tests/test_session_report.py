@@ -91,7 +91,8 @@ def _make_jobs() -> dict[str, dict]:
 def _assert_report_conforms(report: dict) -> None:
     """Lightweight conformance to contracts/schemas/session_report.json."""
     assert report["report_version"] == "session-report-v1"
-    assert isinstance(report["session_id"], str) and report["session_id"]
+    assert isinstance(report["session_id"], str)
+    assert report["session_id"]
     assert isinstance(report["device_serial"], str)
     assert report["format"] in ("xdf", "fit")
     assert set(report["window"].keys()) >= {"started_at", "ended_at", "duration_s"}
@@ -106,7 +107,8 @@ def _assert_report_conforms(report: dict) -> None:
     assert isinstance(report["events"], list)
     q = report["quality"]
     assert q["overall"] in ("good", "warning", "poor")
-    assert "raw_ref" in report and "sha256" in report["raw_ref"]
+    assert "raw_ref" in report
+    assert "sha256" in report["raw_ref"]
     assert isinstance(report["generated_at"], str)
 
 

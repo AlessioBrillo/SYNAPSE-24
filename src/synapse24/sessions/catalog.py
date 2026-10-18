@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     p_show.set_defaults(func=_cmd_show)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    return int(args.func(args))
 
 
 if __name__ == "__main__":
