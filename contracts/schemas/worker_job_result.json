@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synapse stateless worker JobResult payload schemas",
+  "version": "1.0",
+  "description": "Canonical payload shapes returned by the Synapse stateless inference worker (worker/hrv_worker.py). One schema per JobType. Averyn stores the `payload` as imported data keyed to the job id and never coerces it into an Averyn metric type. See worker/job_contract.py.",
+  "algorithm_version_prefix": "synapse-worker-",
+  "payloads": {
+    "hrv_trends": {
+      "title": "HRV trends per window",
+      "type": "object",
+      "required": ["windows", "source"],
+      "properties": {
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["window_start", "rmssd_ms", "sdnn_ms", "mean_rr_ms", "hr_mean_bpm"],
+            "properties": {
+              "window_start": {"type": "number"},
+              "window_end": {"type": "number"},
+              "rmssd_ms": {"type": ["number", "null"]},
+              "sdnn_ms": {"type": ["number", "null"]},
+              "mean_rr_ms": {"type": ["number", "null"]},
+              "hr_mean_bpm": {"type": ["number", "null"]},
+              "stress_level": {"type": ["integer", "null"]},
+              "sqi": {"type": ["integer", "null"]},
+              "map": {"type": ["integer", "null"]}
+            }
+          }
+        },
+        "source": {"type": "string", "enum": ["fit-file", "xdf-file"]}
+      }
+    },
+    "stress_daily": {
+      "title": "Daily stress summary from edge triage labels",
+      "type": "object",
+      "required": ["stress_level", "stress_prob", "baseline_prob", "artifact_prob", "window_s", "source"],
+      "properties": {
+        "stress_level": {"type": "integer", "minimum": 0, "maximum": 2},
+        "stress_prob": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "baseline_prob": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "artifact_prob": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "window_s": {"type": "number", "minimum": 0},
+        "daily_average": {"type": "number"},
+        "peak_stress": {"type": "number"},
+        "recovery_periods": {"type": "integer", "minimum": 0},
+        "source": {"type": "string"}
+      }
+    },
+    "sqi_report": {
+      "title": "Signal quality report per window",
+      "type": "object",
+      "required": ["sqi", "map", "ecg_quality", "window_s", "source"],
+      "properties": {
+        "sqi": {"type": "integer", "minimum": 0, "maximum": 255},
+        "map": {"type": "integer", "minimum": 0, "maximum": 255},
+        "ecg_quality": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+        "window_s": {"type": "number", "minimum": 0},
+        "per_channel": {"type": "array"},
+        "source": {"type": "string"}
+      }
+    },
+    "sleep_staging": {
+      "title": "Sleep staging (EEG/YASA only; never PPG/IMU proxy)",
+      "type": "object",
+      "required": ["sleep_stage", "confidence", "epoch_s", "source", "input_modality"],
+      "properties": {
+        "sleep_stage": {"type": "integer", "minimum": 0, "maximum": 4},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "epoch_s": {"type": "number", "minimum": 0},
+        "hypnogram": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 4}},
+        "input_modality": {"type": "string", "enum": ["eeg"]},
+        "aux_channels_used": {"type": "array", "items": {"type": "string"}},
+        "source": {"type": "string"}
+      }
+    }
+  }
+}

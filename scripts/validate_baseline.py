@@ -71,6 +71,38 @@ def resolve_baseline_datasets(name: str) -> list[str]:
         raise ValueError(f"Unknown dataset '{name}'. Valid: {valid}") from None
 
 
+class DatasetIntegrityError(RuntimeError):
+    """Raised when a requested dataset is missing or fails integrity.
+
+    The baseline gate must fail *loudly* on unverified input instead of
+    scoring empty/partial data (which would report a misleading 0.0
+    accuracy). See READINESS_GATE.md "Known failures on the dev host".
+    """
+
+
+def require_verified_datasets(data_root: Path, datasets: list[str]) -> None:
+    """Fail closed when a requested dataset is missing or fails integrity.
+
+    Refuses to score unverified or empty data. Uses the same integrity
+    checks as `scripts.download_datasets.verify_all_datasets`.
+    """
+    try:
+        from scripts.download_datasets import verify_all_datasets  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover - import path issue
+        raise RuntimeError(f"Cannot load dataset integrity checker: {exc}") from exc
+
+    verification = verify_all_datasets(data_root)
+    missing = [ds for ds in datasets if not verification.get(ds, False)]
+    if missing:
+        raise DatasetIntegrityError(
+            "Dataset integrity failed for: "
+            + ", ".join(missing)
+            + ". Run `uv run python scripts/download_datasets.py --datasets "
+            + ", ".join(missing)
+            + "` first. Refusing to score unverified input."
+        )
+
+
 def validate_baseline_report_schema(report: dict[str, Any]) -> bool:
     """Enforce baseline_report.json schema v1.0 (fail fast on contract drift).
 
@@ -288,6 +320,7 @@ def validate_wesad_stress_classification(
             "per_fold_scores": [],
             "feature_source": feature_source,
             "surrogate": all_surrogate,
+            "target_met": False,
         }
 
     X = np.vstack(all_features)
@@ -307,6 +340,7 @@ def validate_wesad_stress_classification(
             "per_fold_scores": [],
             "feature_source": feature_source,
             "surrogate": all_surrogate,
+            "target_met": False,
         }
 
     # Random Forest with subject-grouped CV (GroupKFold - no subject leakage)
@@ -812,6 +846,13 @@ def main() -> int:
     """Main entry point for baseline validation."""
     args = _parse_args()
     tier = Tier(args.tier)
+
+    # Fail closed on missing/unverified datasets: never score empty data.
+    try:
+        require_verified_datasets(args.data_dir, resolve_baseline_datasets(args.dataset))
+    except DatasetIntegrityError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     all_results = _run_dataset_validation(args, tier)
     xdf_summary = run_xdf_validation_summary(args.output_dir)

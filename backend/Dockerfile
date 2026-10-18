@@ -1,27 +1,27 @@
-# Backend Dockerfile
+# Backend Dockerfile — SYNAPSE-24 Data Plane API.
+# Build context: repository root (see docker-compose.yml).
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
+# Python runtime deps (FastAPI, uvicorn, pydantic, pylsl, pyserial, pyyaml, python-dotenv,
+# numpy + the full synapse24 scientific stack comes via `pip install -e ./src`).
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install SYNAPSE-24 in development mode
+# SYNAPSE-24 package (signal_quality, sessions, report, utils, ingestion, ...).
 COPY src ./src
 RUN pip install --no-cache-dir -e ./src
 
-# Copy config
+# Worker package (job_contract + hrv_worker) + backend app.
+COPY worker ./worker
+COPY backend/main.py ./main.py
 COPY config ./config
 
-# Expose port
 EXPOSE 8000
 
-# Default command (overridden in docker-compose)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
