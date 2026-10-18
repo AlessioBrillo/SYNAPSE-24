@@ -258,7 +258,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src", "worker"]
 omit = [
     "tests/*",
     "scripts/*",

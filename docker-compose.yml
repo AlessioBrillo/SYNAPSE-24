@@ -1,23 +1,24 @@
 version: '3.8'
 
 services:
-  # Backend API (FastAPI)
+  # Backend API (FastAPI) — SYNAPSE-24 Data Plane.
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - ./src:/app/src:ro
-      - ./config:/app/config:ro
     environment:
-      - PYTHONPATH=/app/src
+      - PYTHONPATH=/app/src:/app
       - SYNAPSE_CONFIG_DIR=/app/config
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    depends_on:
-      - redis
+      - SYNAPSE_SESSIONS_DIR=/app/data/sessions
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./src:/app/src:ro
+      - ./worker:/app/worker:ro
+      - ./config:/app/config:ro
+      - ./data:/app/data:ro
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     networks:
       - synapse-network
 
@@ -44,16 +45,6 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    networks:
-      - synapse-network
-
-  # LSL Relay (for network LSL streaming)
-  lsl-relay:
-    image: ghcr.io/synapse24/lsl-relay:latest
-    ports:
-      - "22345:22345"  # LSL TCP port
-    environment:
-      - LSL_RELAY_PORT=22345
     networks:
       - synapse-network
 

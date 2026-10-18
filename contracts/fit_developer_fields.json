@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synapse Band v1 FIT developer data fields",
+  "version": "1.0",
+  "description": "Canonical descriptor of the flat scalar FIT developer fields written by the Synapse Band v1 firmware. Single source of truth shared by firmware/esp32_band/fit/fit_writer.h, scripts/export_session_fit.py and worker/hrv_worker.py. Field IDs are immutable once a consumer (Averyn) imports files.",
+  "field_ids_are_immutable": true,
+  "num_fields": 8,
+  "fields": [
+    {
+      "id": 0,
+      "name": "synapse_stress",
+      "c_name": "SYNAPSE_DEV_FIELD_STRESS",
+      "type": "uint8",
+      "unit": "enum",
+      "invalid": 255,
+      "enum": {
+        "0": "baseline",
+        "1": "stress",
+        "2": "artifact",
+        "3": "unknown"
+      },
+      "description": "Stress triage label per record (edge TFLM triage output)."
+    },
+    {
+      "id": 1,
+      "name": "synapse_sqi",
+      "c_name": "SYNAPSE_DEV_FIELD_SQI",
+      "type": "uint8",
+      "unit": "index",
+      "range": [0, 255],
+      "invalid": 255,
+      "description": "PPG signal quality index (0-255 scaled 0.0-1.0)."
+    },
+    {
+      "id": 2,
+      "name": "synapse_map",
+      "c_name": "SYNAPSE_DEV_FIELD_MAP",
+      "type": "uint8",
+      "unit": "probability",
+      "range": [0, 255],
+      "invalid": 255,
+      "description": "Motion artifact probability (0-255 scaled 0.0-1.0)."
+    },
+    {
+      "id": 3,
+      "name": "synapse_ecg_quality",
+      "c_name": "SYNAPSE_DEV_FIELD_ECG_QUALITY",
+      "type": "uint8",
+      "unit": "confidence",
+      "range": [0, 255],
+      "invalid": 255,
+      "description": "ECG quality confidence (0-255 scaled 0.0-1.0)."
+    },
+    {
+      "id": 4,
+      "name": "synapse_sleep_stage",
+      "c_name": "SYNAPSE_DEV_FIELD_SLEEP_STAGE",
+      "type": "uint8",
+      "unit": "epoch label",
+      "invalid": 255,
+      "enum": {
+        "0": "wake",
+        "1": "light",
+        "2": "deep",
+        "3": "rem",
+        "4": "unknown"
+      },
+      "description": "Sleep stage per 30s epoch (YASA space: W,N1,N2,N3,REM). Averyn may collapse light+deep; the wire keeps all five."
+    },
+    {
+      "id": 5,
+      "name": "synapse_rmssd",
+      "c_name": "SYNAPSE_DEV_FIELD_RMSSD",
+      "type": "uint16",
+      "unit": "ms",
+      "range": [0, 65534],
+      "invalid": 65535,
+      "description": "RMSSD over the analysis window."
+    },
+    {
+      "id": 6,
+      "name": "synapse_sdnn",
+      "c_name": "SYNAPSE_DEV_FIELD_SDNN",
+      "type": "uint16",
+      "unit": "ms",
+      "range": [0, 65534],
+      "invalid": 65535,
+      "description": "SDNN over the analysis window."
+    },
+    {
+      "id": 7,
+      "name": "synapse_lf_hf",
+      "c_name": "SYNAPSE_DEV_FIELD_LF_HF",
+      "type": "uint16",
+      "unit": "ratio_x100",
+      "range": [0, 65534],
+      "invalid": 65535,
+      "description": "LF/HF ratio multiplied by 100 over the analysis window."
+    }
+  ]
+}

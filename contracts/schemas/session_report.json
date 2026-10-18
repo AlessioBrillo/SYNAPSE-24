@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synapse SessionReport v1",
+  "version": "1.0",
+  "description": "SessionReport v1: the representation the Synapse local service exposes to Averyn for a single recorded session. Raw waveforms remain in the source FIT/XDF files; this report carries metadata, decimation policy, windowed metrics, events and a quality summary.",
+  "type": "object",
+  "required": ["report_version", "session_id", "device_serial", "format", "window", "streams", "metrics", "events", "quality", "generated_at"],
+  "properties": {
+    "report_version": {"const": "session-report-v1"},
+    "session_id": {"type": "string"},
+    "device_serial": {"type": "string"},
+    "format": {"type": "string", "enum": ["xdf", "fit"]},
+    "window": {
+      "type": "object",
+      "properties": {
+        "started_at": {"type": ["string", "null"]},
+        "ended_at": {"type": ["string", "null"]},
+        "duration_s": {"type": ["number", "null"]}
+      }
+    },
+    "streams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "sampling_rate_hz", "n_samples"],
+        "properties": {
+          "name": {"type": "string"},
+          "type": {"type": "string"},
+          "sampling_rate_hz": {"type": "number"},
+          "n_samples": {"type": "integer"},
+          "unit": {"type": "string"}
+        }
+      }
+    },
+    "n_samples_total": {"type": "integer"},
+    "decimation": {
+      "type": "object",
+      "required": ["factor", "policy", "applied_to"],
+      "properties": {
+        "factor": {"type": "integer", "minimum": 1},
+        "policy": {"type": "string", "enum": ["min_max_envelope", "none"]},
+        "applied_to": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "series": {
+      "type": "object",
+      "description": "Decimated preview series (empty in v1: raw waveforms live in the source FIT/XDF).",
+      "properties": {
+        "timestamps": {"type": "array", "items": {"type": "number"}},
+        "min": {"type": "array", "items": {"type": "number"}},
+        "max": {"type": "array", "items": {"type": "number"}}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Windowed metrics keyed by worker computation type (hrv_trends, stress_daily, sqi_report, sleep_staging).",
+      "additionalProperties": true
+    },
+    "events": {
+      "type": "array",
+      "description": "Detected episodes (stress episodes, sleep stage transitions, ...).",
+      "items": {"type": "object"}
+    },
+    "quality": {
+      "type": "object",
+      "required": ["overall"],
+      "properties": {
+        "overall": {"type": "string", "enum": ["good", "warning", "poor"]},
+        "xdf_valid": {"type": ["boolean", "null"]},
+        "fit_valid": {"type": ["boolean", "null"]},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "raw_ref": {
+      "type": "object",
+      "description": "Reference to the source file(s).",
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": "string"},
+        "size_bytes": {"type": "integer"}
+      }
+    },
+    "generated_at": {"type": "string"}
+  }
+}
