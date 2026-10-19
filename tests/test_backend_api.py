@@ -225,7 +225,10 @@ def test_job_run_hrv_trends(client: TestClient):
     xdf = _session_by_format(client, "xdf")
     r = client.post(
         "/api/v1/jobs/run",
-        json={"computation_type": "hrv_trends", "file_path": _session_path(client, xdf["session_id"])},
+        json={
+            "computation_type": "hrv_trends",
+            "file_path": _session_path(client, xdf["session_id"]),
+        },
     )
     assert r.status_code == 200
     res = r.json()
@@ -238,7 +241,10 @@ def test_job_run_sqi_report(client: TestClient):
     fit = _session_by_format(client, "fit")
     r = client.post(
         "/api/v1/jobs/run",
-        json={"computation_type": "sqi_report", "file_path": _session_path(client, fit["session_id"])},
+        json={
+            "computation_type": "sqi_report",
+            "file_path": _session_path(client, fit["session_id"]),
+        },
     )
     assert r.status_code == 200
     res = r.json()

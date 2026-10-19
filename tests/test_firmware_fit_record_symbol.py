@@ -28,9 +28,7 @@ def test_fit_write_record_defined_and_called() -> None:
     calls = source.count("synapse_fit_write_record(")
 
     assert FIT_WRITER.is_file(), f"missing firmware file: {FIT_WRITER}"
-    assert defs == 1, (
-        f"synapse_fit_write_record defined {defs} times (expected exactly 1)"
-    )
+    assert defs == 1, f"synapse_fit_write_record defined {defs} times (expected exactly 1)"
     assert calls >= 2, (
         f"synapse_fit_write_record called {calls} times (expected definition + "
         "at least one call site)"
@@ -41,6 +39,5 @@ def test_no_stale_write_record_name() -> None:
     """The old, misspelled name ``write_record`` must not remain as a definition."""
     source = FIT_WRITER.read_text(encoding="utf-8")
     assert "static esp_err_t write_record(" not in source, (
-        "stale static definition 'write_record' still present; expected "
-        "'synapse_fit_write_record'"
+        "stale static definition 'write_record' still present; expected 'synapse_fit_write_record'"
     )

@@ -5,7 +5,7 @@
 > Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
 
 [![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](compliance/LICENSING.md)
-[![CI](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml/badge.svg)](https://github.com/AlessioBrillo/SYNAPSE-24/actions/workflows/ci.yml)
+[![CI gate: Woodpecker](https://img.shields.io/badge/CI-Woodpecker-blue)](.woodpecker/ci.yml)
 
 > **Research platform — not a medical device.** SYNAPSE-24 has no regulatory clearance and must not be used for diagnosis or clinical decisions. See [COMPLIANCE.md](compliance/COMPLIANCE.md) and [PRIVACY.md](compliance/PRIVACY.md).
 
@@ -126,6 +126,9 @@ SYNAPSE-24/
 │       │   ├── emotibit.py       # EmotiBit adapter
 │       │   ├── esp32_tier0.py    # ESP32-S3 Tier 0 adapter
 │       │   ├── inear_eeg.py      # In-ear EEG adapter
+│       │   ├── raw_codec.py      # Raw research-sample frame codec (host)
+│       │   ├── research_ble_client.py # BLE client (injected transport)
+│       │   ├── research_client.py # Frame decoder + 64-bit clock + gap detection
 │       │   ├── registry.py       # Device registry
 │       │   └── synthetic.py      # Synthetic board for CI/testing
 │       ├── ingestion/      # Public dataset pipelines
@@ -147,6 +150,14 @@ SYNAPSE-24/
 │           ├── __init__.py
 │           ├── xdf.py            # XDF I/O, validation, round-trip
 │           └── xdf_correction.py # Timestamp drift correction
+│       ├── sessions/       # Session catalog (XDF/FIT indexing)
+│       │   ├── __init__.py
+│       │   ├── __main__.py
+│       │   └── catalog.py
+│       └── report/         # SessionReport v1 representation
+│           ├── __init__.py
+│           ├── __main__.py
+│           └── report.py
 ├── scripts/
 │   ├── __init__.py
 │   ├── download_datasets.py      # Dataset downloader with verification
@@ -275,13 +286,6 @@ uv run mypy --package synapse24 --config-file pyproject.toml
 uv run pytest --cov=src --cov-fail-under=80
 ```
 
-### Pre-commit Hooks
-
-```bash
-uv run pre-commit install
-uv run pre-commit run --all-files
-```
-
 ### Configuration
 
 All configuration via environment variables or YAML files in `config/`:
@@ -307,7 +311,13 @@ export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 - [x] Tier 0 sync ≤10ms residual drift, Tier 1 sync ≤1ms
 - [x] Edge AI triage model INT8 quantization with measured accuracy drop
 - [x] Power budget physics validated for 24h T0 + 10h T1
-- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass (592 tests, 82.6% coverage)
+- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass
+
+> Note: the WESAD/Sleep-EDF baseline run is not reproducible on this host
+> (dataset integrity fails — see docs/hardware/READINESS_GATE.md "Known
+> failures"). The headline claim is gated by tools/check_baseline_claim.py
+> against docs/baselines/phase0_results.json; populate that artifact with a
+> verified run before treating the WESAD ≥80% claim as confirmed here.
 
 ## Hardware Readiness (pre-purchase)
 

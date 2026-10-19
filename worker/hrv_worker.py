@@ -97,6 +97,7 @@ def _validate_payload(computation_type: JobType, payload: dict | None) -> list[s
         return [f"{computation_type.value}: {exc.message}"]
     return []
 
+
 # FIT constants (mirror scripts/export_session_fit.py)
 FIT_MESG_RECORD = 20
 FIT_MESG_DEVELOPER_DATA = 209
@@ -651,8 +652,10 @@ def dispatch(job_json: str, file_path: Path) -> str:
     # enforced when the caller actually supplied a sha256 (placeholder values
     # such as "" or "x" are skipped so lab/dispatch tests are not coupled to
     # file hashing).
-    if job.file_sha256 and len(job.file_sha256) == 64 and all(
-        c in "0123456789abcdefABCDEF" for c in job.file_sha256
+    if (
+        job.file_sha256
+        and len(job.file_sha256) == 64
+        and all(c in "0123456789abcdefABCDEF" for c in job.file_sha256)
     ):
         try:
             digest = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
