@@ -23,7 +23,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 DOCS = sorted((ROOT / "docs" / "hardware").glob("*.md"))
-ROOT_DOCS = [ROOT / "HARDWARE_BRINGUP.md", ROOT / "PHASE1_NEXT_STEPS.md"]
+ROOT_DOCS = [
+    ROOT / "HARDWARE_BRINGUP.md",
+    ROOT / "docs" / "archive" / "PHASE1_NEXT_STEPS.md",
+]
 
 # Commands that need hardware, a network, or a long run: parsed, not run.
 _INVOCATION = re.compile(
