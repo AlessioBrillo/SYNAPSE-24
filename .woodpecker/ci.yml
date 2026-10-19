@@ -15,6 +15,7 @@ steps:
       - uv run ruff format --check .
       - uv run mypy --package synapse24 --config-file pyproject.toml
       - uv run python tools/check_contract.py --verbose
+      - uv run python tools/check_baseline_claim.py
       - uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --dry-run --verbose
       - uv run pytest tests/test_phase1_dry_run.py -v --no-cov
       - uv run pytest --cov=src --cov=worker --cov-fail-under=80 --cov-report=term-missing
