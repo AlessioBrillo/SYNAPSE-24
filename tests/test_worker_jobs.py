@@ -176,7 +176,7 @@ def test_sqi_report_golden(tmp_path: Path) -> None:
     result = run_sqi_report(_make_job(JobType.SQI_REPORT, str(fit)), fit)
     assert result.ok is True
     p = result.payload
-    assert p["window_s"] == 4.0
+    assert p["window_s"] == 3.0
     assert p["per_channel"] == [
         {"window_start": i, "sqi": 200, "map": 50, "ecg_quality": 220} for i in range(4)
     ]

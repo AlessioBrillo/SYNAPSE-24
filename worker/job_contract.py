@@ -117,7 +117,7 @@ class JobResult:
 # Canonical result payload keys per computation_type. Averyn stores these as
 # value_json in imported_health_samples and never interprets them beyond
 # display.
-HRV_TRENDS_KEYS = {"rmssd_ms", "sdnn_ms", "mean_rr_ms", "hr_mean_bpm", "window_s"}
+HRV_TRENDS_KEYS = {"rmssd_ms", "sdnn_ms", "mean_rr_ms", "hr_mean_bpm"}
 STRESS_DAILY_KEYS = {"stress_level", "stress_prob", "baseline_prob", "artifact_prob", "window_s"}
 SQI_REPORT_KEYS = {"sqi", "map", "ecg_quality", "window_s"}
 SLEEP_STAGING_KEYS = {"sleep_stage", "confidence", "epoch_s"}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Synapse Band v1 GATT contract (v1, frozen)",
+  "version": "1.0",
+  "description": "Canonical GATT contract shared by config/hardware.yaml, firmware/esp32_band/ble (research + feature stream services), sdk/python/synapse_device/transport.py and Averyn's SynapseBleAdapter. UUIDs are immutable once a consumer imports them.",
+  "services": {
+    "research": {
+      "uuid": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70",
+      "description": "Raw sample research stream (ECG/PPG/ACC/GYRO/MAG/POWER) + clock sync",
+      "characteristics": {
+        "ECG":   "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71",
+        "PPG":   "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72",
+        "ACC":   "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73",
+        "GYRO":  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74",
+        "MAG":   "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75",
+        "SYNC":  "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78",
+        "POWER": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C79"
+      }
+    },
+    "feature_stream": {
+      "uuid": "f9e08ffd-3d34-441f-97a6-1bf0958123f1",
+      "description": "Consumer feature stream (HR/RR/SQI/stress) + device config + provisioning",
+      "characteristics": {
+        "feature":      "db4307e5-6cb3-4152-a0e2-81c3921168e9",
+        "device_config":"bf68d647-0d02-479a-8d75-7964a51f332f",
+        "provisioning": "4e200cf1-94ac-4d63-a161-a03e5d3bb14a"
+      }
+    },
+    "standard": {
+      "heart_rate":   "0x180D",
+      "battery":      "0x180F",
+      "device_info":  "0x180A"
+    }
+  }
+}
