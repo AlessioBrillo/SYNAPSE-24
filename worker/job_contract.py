@@ -16,12 +16,12 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime, timezone
+from enum import StrEnum
 from typing import Any
 
 
-class JobType(str, Enum):
+class JobType(StrEnum):
     """Computation types the worker can run. Extend only by TDD."""
 
     # Per-activity / per-window health signals from a stored FIT or XDF file.
@@ -39,12 +39,10 @@ class Job:
 
     job_id: str
     computation_type: JobType
-    algorithm_version: str          # worker's own version string, passed through verbatim
-    file_ref: str                   # reference to a file Averyn already stored (object key or path)
-    file_sha256: str                # so the worker can verify it hasn't been tampered
-    created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    algorithm_version: str  # worker's own version string, passed through verbatim
+    file_ref: str  # reference to a file Averyn already stored (object key or path)
+    file_sha256: str  # so the worker can verify it hasn't been tampered
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_json(self) -> str:
         return json.dumps(

@@ -25,4 +25,6 @@ steps:
     commands:
       - cd firmware/esp32_band
       - idf.py set-target esp32s3
-      - idf.py build
+      - idf.py build                      # band-full (sdkconfig.defaults)
+      - idf.py fullclean                  # reset before the core variant
+      - SDKCONFIG_DEFAULT="sdkconfig.defaults.core" idf.py build  # band-core

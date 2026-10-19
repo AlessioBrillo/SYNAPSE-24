@@ -113,8 +113,8 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
  */
 esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
-    uint16_t chr_handle = ble_gatts_find_chr(&BLE_UUID16_DECLARE(0x180D).u,
-                                             &BLE_UUID16_DECLARE(0x2A37).u, NULL, NULL);
+    uint16_t chr_handle = ble_gatts_find_chr(BLE_UUID16_DECLARE(0x180D),
+                                             BLE_UUID16_DECLARE(0x2A37), NULL, NULL);
     if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
     // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
     uint8_t flags = 0x01; // 16-bit HR value
@@ -160,8 +160,8 @@ esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging) {
     s_batt_level = level;
     s_batt_notify_pending = true;
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
-    uint16_t chr_handle = ble_gatts_find_chr(&BLE_UUID16_DECLARE(0x180F).u,
-                                             &BLE_UUID16_DECLARE(0x2A19).u, NULL, NULL);
+    uint16_t chr_handle = ble_gatts_find_chr(BLE_UUID16_DECLARE(0x180F),
+                                             BLE_UUID16_DECLARE(0x2A19), NULL, NULL);
     if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
     struct os_mbuf *om = ble_hs_mbuf_from_flat(&s_batt_level, 1);
     if (!om) return ESP_ERR_NO_MEM;
@@ -181,24 +181,6 @@ static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         if (data_len > sizeof(payload)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         if (data_len) os_mbuf_copydata(ctxt->om, 4, data_len, payload);
         synapse_provisioning_process_cmd(hdr[0], payload, data_len);
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
-
-static int body_loc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
-    (void)conn; (void)attr; (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        os_mbuf_append(ctxt->om, &s_body_location, sizeof(s_body_location));
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
-
-static int batt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
-    (void)conn; (void)attr; (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        os_mbuf_append(ctxt->om, &s_batt_level, sizeof(s_batt_level));
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;

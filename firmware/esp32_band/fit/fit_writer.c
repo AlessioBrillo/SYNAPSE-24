@@ -191,7 +191,7 @@ static void write_record_definition(void) {
 }
 
 // Write a data record: standard fields + Synapse developer data block.
-static esp_err_t write_record(const fit_record_t *record) {
+static esp_err_t synapse_fit_write_record(const fit_record_t *record) {
     if (!g_file) return ESP_ERR_INVALID_STATE;
 
     // --- Standard record (local msg type 0) ---
