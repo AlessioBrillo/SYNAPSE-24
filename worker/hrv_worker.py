@@ -682,8 +682,12 @@ def dispatch(job_json: str, file_path: Path) -> str:
     if result.ok and result.payload is not None:
         errors = _validate_payload(job.computation_type, result.payload)
         if errors:
-            result.ok = False
-            result.error = "schema violation: " + "; ".join(errors)
+            result = JobResult(
+                job_id=result.job_id,
+                ok=False,
+                error="schema violation: " + "; ".join(errors),
+                algorithm_version=result.algorithm_version,
+            )
     return result.to_json()
 
 
