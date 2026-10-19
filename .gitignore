@@ -79,6 +79,8 @@ config/secrets.yaml
 
 # ESP-IDF build artifacts
 firmware/**/build/
+# Archived frontend dependencies (not part of the project)
+docs/archive/frontend/node_modules/
 firmware/**/managed_components/
 firmware/**/sdkconfig
 firmware/**/sdkconfig.old

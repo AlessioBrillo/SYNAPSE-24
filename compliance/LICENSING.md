@@ -25,6 +25,25 @@ Open a GitHub issue titled **"Commercial licensing inquiry"** in this repository
 
 Dependencies keep their own licences and are **not** relicensed by either option above. See [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). A commercial licence covers only code owned by the copyright holder; obligations of third-party licences (attribution, MPL file-level terms, dataset terms) continue to apply to you.
 
+## Device-side licence split
+
+To keep the device firmware and host SDK adoptable (permissive, no copyleft)
+while the host-side service stack stays protected by the AGPL:
+
+| Component | Location | Licence | SPDX |
+|-----------|----------|---------|------|
+| Synapse-24 host package (`synapse24`), worker, local Data Plane backend | `src/synapse24/`, `worker/`, `backend/` | GNU AGPL v3.0 or later | `AGPL-3.0-or-later` |
+| Synapse Band v1 firmware (ESP-IDF, C/C++) | `firmware/` | MIT | `MIT` |
+| `synapse-device` host SDK (Python) | `sdk/python/` | Apache-2.0 | `Apache-2.0` |
+
+The SDK deliberately never imports AGPL-licensed `synapse24` code, so it can
+remain Apache-2.0 while `synapse24` depends on it. Firmware files carry the
+`MIT` SPDX header; SDK files carry `Apache-2.0`; `synapse24`/worker/backend
+files carry `AGPL-3.0-or-later`.
+
+The root [LICENSE](LICENSE) (AGPL-3.0-or-later) governs the host package;
+`firmware/LICENSE` and `sdk/python/LICENSE` govern the device-side deliverables.
+
 ## Contributions
 
 Dual licensing only works if the maintainer may relicense every line. Contributors therefore grant that right explicitly; see [CONTRIBUTING.md](CONTRIBUTING.md#licensing-of-contributions).

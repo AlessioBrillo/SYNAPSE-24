@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Backend API (FastAPI) — SYNAPSE-24 Data Plane.
+  # Backend API (FastAPI) — SYNAPSE-24 local Data Plane.
   backend:
     build:
       context: .
@@ -10,19 +10,33 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app/src:/app
-      - SYNAPSE_CONFIG_DIR=/app/config
       - SYNAPSE_SESSIONS_DIR=/app/data/sessions
     volumes:
       - ./backend:/app/backend:ro
-      - ./src:/app/src:ro
       - ./worker:/app/worker:ro
       - ./config:/app/config:ro
       - ./data:/app/data:ro
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
     networks:
       - synapse-network
 
-  # Frontend Dev Server (Vite)
+  # Stateless inference worker. Invoked by Averyn (or manually) with --job and
+  # --file; shares the same sessions volume as the backend.
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      - PYTHONPATH=/app/src:/app
+      - SYNAPSE_SESSIONS_DIR=/app/data/sessions
+    volumes:
+      - ./worker:/app/worker:ro
+      - ./config:/app/config:ro
+      - ./data:/app/data:ro
+    networks:
+      - synapse-network
+
+  # Frontend Dev Server (Vite) — owned by the Averyn repo, kept here for local dev.
   frontend:
     build:
       context: ./frontend
@@ -37,19 +51,6 @@ services:
     command: npm run dev -- --host 0.0.0.0
     networks:
       - synapse-network
-
-  # Redis for caching/session (optional)
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - synapse-network
-
-volumes:
-  redis-data:
 
 networks:
   synapse-network:

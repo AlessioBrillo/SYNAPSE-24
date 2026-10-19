@@ -23,10 +23,12 @@ Run standalone for lab testing:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import struct
 import sys
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +58,45 @@ except ImportError:  # pragma: no cover - executed as a script inside worker/
         JobResult,
         JobType,
     )
+
+# Payload JSON Schema (canonical, in contracts/). Validated lazily so the worker
+# imports on hosts without jsonschema installed.
+try:  # pragma: no cover - jsonschema is a dev/CI dependency
+    import jsonschema
+
+    _HAS_JSONSCHEMA = True
+except ImportError:  # pragma: no cover
+    jsonschema = None  # type: ignore[assignment]
+    _HAS_JSONSCHEMA = False
+
+_WORKER_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" / "schemas" / "worker_job_result.json"
+)
+
+
+@lru_cache(maxsize=1)
+def _load_worker_schema() -> dict | None:
+    if not _WORKER_SCHEMA_PATH.is_file():
+        return None
+    return json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _validate_payload(computation_type: JobType, payload: dict | None) -> list[str]:
+    """Return validation errors (empty when payload conforms to the schema)."""
+    if not _HAS_JSONSCHEMA or payload is None:
+        return []
+    schema = _load_worker_schema()
+    if schema is None:
+        return []
+    subschema = schema.get("payloads", {}).get(computation_type.value)
+    if subschema is None:
+        return []
+    try:
+        jsonschema.validate(instance=payload, schema=subschema)
+    except jsonschema.ValidationError as exc:  # type: ignore[attr-defined]
+        return [f"{computation_type.value}: {exc.message}"]
+    return []
+
 
 # FIT constants (mirror scripts/export_session_fit.py)
 FIT_MESG_RECORD = 20
@@ -490,11 +531,23 @@ def run_sqi_report(job: Job, file_path: Path) -> JobResult:
             }
         )
 
+    valid_sqi = [w["sqi"] for w in windows if w["sqi"] is not None]
+    valid_map = [w["map"] for w in windows if w["map"] is not None]
+    valid_ecq = [w["ecg_quality"] for w in windows if w["ecg_quality"] is not None]
+
+    # window_s is the real duration covered by the records (seconds), not a
+    # record count. Fall back to 0 when there is a single record / no timestamps.
+    timestamps = [w["window_start"] for w in windows if isinstance(w["window_start"], (int, float))]
+    window_s = float(max(timestamps) - min(timestamps)) if len(timestamps) > 1 else 0.0
+
+    def _mean_int(values: list[int]) -> int | None:
+        return int(round(sum(values) / len(values))) if values else None
+
     payload = {
-        "sqi": None,
-        "map": None,
-        "ecg_quality": None,
-        "window_s": float(len(windows)),
+        "sqi": _mean_int(valid_sqi),
+        "map": _mean_int(valid_map),
+        "ecg_quality": _mean_int(valid_ecq),
+        "window_s": window_s,
         "per_channel": windows,
         "source": "fit-file",
     }
@@ -595,6 +648,28 @@ def dispatch(job_json: str, file_path: Path) -> str:
         )
         return result.to_json()
 
+    # file_sha256 integrity check: refuse to process a tampered file. Only
+    # enforced when the caller actually supplied a sha256 (placeholder values
+    # such as "" or "x" are skipped so lab/dispatch tests are not coupled to
+    # file hashing).
+    if (
+        job.file_sha256
+        and len(job.file_sha256) == 64
+        and all(c in "0123456789abcdefABCDEF" for c in job.file_sha256)
+    ):
+        try:
+            digest = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
+        except OSError:
+            digest = ""
+        if digest != job.file_sha256.lower():
+            result = JobResult(
+                job_id=job.job_id,
+                ok=False,
+                error="file_sha256 mismatch: file may have been tampered",
+                algorithm_version="synapse-worker-v1",
+            )
+            return result.to_json()
+
     runner = _RUNNERS.get(job.computation_type)
     if runner is None:
         result = JobResult(
@@ -605,6 +680,17 @@ def dispatch(job_json: str, file_path: Path) -> str:
         )
     else:
         result = runner(job, Path(file_path))
+
+    # Contract enforcement: the payload must conform to its JSON Schema.
+    if result.ok and result.payload is not None:
+        errors = _validate_payload(job.computation_type, result.payload)
+        if errors:
+            result = JobResult(
+                job_id=result.job_id,
+                ok=False,
+                error="schema violation: " + "; ".join(errors),
+                algorithm_version=result.algorithm_version,
+            )
     return result.to_json()
 
 

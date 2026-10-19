@@ -1,7 +1,7 @@
 # Synapse Band v1 — Sports Wrist Wearable Firmware
 
 > **Target:** ESP32-S3, ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948) + GPS (MAX-M10S) + Temp (TMP117)
-> **Stack:** FreeRTOS + ESP-IDF 5.2+, Bluedroid BLE GATT, LittleFS FIT storage, TFLM Edge AI
+> **Stack:** FreeRTOS + ESP-IDF 5.5.5, NimBLE BLE GATT, SPIFFS FIT storage, TFLM Edge AI
 
 ## Architecture
 
@@ -16,10 +16,10 @@ esp32_band/
 ├── signal_quality/ PPG SQI/MAP/PI, ECG quality, IMU motion/sleep
 ├── edge_ai/        TFLM stress triage (3-class) + motion classifier
 ├── power/          Battery ADC, tier affordability, 24h budget
-├── ble/            Bluedroid GATT: HR/Battery/DIS + Synapse custom service
-├── fit/            FIT writer (LittleFS, profile 21.138, dev fields)
-├── provisioning/   BLE provisioning (WiFi + cloud + mTLS CSR flow)
-├── ota/            Signed OTA with rollback
+├── ble/            NimBLE GATT: HR/Battery/DIS + Synapse custom service
+├── fit/            FIT writer (SPIFFS, profile 21.138, dev fields)
+├── provisioning/   BLE provisioning (WiFi + cloud + mTLS CSR flow — stub)
+├── ota/            Signed OTA with rollback — stub
 └── main/           app_main entry, event group, main loop
 ```
 
@@ -37,13 +37,16 @@ Requires: ESP-IDF 5.2+, ESP32-S3 with 8MB PSRAM (TFLM arena 64KB).
 ## BLE GATT
 
 - Standard: Heart Rate (0x180D), Battery (0x180F), Device Info (0x180A)
-- Custom Synapse service (128-bit): feature stream (notify, 20B), device config (R/W), provisioning (W/N)
+- Custom Synapse service (128-bit): feature stream (notify, 26B), device config (R/W), provisioning (W/N)
+- Contract UUIDs: `contracts/gatt_v1.json` (frozen v1)
 
 ## FIT
 
-Sessions stored on LittleFS `/storage/session_<utc>.fit`, developer fields:
+Sessions stored on SPIFFS `session_<utc>.fit`, developer fields:
 `synapse_stress`, `synapse_sqi`, `synapse_map`, `synapse_ecg_quality`,
 `synapse_sleep_stage`, `synapse_rmssd`, `synapse_sdnn`, `synapse_lf_hf`.
+Note: on-device session start (FSM + FIT write) is not yet wired into `app_main`;
+see `docs/increments/DEVICE_LOOP_V1.md` PR1.
 
 ## References
 

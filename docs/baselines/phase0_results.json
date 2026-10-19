@@ -1,0 +1,32 @@
+{
+  "seed": null,
+  "timestamp": null,
+  "host": "CI / local workstation",
+  "verified_on_host": false,
+  "note": "Placeholder. The Phase 0 baseline run could not be completed on this host: WESAD and Sleep-EDF fail dataset integrity (see docs/hardware/READINESS_GATE.md Known failures), so the headline claim (WESAD >=80%, MIT-BIH Se/PPV >=99.6%, RMSSD MAE <5 ms, Sleep-EDF kappa floor) is NOT re-verified here. Populate this artifact with: scripts/validate_baseline.py --dataset both --output-dir docs/baselines",
+  "datasets": {
+    "wesad": {
+      "accuracy": null,
+      "target_met": null,
+      "surrogate": null,
+      "integrity_ok": false
+    },
+    "mitbih": {
+      "mean_sensitivity": null,
+      "mean_ppv": null,
+      "mean_rmssd_mae_ms": null,
+      "target_sensitivity_met": null,
+      "target_ppv_met": null,
+      "target_rmssd_mae_met": null,
+      "integrity_ok": true
+    },
+    "sleep_edf": {
+      "median_cohen_kappa": null,
+      "target_met": null,
+      "target_kappa": 0.65,
+      "integrity_ok": false
+    }
+  },
+  "xdf_validation": null,
+  "schema_version": "1.0"
+}

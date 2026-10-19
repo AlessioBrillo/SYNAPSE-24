@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a SYNAPSE-24 XDF session to a FIT file with Synapse developer data.
+r"""Export a SYNAPSE-24 XDF session to a FIT file with Synapse developer data.
 
 Produces a FIT file readable by Averyn's SynapseFitImporter (see
 `docs/integrations/synapse.md` in the Averyn repo). Flat scalar developer
@@ -30,7 +30,7 @@ from __future__ import annotations
 import argparse
 import struct
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -39,8 +39,8 @@ import pyxdf
 # --- project imports -------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from synapse24.signal_quality.ecg import (  # noqa: E402
-    detect_r_peaks_neurokit,
     compute_hrv_metrics,
+    detect_r_peaks_neurokit,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ FIT_MESG_DEVELOPER_DATA_ID = 206
 FIT_MESG_FIELD_DESCRIPTION = 207
 FIT_MESG_DEVELOPER_DATA = 209
 
-FIT_EPOCH = datetime(1989, 12, 31, tzinfo=timezone.utc)
+FIT_EPOCH = datetime(1989, 12, 31, tzinfo=UTC)
 INVALID_U8 = 0xFF
 INVALID_U16 = 0xFFFF
 INVALID_U32 = 0xFFFFFFFF
@@ -132,7 +132,7 @@ def write_crc16(buf: bytearray) -> None:
 def fit_timestamp(dt: datetime) -> int:
     """Seconds from FIT epoch (1989-12-31 UTC)."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return int((dt - FIT_EPOCH).total_seconds())
 
 
@@ -145,6 +145,7 @@ def mesg_header(local_msg_type: int, is_definition: bool = False) -> int:
 # ---------------------------------------------------------------------------
 # FIT writer helpers
 # ---------------------------------------------------------------------------
+
 
 class FitWriter:
     """Minimal FIT file writer. Appends to a binary buffer."""
@@ -192,6 +193,7 @@ class FitWriter:
 # Message builders
 # ---------------------------------------------------------------------------
 
+
 def write_file_id(w: FitWriter, serial: str) -> None:
     """FIT File ID message (mesg 0)."""
     # Definition
@@ -201,14 +203,12 @@ def write_file_id(w: FitWriter, serial: str) -> None:
     w.write_u16(FIT_MESG_FILE_ID)
     w.write_u8(5)  # num fields
     fields = [
-        (4, 1, FIT_BASE_TYPE_UINT32),   # serial_number
-        (1, 1, FIT_BASE_TYPE_UINT16),   # manufacturer
-        (2, 2, FIT_BASE_TYPE_UINT16),   # product
-        (3, 1, FIT_BASE_TYPE_UINT16),   # time_created (uint32 stored as 2B? no, field 3 is uint32)
-        (5, 1, FIT_BASE_TYPE_UINT8),    # number
+        (4, 1, FIT_BASE_TYPE_UINT32),  # serial_number
+        (1, 1, FIT_BASE_TYPE_UINT16),  # manufacturer
+        (2, 2, FIT_BASE_TYPE_UINT16),  # product
+        (3, 1, FIT_BASE_TYPE_UINT16),  # time_created (uint32 stored as 2B? no, field 3 is uint32)
+        (5, 1, FIT_BASE_TYPE_UINT8),  # number
     ]
-    # FIT file_id fields: serial_number(4,uint32), manufacturer(1,uint16),
-    # product(2,uint16), time_created(3,uint32), number(5,uint8)
     field_defs = [
         (4, 4, FIT_BASE_TYPE_UINT32),
         (1, 2, FIT_BASE_TYPE_UINT16),
@@ -227,7 +227,7 @@ def write_file_id(w: FitWriter, serial: str) -> None:
     w.write_u32(int(serial.replace("SYN-", "")) if serial.startswith("SYN-") else 0)
     w.write_u16(0x01)  # manufacturer (Synapse)
     w.write_u16(0x01)  # product
-    w.write_u32(fit_timestamp(datetime.now(timezone.utc)))
+    w.write_u32(fit_timestamp(datetime.now(UTC)))
     w.write_u8(1)
     write_crc16(w.buf)
 
@@ -241,12 +241,12 @@ def write_device_info(w: FitWriter, serial: str) -> None:
     w.write_u16(FIT_MESG_DEVICE_INFO)
     w.write_u8(6)
     field_defs = [
-        (0, 4, FIT_BASE_TYPE_UINT32),   # timestamp
-        (3, 1, FIT_BASE_TYPE_UINT8),    # device_index
-        (4, 4, FIT_BASE_TYPE_UINT32),   # serial_number
-        (10, 1, FIT_BASE_TYPE_UINT8),   # battery_level
+        (0, 4, FIT_BASE_TYPE_UINT32),  # timestamp
+        (3, 1, FIT_BASE_TYPE_UINT8),  # device_index
+        (4, 4, FIT_BASE_TYPE_UINT32),  # serial_number
+        (10, 1, FIT_BASE_TYPE_UINT8),  # battery_level
         (12, 2, FIT_BASE_TYPE_UINT16),  # product
-        (13, 1, FIT_BASE_TYPE_UINT8),   # software_version
+        (13, 1, FIT_BASE_TYPE_UINT8),  # software_version
     ]
     for fnum, size, btype in field_defs:
         w.write_u8(fnum)
@@ -256,7 +256,7 @@ def write_device_info(w: FitWriter, serial: str) -> None:
 
     # Data
     w.write(mesg_header(1, False))
-    w.write_u32(fit_timestamp(datetime.now(timezone.utc)))
+    w.write_u32(fit_timestamp(datetime.now(UTC)))
     w.write_u8(0)
     w.write_u32(int(serial.replace("SYN-", "")) if serial.startswith("SYN-") else 0)
     w.write_u8(INVALID_U8)  # battery unknown
@@ -274,11 +274,11 @@ def write_session(w: FitWriter, start_dt: datetime, duration_s: float, sport: in
     w.write_u16(FIT_MESG_SESSION)
     w.write_u8(5)
     field_defs = [
-        (0, 4, FIT_BASE_TYPE_UINT32),   # timestamp
-        (2, 2, FIT_BASE_TYPE_UINT16),   # sport
-        (3, 4, FIT_BASE_TYPE_UINT32),   # start_time
-        (4, 2, FIT_BASE_TYPE_UINT16),   # total_elapsed_time (uint32 in spec, use uint16)
-        (253, 4, FIT_BASE_TYPE_UINT32), # local timestamp (dev convenience)
+        (0, 4, FIT_BASE_TYPE_UINT32),  # timestamp
+        (2, 2, FIT_BASE_TYPE_UINT16),  # sport
+        (3, 4, FIT_BASE_TYPE_UINT32),  # start_time
+        (4, 2, FIT_BASE_TYPE_UINT16),  # total_elapsed_time (uint32 in spec, use uint16)
+        (253, 4, FIT_BASE_TYPE_UINT32),  # local timestamp (dev convenience)
     ]
     for fnum, size, btype in field_defs:
         w.write_u8(fnum)
@@ -305,8 +305,8 @@ def write_developer_data_id(w: FitWriter, app_version: int = DEV_APP_VERSION) ->
     w.write_u16(FIT_MESG_DEVELOPER_DATA_ID)
     w.write_u8(2)
     field_defs = [
-        (0, 1, FIT_BASE_TYPE_UINT8),    # developer_data_index
-        (4, 2, FIT_BASE_TYPE_UINT16),   # developer_application_version
+        (0, 1, FIT_BASE_TYPE_UINT8),  # developer_data_index
+        (4, 2, FIT_BASE_TYPE_UINT16),  # developer_application_version
     ]
     for fnum, size, btype in field_defs:
         w.write_u8(fnum)
@@ -331,10 +331,10 @@ def write_field_description(w: FitWriter) -> None:
     w.write_u16(FIT_MESG_FIELD_DESCRIPTION)
     w.write_u8(4)
     field_defs = [
-        (0, 1, FIT_BASE_TYPE_UINT8),      # developer_data_index
-        (1, 1, FIT_BASE_TYPE_UINT16),     # fit_base_type_id
-        (2, 16, FIT_BASE_TYPE_STRING),    # field_name (16 bytes)
-        (3, 1, FIT_BASE_TYPE_UINT8),      # field_definition_number
+        (0, 1, FIT_BASE_TYPE_UINT8),  # developer_data_index
+        (1, 1, FIT_BASE_TYPE_UINT16),  # fit_base_type_id
+        (2, 16, FIT_BASE_TYPE_STRING),  # field_name (16 bytes)
+        (3, 1, FIT_BASE_TYPE_UINT8),  # field_definition_number
     ]
     for fnum, size, btype in field_defs:
         w.write_u8(fnum)
@@ -377,12 +377,15 @@ DEV_DATA_LOCAL_TYPE = 11
 
 
 def dev_size(field_id: int) -> int:
-    return 2 if field_id in (SYNAPSE_DEV_FIELD_RMSSD, SYNAPSE_DEV_FIELD_SDNN, SYNAPSE_DEV_FIELD_LF_HF) else 1
+    return (
+        2
+        if field_id in (SYNAPSE_DEV_FIELD_RMSSD, SYNAPSE_DEV_FIELD_SDNN, SYNAPSE_DEV_FIELD_LF_HF)
+        else 1
+    )
 
 
 def write_record_definitions(w: FitWriter) -> None:
     """Write FIT definition messages once (record lt=10, developer data lt=11)."""
-
     dev_fields = [
         (DEV_FIELD_NUM_STRESS, SYNAPSE_DEV_FIELD_STRESS),
         (DEV_FIELD_NUM_SQI, SYNAPSE_DEV_FIELD_SQI),
@@ -437,7 +440,6 @@ def write_record_data(
     lf_hf: int,
 ) -> None:
     """FIT Record + Developer Data messages (definitions already emitted)."""
-
     dev_fields = [
         (DEV_FIELD_NUM_STRESS, stress, SYNAPSE_DEV_FIELD_STRESS),
         (DEV_FIELD_NUM_SQI, ppg_sqi, SYNAPSE_DEV_FIELD_SQI),
@@ -473,6 +475,7 @@ def write_record_data(
 # XDF reading
 # ---------------------------------------------------------------------------
 
+
 def load_streams(xdf_path: Path):
     """Return list of stream dicts from an XDF (robust to missing type/name)."""
     streams, _ = pyxdf.load_xdf(str(xdf_path))
@@ -484,12 +487,14 @@ def load_streams(xdf_path: Path):
             continue
         ts = np.asarray(time_stamps, dtype=np.float64).ravel()
         data = np.asarray(time_series)
-        out.append({
-            "name": s.get("name") or "",
-            "type": s.get("type") or "",
-            "timestamps": ts,
-            "data": data,
-        })
+        out.append(
+            {
+                "name": s.get("name") or "",
+                "type": s.get("type") or "",
+                "timestamps": ts,
+                "data": data,
+            }
+        )
     return out
 
 
@@ -503,6 +508,7 @@ def pick_primary_stream(streams):
 # ---------------------------------------------------------------------------
 # Main export
 # ---------------------------------------------------------------------------
+
 
 def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30.0) -> None:
     streams = load_streams(xdf_path)
@@ -520,25 +526,30 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
     duration_s = t1 - t0
     fs = _estimate_fs(ts)
 
-    print(f"Primary stream: {len(ts)} samples @ {fs:.1f} Hz, duration {duration_s:.1f}s",
-          file=sys.stderr)
+    print(
+        f"Primary stream: {len(ts)} samples @ {fs:.1f} Hz, duration {duration_s:.1f}s",
+        file=sys.stderr,
+    )
 
     w = FitWriter()
 
     # File header
-    w.buf += struct.pack("<BBHI4sH",
-                         FIT_FILE_HEADER_SIZE, 0x10,  # header size, protocol ver 1.0
-                         0x0815,                       # profile version
-                         0,                             # data size placeholder (fixed at end)
-                         b".FIT",                       # magic
-                         0)                            # header CRC placeholder
+    w.buf += struct.pack(
+        "<BBHI4sH",
+        FIT_FILE_HEADER_SIZE,
+        0x10,  # header size, protocol ver 1.0
+        0x0815,  # profile version
+        0,  # data size placeholder (fixed at end)
+        b".FIT",  # magic
+        0,
+    )  # header CRC placeholder
     w.crc_update(w.buf[:12])
     w.buf[12:14] = struct.pack("<H", fit_crc16(bytes(w.buf[:12])))
 
     # Fixed messages
     write_file_id(w, serial)
     write_device_info(w, serial)
-    write_session(w, datetime.now(timezone.utc), duration_s)
+    write_session(w, datetime.now(UTC), duration_s)
     write_developer_data_id(w)
     write_field_description(w)
 
@@ -571,7 +582,7 @@ def export_fit(xdf_path: Path, out_path: Path, serial: str, window_s: float = 30
 
         hr = int(round(hrv.get("hr_mean_bpm", INVALID_U8))) if hrv else INVALID_U8
 
-        ts_fit = fit_timestamp(datetime.fromtimestamp(win_t0, tz=timezone.utc))
+        ts_fit = fit_timestamp(datetime.fromtimestamp(win_t0, tz=UTC))
 
         write_record_data(
             w,

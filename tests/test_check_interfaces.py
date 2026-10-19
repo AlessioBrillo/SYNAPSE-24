@@ -156,3 +156,21 @@ def test_cli_exit_code_non_zero_on_violation(tmp_path: Path) -> None:
     )
     assert proc.returncode != 0
     assert "INTERFACE VIOLATIONS" in proc.stdout
+
+
+def test_gatt_contract_is_clean() -> None:
+    """The committed GATT contract must pass its own drift check."""
+    report = ci.Report()
+    ci.check_gatt_uuids_consistent(report, ci.GATT_CONTRACT)
+    assert not report.failures, "; ".join(report.failures)
+
+
+def test_gatt_research_uuid_drift_is_detected(tmp_path: Path) -> None:
+    """Changing the research service UUID must fail the interface check."""
+    broken = tmp_path / "gatt_v1.json"
+    data = json.loads(ci.GATT_CONTRACT.read_text(encoding="utf-8"))
+    data["services"]["research"]["uuid"] = "00000000-0000-0000-0000-000000000000"
+    broken.write_text(json.dumps(data), encoding="utf-8")
+    report = ci.Report()
+    ci.check_gatt_uuids_consistent(report, broken)
+    assert any("UUID drift" in f for f in report.failures)

@@ -30,6 +30,21 @@ EXPORT_SCRIPT = DEFAULT_ROOT / "scripts" / "export_session_fit.py"
 WORKER_SCRIPT = DEFAULT_ROOT / "worker" / "hrv_worker.py"
 SCHEMAS_DIR = DEFAULT_ROOT / "contracts" / "schemas"
 
+GATT_CONTRACT = DEFAULT_ROOT / "contracts" / "gatt_v1.json"
+HARDWARE_YAML = DEFAULT_ROOT / "config" / "hardware.yaml"
+FIRMWARE_RESEARCH_SERVICE = (
+    DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "ble_research_service.c"
+)
+TRANSPORT_PY = DEFAULT_ROOT / "sdk" / "python" / "synapse_device" / "transport.py"
+
+# UUID v1 pattern (lowercase, with hyphens).
+_UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+# NimBLE 128-bit UUIDs are stored little-endian: the first init byte is the
+# LAST byte of the canonical UUID string.
+_LEADING_BYTE_RE = re.compile(r"BLE_UUID128_INIT\s*\(\s*0x([0-9a-fA-F]{2})")
+
 # C macro name -> expected descriptor field id.
 DEV_FIELD_MACROS = (
     "SYNAPSE_DEV_FIELD_STRESS",
@@ -140,6 +155,64 @@ def check_descriptor_valid(report: Report, path: Path) -> None:
         report.fail("FIT descriptor has duplicate C macro names")
 
 
+def _uuid_strings(text: str) -> set[str]:
+    """Extract all v1 UUID strings from a text blob, normalised to lowercase."""
+    return {m.group(0).lower() for m in _UUID_RE.finditer(text)}
+
+
+def _research_service_uuids(gatt: dict[str, Any]) -> set[str]:
+    """The set of UUIDs that belong to the research service (service + chars)."""
+    chars = gatt["services"]["research"]["characteristics"]
+    uuids = {gatt["services"]["research"]["uuid"].lower()}
+    uuids |= {v.lower() for v in chars.values()}
+    return uuids
+
+
+def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
+    """GATT UUIDs are consistent across contract, manifest, firmware, transport.
+
+    A drift here means the host cannot find the pod's raw-stream
+    characteristics — the whole dataset path breaks silently.
+
+    Other services (e.g. the consumer feature stream) legitimately declare
+    their own UUIDs in the same files, so each source is filtered to the
+    research-service UUIDs before comparison.
+    """
+    gatt = _load_json(gatt_contract)
+    reference = _research_service_uuids(gatt)
+
+    def _firmware_leading_bytes(text: str) -> set[str]:
+        """First init byte of each BLE_UUID128_INIT, as two lowercase hex digits."""
+        return {m.group(1).lower() for m in _LEADING_BYTE_RE.finditer(text)}
+
+    # Text sources: hardware manifest + host transport (both carry UUID strings).
+    for label, path in (
+        ("config/hardware.yaml", HARDWARE_YAML),
+        ("sdk/python/synapse_device/transport.py", TRANSPORT_PY),
+    ):
+        if not path.is_file():
+            continue
+        uuids = _uuid_strings(path.read_text(encoding="utf-8")) & reference
+        missing = reference - uuids
+        if missing:
+            report.fail(
+                f"GATT research-service UUID drift in {label}: canonical UUIDs missing: "
+                f"{sorted(missing)}"
+            )
+
+    # Firmware source: UUIDs are little-endian byte arrays; compare the leading
+    # (least-significant) byte of each canonical UUID against the init bytes.
+    if FIRMWARE_RESEARCH_SERVICE.is_file():
+        fw_bytes = _firmware_leading_bytes(FIRMWARE_RESEARCH_SERVICE.read_text(encoding="utf-8"))
+        missing = [u for u in sorted(reference) if u[-2:] not in fw_bytes]
+        if missing:
+            report.fail(
+                "GATT research-service UUID drift in "
+                "firmware/esp32_band/ble/ble_research_service.c: canonical UUIDs "
+                f"missing (by trailing byte): {missing}"
+            )
+
+
 def check_schemas_valid(report: Report, schemas_dir: Path) -> None:
     """Each payload schema file must be valid JSON with required structure."""
     if not schemas_dir.is_dir():
@@ -204,6 +277,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=SCHEMAS_DIR,
         help="Directory containing payload JSON Schemas",
     )
+    parser.add_argument(
+        "--gatt-contract",
+        type=Path,
+        default=GATT_CONTRACT,
+        help="Path to contracts/gatt_v1.json",
+    )
     return parser
 
 
@@ -230,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     check_schemas_valid(report, args.schemas_dir)
+
+    check_gatt_uuids_consistent(report, args.gatt_contract)
 
     if report.ok:
         print("INTERFACES OK")

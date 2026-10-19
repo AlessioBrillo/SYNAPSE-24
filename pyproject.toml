@@ -46,6 +46,10 @@ dev = [
     "pytest-xdist>=3.5.0,<4.0",
     "pytest-mock>=3.14.0,<4.0",
     "hypothesis>=6.100.0,<7.0",
+    "jsonschema>=4.0,<6.0",
+    "fastapi>=0.100.0,<1.0",
+    "httpx>=0.24.0,<1.0",
+    "uvicorn>=0.24.0,<1.0",
     "ruff>=0.5.0,<1.0",
     "mypy>=1.10.0,<2.0",
     "types-requests>=2.31.0,<3.0",
@@ -83,6 +87,10 @@ dev = [
     "pytest-xdist>=3.5.0,<4.0",
     "pytest-mock>=3.14.0,<4.0",
     "hypothesis>=6.100.0,<7.0",
+    "jsonschema>=4.0,<6.0",
+    "fastapi>=0.100.0,<1.0",
+    "httpx>=0.24.0,<1.0",
+    "uvicorn>=0.24.0,<1.0",
     "ruff>=0.5.0,<1.0",
     "mypy>=1.10.0,<2.0",
     "types-requests>=2.31.0,<3.0",
@@ -107,8 +115,10 @@ hardware = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
-    "E", "F", "I", "N", "UP", "W", "C4", "C9", "D", "DTZ", "EXE", "ISC", "ICN", "PIE", "PT", "Q", "RET", "SIM", "T20", "TCH", "ARG", "PTH", "ERA", "PD", "PL", "TRY", "NPY", "RSE", "TID", "PYI",
+    "E", "F", "I", "N", "UP", "W", "C4", "C9", "D", "DTZ", "EXE", "ISC", "ICN", "PIE", "PT", "Q", "RET", "SIM", "T20", "ARG", "PTH", "ERA", "PD", "PL", "TRY", "NPY", "RSE", "TID", "PYI",
     "ISC",  # isort
 ]
 ignore = [
@@ -140,9 +150,9 @@ ignore = [
     "PTH202",   # os.path.getsize vs Path.stat (compatibility)
     "PTH108",   # os.unlink vs Path.unlink (compatibility)
     "EXE001",   # Shebang present but file not executable (scripts on Windows)
-    # Pre-existing codebase issues (TCH/UP/PD rules)
-    "TCH001", "TCH002", "TCH003",
-    "UP007", "UP037", "UP038",
+    "EXE002",   # File executable but no shebang (.py modules copied onto Linux in CI)
+    # Removed dead rules (no longer exist in ruff 0.16.x)
+    "UP007", "UP037",
     "PD011",
 ]
 
@@ -258,7 +268,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src", "worker"]
+source = ["src", "worker", "sdk/python", "backend"]
 omit = [
     "tests/*",
     "scripts/*",
