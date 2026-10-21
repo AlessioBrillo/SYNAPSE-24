@@ -87,10 +87,17 @@ class RawFrameIngestor:
     clock_model: Any = None
     lsl_clock_fn: Callable[[], float] | None = None
     stream_rates_hz: dict[RawStream, float] = field(default_factory=dict)
+    # Maximum number of values kept per stream by the decoder (0 = every
+    # sample of the session). The live path sets it: the recording is
+    # written by the spool (on disk), so the decoder only keeps the window
+    # the quality metrics work on.
+    history_limit: int = 0
 
     def __post_init__(self) -> None:
         if not self.stream_rates_hz:
             self.stream_rates_hz = _normative_stream_rates()
+        if self.history_limit and not self.decoder.history_limit:
+            self.decoder.history_limit = int(self.history_limit)
 
     def reset_session(self) -> None:
         """Start a clean session: zero the decoder and this ingestor's counts.

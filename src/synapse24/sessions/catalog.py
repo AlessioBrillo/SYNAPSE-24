@@ -119,6 +119,11 @@ def _validate_fit_light(path: Path) -> bool:
     file body are recomputed with the FIT algorithm, so a file that merely
     *looks* like FIT (the ones the project used to write) is reported as
     invalid instead of being catalogued as a usable session.
+
+    Consequence: the files written by the previous writer (a different CRC
+    algorithm and a per-message CRC) are listed with ``fit_valid = False``.
+    They are still catalogued, so nothing disappears silently, but they have
+    to be re-exported to be used.
     """
     try:
         data = path.read_bytes()

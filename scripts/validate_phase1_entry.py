@@ -168,6 +168,13 @@ class LSLStreamManager:
         # Bounded in-memory view of every stream (the analysis tail).
         self.stream_buffers: dict[str, list] = {}
         self.stream_timestamps: dict[str, list] = {}
+        # Samples pushed per stream (the gates judge these counts).
+        self._sample_counts: dict[str, int] = {}
+
+    @property
+    def sample_counts(self) -> dict[str, int]:
+        """Samples pushed per stream."""
+        return dict(self._sample_counts)
 
     def create_outlets(self, stream_configs: list[dict]) -> None:
         if pylsl is None:
@@ -176,6 +183,7 @@ class LSLStreamManager:
         # A new session starts with an empty spool: the gates judge the
         # samples of *this* run, never the ones of the previous one.
         self.spool.reset()
+        self._sample_counts.clear()
 
         for cfg in stream_configs:
             info = pylsl.StreamInfo(
@@ -204,6 +212,7 @@ class LSLStreamManager:
         if name in self.stream_configs:
             row = np.asarray(sample, dtype=np.float64).ravel()
             self.spool.append(name, row, timestamp)
+            self._sample_counts[name] = self._sample_counts.get(name, 0) + 1
             buffers = self.stream_buffers.setdefault(name, [])
             stamps = self.stream_timestamps.setdefault(name, [])
             buffers.append(row.copy())
@@ -267,10 +276,20 @@ class Phase1Validator:
         self.lsl_clock_fn: Callable[[], float] | None = None
         # Decodes the Synapse Research Service frame format (the canonical one)
         # and pushes straight into the LSL outlets. See raw_ingest.py.
+        # The decoder keeps a bounded window (the session is written by the
+        # spool, on disk): an unbounded history would put the whole session
+        # in RAM again.
         self.raw_ingestor = RawFrameIngestor(
             push_callback=self._push_raw_to_lsl,
             clock_model=self.clock_model,
+            history_limit=self._decoder_history_limit(),
         )
+
+    def _decoder_history_limit(self) -> int:
+        """Values kept in memory per stream (30 s at the highest rate)."""
+        rates = self._nominal_rates()
+        highest = max(rates.values()) if rates else 500.0
+        return int(max(highest, 1.0) * 30)
 
     def _push_raw_to_lsl(self, outlet: str, values: list[float], ts: float) -> None:
         """Forward one decoded raw sample row into its LSL outlet."""
@@ -808,7 +827,7 @@ class Phase1Validator:
         canonical research-service path did not, so the gates measured
         zero samples against a conforming pod.
         """
-        return dict(self.lsl_manager.spool.counts())
+        return dict(self.lsl_manager.sample_counts)
 
     def _tier0_sync_gate(self, sync_status_t0: dict) -> ValidationGateResult:
         """T0 sync gate: the clock model's evidence, or an honest failure.
@@ -889,20 +908,25 @@ class Phase1Validator:
         # that stopped, because the hole is silent.
         drops = self.raw_ingestor.drop_summary() if self.raw_ingestor else {}
         rejected = int(self.raw_ingestor.decoder.frames_rejected) if self.raw_ingestor else 0
+        dropped_samples = (
+            self.raw_ingestor.decoder.dropped_sample_summary() if self.raw_ingestor else {}
+        )
+        lost_samples = int(sum(dropped_samples.values()))
         lost_frames = int(sum(drops.values()))
         gates.append(
             ValidationGateResult(
                 name="research_stream_zero_loss",
-                passed=lost_frames == 0 and rejected == 0,
+                passed=lost_frames == 0 and lost_samples == 0 and rejected == 0,
                 value=lost_frames,
                 threshold=0,
                 details=(
                     f"Frames lost in transit: {lost_frames} "
-                    f"(per stream: {drops or 'none'}), rejected frames: {rejected}"
+                    f"(per stream: {drops or 'none'}), rejected frames: {rejected}, "
+                    f"samples the pod reports as lost: {lost_samples} "
+                    f"(per stream: {dropped_samples or 'none'})"
                 ),
             )
         )
-
         # Gate 2: T0 sync (clock model evidence; unproven fails)
         gates.append(self._tier0_sync_gate(sync_status_t0))
 
@@ -1173,6 +1197,9 @@ class Phase1Validator:
         duration = self._duration_s
         drops = self.raw_ingestor.drop_summary() if self.raw_ingestor else {}
         rejected = int(self.raw_ingestor.decoder.frames_rejected) if self.raw_ingestor else 0
+        dropped_samples = (
+            self.raw_ingestor.decoder.dropped_sample_summary() if self.raw_ingestor else {}
+        )
         throughput = int(self.raw_ingestor.decoder.estimated_bytes()) if self.raw_ingestor else 0
 
         ecg = self._outlet_array("SYNAPSE_ECG_T0")
@@ -1256,6 +1283,8 @@ class Phase1Validator:
                     "total": int(sum(drops.values())),
                     "per_stream": drops,
                     "rejected": rejected,
+                    "samples_lost": int(sum(dropped_samples.values())),
+                    "samples_lost_per_stream": dropped_samples,
                     "source": "ResearchStreamDecoder",
                 },
                 # 5-6: HR and RMSSD against references, from this recording.
@@ -1426,6 +1455,11 @@ class Phase1Validator:
 
         # Save XDF and verify, then collect results
         xdf_proof, xdf_path = self._save_xdf_and_verify()
+        # The XDF is written: the spool files are not needed any more, but
+        # the gate report still reads the samples back, so only the handles
+        # are released here (the files go with the cleanup at the end of the
+        # run).
+        self.lsl_manager.spool.close()
         report = self._collect_results(loop_results, xdf_proof)
         report.xdf_path = str(xdf_path) if xdf_path else None
         self._log_gate_summary(report)
@@ -1533,7 +1567,7 @@ class Phase1Validator:
         if self.clock_sync is None and self.controller is None:
             return
 
-        acc, _ts = self.raw_ingestor.decoder.arrays(RawStream.ACC)
+        acc = self.raw_ingestor.decoder.tail(RawStream.ACC, 3)
         if acc.size < 3:
             return
 
@@ -1553,22 +1587,27 @@ class Phase1Validator:
         (Architecture.md §74). Without this feed the gate never arms, the
         T0 -> T1 promotion is unreachable, and the tiered acquisition is
         decorative: the state machine stays in Tier 0 for the whole session.
+
+        The decoder returns the samples *interleaved* (PPG: red, IR, red,
+        IR...), so the window is de-interleaved before the quality metrics
+        see it: a mixed red/IR trace puts a strong component at fs/2, outside
+        the cardiac band, and the SQI of a perfectly clean signal collapses.
         """
         if self.controller is None:
             return
-        ppg, _ts = self.raw_ingestor.decoder.arrays(RawStream.PPG)
-        if ppg.size < 32:
-            return
         rate_hz = float(self._nominal_rates().get("SYNAPSE_PPG_T0", 50.0) or 50.0)
-        window = ppg[-int(rate_hz * 10) :] if rate_hz else ppg[-512:]
-        if window.ndim > 1:
-            window = window[:, 0]
-        acc, _acc_ts = self.raw_ingestor.decoder.arrays(RawStream.ACC)
+        n_samples = int(rate_hz * 10)  # ten seconds of samples
+        # Two values per sample (red + IR).
+        values = self.raw_ingestor.decoder.tail(RawStream.PPG, 2 * n_samples)
+        if values.size < 64:
+            return
+        window = values[0::2]  # the red channel
+        acc_values = self.raw_ingestor.decoder.tail(RawStream.ACC, 3 * window.shape[0])
         acc_mag = None
-        if acc.size >= 3 * window.shape[0]:
+        if acc_values.size >= 3 * window.shape[0]:
             # The decoder returns the samples flat: the accelerometer is
             # 3-axis, so the tail is reshaped before the magnitude.
-            acc_tail = np.asarray(acc[-3 * window.shape[0] :], dtype=np.float64).reshape(-1, 3)
+            acc_tail = np.asarray(acc_values).reshape(-1, 3)
             acc_mag = np.linalg.norm(acc_tail, axis=1)
         try:
             quality = compute_ppg_quality(
@@ -1663,6 +1702,10 @@ async def main_async(args: argparse.Namespace) -> int:
     except Exception:
         logger.exception("Validation failed")
         return 2
+    finally:
+        # The samples are on disk: release them (a 6-hour session leaves
+        # hundreds of megabytes behind).
+        validator.lsl_manager.spool.cleanup()
 
 
 def main() -> int:

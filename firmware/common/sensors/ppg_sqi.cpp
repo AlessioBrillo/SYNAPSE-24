@@ -139,8 +139,14 @@ static float compute_spectral_entropy(const float* buffer, size_t count) {
  *
  * This feature replaces the kurtosis one, which scored a *Gaussian* noise
  * buffer 1.0 (a Gaussian has zero excess kurtosis): it rewarded the absence
- * of a signal. The host implementation (src/synapse24/signal_quality/ppg.py)
- * uses the same definition, so the device and the host agree.
+ * of a signal.
+ *
+ * The host implementation (src/synapse24/signal_quality/ppg.py) uses the
+ * same *feature* (the fraction of power in the cardiac band) with a
+ * different estimator (a 64-point DFT here, Welch there) and a different
+ * normalisation of the perfusion index: the two sides are comparable, not
+ * bit-identical. Aligning them is a separate decision, with the thresholds
+ * it implies.
  */
 static float compute_spectral_snr(const float* buffer, size_t count) {
     if (count < 32) return 0.0f;

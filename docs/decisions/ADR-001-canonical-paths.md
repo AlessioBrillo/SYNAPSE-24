@@ -41,6 +41,14 @@ contro un parser esterno.
    sviluppatore vive nell'SDK; `tools/check_interfaces.py` verifica che
    corrisponda a `contracts/fit_developer_fields.json` e che export e worker
    non ne conservino copie locali.
+6. **Gli artefatti del contratto sono generati, non riscritti a mano.**
+   `config/hardware.yaml` (UUID, stream id, rate) e
+   `contracts/fit_developer_fields.json` (i campi FIT) generano
+   `firmware/esp32_band/ble/synapse_contract_generated.h` e
+   `src/synapse24/contracts_generated.py`
+   (`tools/generate_contracts.py`). Il firmware include l'header generato e
+   non porta più copie degli UUID; `--check` fallisce sul drift ed è nel
+   gate.
 
 ## Alternative scartate
 
@@ -50,11 +58,10 @@ contro un parser esterno.
   `synapse24` (AGPL dentro un pacchetto Apache-2.0). Le due opzioni sono
   incompatibili con la scelta di licenza già documentata in
   `DEVICE_LOOP_V1.md`.
-- **Generare il codice del contratto invece di condividere il modulo.**
-  Scartato per ora: il generatore introdurrebbe un artefatto generato da
-  tenere in sincronia senza eliminare la classe di bug (che era nel
-  *contenuto* del contratto, non nella sua duplicazione). Il codegen
-  completo resta un'opzione per l'incremento post-G1.
+- **Lasciare gli UUID scritti a mano nel firmware e fidarsi del regex
+  checker.** Scartato: il checker poteva solo *notare* il drift (regex sui
+  byte little-endian), non impedirlo. Con gli artefatti generati il drift
+  è impossibile per costruzione e il `--check` lo rende visibile.
 
 ## Conseguenze
 

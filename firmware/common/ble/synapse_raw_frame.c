@@ -87,10 +87,10 @@ int synapse_raw_frame_encode(uint8_t stream_id,
                                                    : dropped;
 
     if (sample_count != 0u) {
-        /* The caller hands us native-endian samples; the wire format is
-         * little-endian. On the LE targets we care about this is a memcpy,
-         * but doing it explicitly keeps the codec portable and makes the
-         * parity test meaningful on any host. */
+        /* The wire format is little-endian and the targets are little-endian,
+         * so the samples are copied as they are. (The copy is explicit so the
+         * parity test is meaningful on any host; a big-endian target would
+         * need a byte swap here.) */
         const uint8_t *src = (const uint8_t *)samples;
         uint8_t *dst = out + SYNAPSE_RAW_FRAME_HEADER_SIZE;
         for (uint16_t i = 0; i < (uint16_t)sample_count * size; i++) {

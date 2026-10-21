@@ -79,6 +79,13 @@ extern "C" {
 #define FIT_FIELD_RECORD_TIMESTAMP    253
 #define FIT_FIELD_RECORD_HEART_RATE   3
 
+// Field numbers of the file_id message (global 0).
+#define FIT_FIELD_FILE_ID_TYPE          0
+#define FIT_FIELD_FILE_ID_MANUFACTURER  1
+#define FIT_FIELD_FILE_ID_PRODUCT       2
+#define FIT_FIELD_FILE_ID_SERIAL        3
+#define FIT_FIELD_FILE_ID_TIME_CREATED  4
+
 // Field numbers of the developer_data_id message (global 207).
 #define FIT_FIELD_DEV_ID_DEVELOPER_ID         0
 #define FIT_FIELD_DEV_ID_APPLICATION_ID       1
@@ -110,6 +117,8 @@ extern "C" {
 #define FIT_INVALID_UINT8 0xFFu
 /** Invalid value of a uint16 field (FIT base type uint16). */
 #define FIT_INVALID_UINT16 0xFFFFu
+/** Invalid value of a uint32 field (FIT base type uint32 / uint32z). */
+#define FIT_INVALID_UINT32 0xFFFFFFFFu
 
 // FIT Developer Data Field IDs (assigned sequentially). These are the
 // CONTRACT ids (contracts/fit_developer_fields.json) and they are immutable:

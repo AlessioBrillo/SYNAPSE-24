@@ -26,7 +26,10 @@
  *     9     1  sample_count     number of samples in this frame
  *    10     1  sample_format    (synapse_raw_stream_t format)
  *    11     1  dropped          samples lost for this stream since the previous
- *                               transmitted frame, saturating at 255 (0 = none)
+ *                               transmitted frame, saturating at 255 (0 = none).
+ *                               The unit is the *sample* (not the value): a
+ *                               refused frame of a 3-channel stream loses 4
+ *                               samples, not 12 values.
  *    12  ...  samples          sample_count values, little-endian two's compl.
  *
  * Loss reporting: the sequence number is incremented when a frame is BUILT,

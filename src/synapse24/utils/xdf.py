@@ -23,6 +23,7 @@ from pylsl import StreamInfo, StreamOutlet, local_clock
 
 # The XDF chunk encoder is the SDK's (Apache-2.0 device layer): one
 # implementation of the format, shared by the host pipeline and the SDK CLI.
+from synapse_device.xdf_writer import write_varlen_int, write_xdf_chunk
 from synapse_device.xdf_writer import write_xdf as _write_xdf_chunks
 
 # XDF 1.0 format constants
@@ -280,42 +281,10 @@ def _channel_format_from_xml(xml: str) -> str:
     return "float32"
 
 
-def _write_varlen_int(f: IO[bytes] | bytearray, value: int) -> None:
-    """Write an XDF variable-length integer (1/4/8-byte selector + value).
-
-    Matches the encoding ``pyxdf._read_varlen_int`` expects: a single
-    length-of-length byte (1, 4 or 8) followed by the little-endian value.
-    """
-    if value < 0:
-        raise ValueError(f"XDF varlen int must be non-negative, got {value}")
-    if value < 256:
-        prefix, payload = b"\x01", struct.pack("B", value)
-    elif value < 2**32:
-        prefix, payload = b"\x04", struct.pack("<I", value)
-    else:
-        prefix, payload = b"\x08", struct.pack("<Q", value)
-    if isinstance(f, bytearray):
-        f.extend(prefix)
-        f.extend(payload)
-    else:
-        f.write(prefix)
-        f.write(payload)
-
-
-def _write_xdf_chunk(f: IO[bytes], tag: int, data: bytes, stream_id: int | None = None) -> None:
-    """Write a single XDF 1.0 chunk: [varlen len][u16 tag][u32 stream_id?][data]."""
-    header = struct.pack("<H", tag)
-    if stream_id is not None:
-        header += struct.pack("<I", stream_id)
-    _write_varlen_int(f, len(header) + len(data))
-    f.write(header)
-    f.write(data)
-
-
 def _write_string(f: IO[bytes], s: str) -> None:
     """Write UTF-8 string with varlen length prefix."""
     encoded = s.encode("utf-8")
-    _write_varlen_int(f, len(encoded))
+    write_varlen_int(f, len(encoded))
     f.write(encoded)
 
 
@@ -407,6 +376,19 @@ def write_xdf(  # noqa: PLR0915
             "channel_names": config.channel_names,
             "channel_units": config.channel_units,
             "source_id": config.source_id,
+            # The device, the acquisition (with the tier) and the metadata
+            # travel with the stream: a recording that does not say which pod
+            # and which tier produced it is much harder to interpret.
+            "device": {
+                "manufacturer": config.device,
+                "model": config.model,
+            },
+            "acquisition": {
+                "software": config.software,
+                "version": config.version,
+                "tier": str(config.tier),
+            },
+            "metadata": config.metadata,
             "data": data,
             "timestamps": timestamps,
         }

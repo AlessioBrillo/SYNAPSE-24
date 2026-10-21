@@ -18,6 +18,9 @@ steps:
       - uv run mypy --package synapse24 --config-file pyproject.toml
       - uv run mypy sdk/python/synapse_device --config-file pyproject.toml
       - uv run python tools/check_contract.py --verbose
+      # The generated contract artifacts (UUIDs, stream ids, rates) must be in
+      # sync with config/hardware.yaml: a stale artifact is a silent drift.
+      - uv run python tools/generate_contracts.py --check
       # The interface contract (FIT developer fields, GATT UUIDs, worker
       # payloads): it fails on drift between the firmware, the SDK writer,
       # the export and the worker.
@@ -33,7 +36,9 @@ steps:
       # the XDF ones. A format that only this project can read is not a
       # product format.
       - uv run pytest tests/test_format_conformance.py -v --no-cov
-      - uv run pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=term-missing
+      # The SDK suite runs in the coverage step as well: measuring the SDK
+      # without collecting its tests would count the device layer as untested.
+      - uv run pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=term-missing tests sdk/python/tests
       - uv run pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py -v --no-cov -p no:cacheprovider
 
   - name: firmware-band

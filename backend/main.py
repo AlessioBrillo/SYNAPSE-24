@@ -336,9 +336,9 @@ def _register_websocket(application: Any) -> None:
     async def websocket_live(websocket: WebSocket) -> None:
         expected = _api_token()
         if expected:
-            provided = _bearer_token(websocket.headers.get("authorization", "")) or (
-                websocket.query_params.get("token", "")
-            )
+            # The token is read from the header only: a query string ends up
+            # in the access logs of every proxy in between.
+            provided = _bearer_token(websocket.headers.get("authorization", ""))
             if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
                 await websocket.close(code=1008, reason="unauthorized")
                 return

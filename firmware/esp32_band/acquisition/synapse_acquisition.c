@@ -488,7 +488,12 @@ static esp_err_t start_session_internal(const acq_session_config_t *config) {
         .duration_sec = config->duration_sec,
         .has_gps = config->enable_gps,
     };
-    ESP_ERROR_CHECK(synapse_fit_start_session(&fit_cfg));
+    // A FIT failure must not abort the pod: the dataset path is the BLE
+    // research service, and the flash file is a convenience. The failure is
+    // logged, the session continues.
+    if (synapse_fit_start_session(&fit_cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "FIT session could not be started: recording without it");
+    }
 #endif
     
     g_acq.session_active = true;

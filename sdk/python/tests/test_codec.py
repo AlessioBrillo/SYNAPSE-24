@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 
 from synapse_device.codec import (
+    HEADER_SIZE,
+    MAX_PAYLOAD,
     RawCodecError,
     RawFormat,
     RawStream,
@@ -51,8 +53,9 @@ def test_roundtrip_all_streams():
 
 
 def test_mtu_budget():
-    # S32, 4 channels (POWER): 16 bytes/sample -> 244 // 16 = 15 samples
-    assert max_samples(RawFormat.S32, 4) == 244 // 16
+    # S32, 4 channels (POWER): 16 bytes/value. The budget is the
+    # notification payload (244) minus the 12-byte header: 232 // 16 = 14.
+    assert max_samples(RawFormat.S32, 4) == (MAX_PAYLOAD - HEADER_SIZE) // 16
     # Too many samples -> error
     samples = np.zeros((100, 4), dtype=np.float64)
     with pytest.raises(RawCodecError):
@@ -95,3 +98,41 @@ def test_sdk_and_host_codecs_agree():
     sdk_frame = encode_frame(RawStream.PPG, 9, 1234, 0, RawFormat.S16, samples, dropped=2)
     host_frame = host_encode(RawStream.PPG, 9, 1234, 0, RawFormat.S16, samples, dropped=2)
     assert sdk_frame == host_frame
+
+
+def test_sdk_and_host_codecs_agree_with_flags():
+    """The flags of the caller must reach the wire on both sides."""
+    from synapse24.hardware.raw_codec import FLAG_TS_EPOCH_WRAPPED
+    from synapse24.hardware.raw_codec import encode_frame as host_encode
+
+    samples = np.array([[1.0]], dtype=np.int64)
+    sdk_frame = encode_frame(RawStream.ECG, 1, 10, FLAG_TS_EPOCH_WRAPPED, RawFormat.S16, samples)
+    host_frame = host_encode(RawStream.ECG, 1, 10, FLAG_TS_EPOCH_WRAPPED, RawFormat.S16, samples)
+    assert sdk_frame == host_frame
+    assert sdk_frame[8] & FLAG_TS_EPOCH_WRAPPED
+
+
+def test_the_sdk_respects_the_frame_budget():
+    """A frame must fit the notification payload, header included.
+
+    The host codec counts *values* per frame, the SDK counts *samples* per
+    channel: the two budgets must describe the same frame.
+    """
+    from synapse24.hardware.raw_codec import HEADER_SIZE as HOST_HEADER
+    from synapse24.hardware.raw_codec import MAX_PAYLOAD as HOST_MAX
+    from synapse24.hardware.raw_codec import max_samples as host_max_samples
+
+    assert HEADER_SIZE == HOST_HEADER
+    assert MAX_PAYLOAD == HOST_MAX
+    for fmt in RawFormat:
+        for channels in (1, 2, 3, 4):
+            # The SDK rounds the samples down, so it can be one value below
+            # the host's budget: never above it.
+            assert max_samples(fmt, channels) * channels <= host_max_samples(fmt)
+
+
+def test_an_oversized_frame_is_rejected():
+    """A frame that does not fit the MTU must be refused, not truncated."""
+    too_many = max_samples(RawFormat.S8, 1) + 1
+    with pytest.raises(RawCodecError):
+        encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S8, np.zeros((too_many, 1), dtype=np.int64))

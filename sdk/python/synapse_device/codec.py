@@ -110,9 +110,14 @@ def format_size(fmt: RawFormat) -> int:
 
 
 def max_samples(fmt: RawFormat, channels: int) -> int:
-    """Max samples that fit in one payload, given format and channel count."""
+    """Max samples that fit in one frame, given format and channel count.
+
+    The budget is the *notification* payload (244 bytes) minus the 12-byte
+    header: a frame that counts only the payload produces a notification the
+    pod (and the host) rejects.
+    """
     per = format_size(fmt) * channels
-    return MAX_PAYLOAD // per
+    return (MAX_PAYLOAD - HEADER_SIZE) // per
 
 
 def encode_frame(
@@ -143,7 +148,7 @@ def encode_frame(
             f"stream {stream.name} expects {STREAM_CHANNELS[stream]} channels, got {channels}"
         )
     fs = format_size(fmt)
-    if count * channels * fs > MAX_PAYLOAD:
+    if count * channels * fs > MAX_PAYLOAD - HEADER_SIZE:
         raise RawCodecError("frame payload exceeds BLE MTU budget")
     # The wire header carries the number of VALUES (channel-minor) in a single
     # byte, exactly like the firmware codec.
@@ -151,7 +156,9 @@ def encode_frame(
     if values > 255:
         raise RawCodecError("frame carries more than 255 values: too big for the header")
 
-    flags = 0
+    # The caller's flags are kept: the wrap bit is added when the timestamp
+    # does not fit in 32 bits, the others are the caller's business.
+    flags = int(flags) & 0xFF
     if timestamp_us >= (1 << 32):
         flags |= FLAG_TS_EPOCH_WRAPPED
         timestamp_us &= 0xFFFFFFFF

@@ -32,7 +32,9 @@ __all__ = [
     "XDF_CHUNK_TAGS",
     "XDF_FILEHEADER_XML",
     "XDF_MAGIC",
+    "write_varlen_int",
     "write_xdf",
+    "write_xdf_chunk",
 ]
 
 XDF_MAGIC = b"XDF:"
@@ -72,7 +74,7 @@ XDF_FILEHEADER_XML = b"<info><version>1.0</version></info>"
 BLOCK_SIZE = 10000
 
 
-def _write_varlen_int(f: Any, value: int) -> None:
+def write_varlen_int(f: Any, value: int) -> None:
     """Write an XDF variable-length integer (1/4/8-byte selector + value).
 
     Matches the encoding ``pyxdf._read_varlen_int`` expects: a single
@@ -94,12 +96,12 @@ def _write_varlen_int(f: Any, value: int) -> None:
         f.write(payload)
 
 
-def _write_xdf_chunk(f: Any, tag: int, data: bytes, stream_id: int | None = None) -> None:
+def write_xdf_chunk(f: Any, tag: int, data: bytes, stream_id: int | None = None) -> None:
     """Write a single XDF 1.0 chunk: ``[varlen len][u16 tag][u32 stream id?][data]``."""
     header = struct.pack("<H", tag)
     if stream_id is not None:
         header += struct.pack("<I", stream_id)
-    _write_varlen_int(f, len(header) + len(data))
+    write_varlen_int(f, len(header) + len(data))
     f.write(header)
     f.write(data)
 
@@ -112,7 +114,13 @@ def _escape_xml(value: str) -> str:
 
 
 def _stream_header_xml(stream: dict[str, Any]) -> bytes:
-    """Build the ``<info>`` XML of a stream header chunk."""
+    """Build the ``<info>`` XML of a stream header chunk.
+
+    Besides the mandatory fields, the device, the acquisition (with the tier)
+    and the free-form metadata are written when the caller provides them: a
+    recording that does not say which pod and which tier produced it is
+    much harder to interpret later.
+    """
     channels = stream.get("channel_names") or []
     units = stream.get("channel_units") or []
     channel_format = _escape_xml(str(stream.get("channel_format", "float32")))
@@ -136,6 +144,24 @@ def _stream_header_xml(stream: dict[str, Any]) -> bytes:
             parts.append(f"<type>{_escape_xml(str(stream.get('type', 'Other')))}</type>")
             parts.append("</channel>")
         parts.append("</channels>")
+    device = stream.get("device")
+    if device:
+        parts.append("<device>")
+        for key, value in device.items():
+            parts.append(f"<{key}>{_escape_xml(str(value))}</{key}>")
+        parts.append("</device>")
+    acquisition = stream.get("acquisition")
+    if acquisition:
+        parts.append("<acquisition>")
+        for key, value in acquisition.items():
+            parts.append(f"<{key}>{_escape_xml(str(value))}</{key}>")
+        parts.append("</acquisition>")
+    metadata = stream.get("metadata")
+    if metadata:
+        parts.append("<metadata>")
+        for key, value in metadata.items():
+            parts.append(f"<{key}>{_escape_xml(str(value))}</{key}>")
+        parts.append("</metadata>")
     parts.append("</info>")
     return "".join(parts).encode("utf-8")
 
@@ -165,7 +191,7 @@ def write_xdf(
 
     with open(output_path, "wb") as f:
         f.write(XDF_MAGIC)
-        _write_xdf_chunk(f, XDF_CHUNK_TAGS["FILEHEADER"], XDF_FILEHEADER_XML)
+        write_xdf_chunk(f, XDF_CHUNK_TAGS["FILEHEADER"], XDF_FILEHEADER_XML)
 
         for stream_id, stream in enumerate(streams, start=1):
             data = np.asarray(stream["data"])
@@ -190,7 +216,7 @@ def write_xdf(
                 payload = header_xml if isinstance(header_xml, bytes) else bytes(header_xml)
             else:
                 payload = _stream_header_xml(header)
-            _write_xdf_chunk(f, XDF_CHUNK_TAGS["STREAMHEADER"], payload, stream_id)
+            write_xdf_chunk(f, XDF_CHUNK_TAGS["STREAMHEADER"], payload, stream_id)
 
             is_string = data.dtype.kind in ("U", "S", "O")
             for block_start in range(0, n_samples, BLOCK_SIZE):
@@ -199,14 +225,14 @@ def write_xdf(
                 block_timestamps = timestamps[block_start:block_end]
 
                 samples = bytearray()
-                _write_varlen_int(samples, block_end - block_start)
+                write_varlen_int(samples, block_end - block_start)
                 if is_string:
                     for i in range(block_end - block_start):
                         samples.extend(b"\x01")
                         samples.extend(struct.pack("<d", float(block_timestamps[i])))
                         for j in range(n_channels):
                             encoded = str(block_samples[i, j]).encode("utf-8")
-                            _write_varlen_int(samples, len(encoded))
+                            write_varlen_int(samples, len(encoded))
                             samples.extend(encoded)
                 else:
                     rows = np.ascontiguousarray(block_samples, dtype=np.float32)
@@ -215,6 +241,6 @@ def write_xdf(
                         samples.extend(struct.pack("<d", float(block_timestamps[i])))
                         samples.extend(rows[i].tobytes())
 
-                _write_xdf_chunk(f, XDF_CHUNK_TAGS["SAMPLES"], bytes(samples), stream_id)
+                write_xdf_chunk(f, XDF_CHUNK_TAGS["SAMPLES"], bytes(samples), stream_id)
 
-        _write_xdf_chunk(f, XDF_CHUNK_TAGS["BOUNDARY"], XDF_BOUNDARY_SIGNATURE)
+        write_xdf_chunk(f, XDF_CHUNK_TAGS["BOUNDARY"], XDF_BOUNDARY_SIGNATURE)

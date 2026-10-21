@@ -29,6 +29,10 @@ FIRMWARE_DIR = ROOT / "firmware" / "esp32_band"
 SENSORS_C = FIRMWARE_DIR / "sensors" / "synapse_sensors.c"
 GATT_H = FIRMWARE_DIR / "ble" / "ble_gatt_server.h"
 RESEARCH_C = FIRMWARE_DIR / "ble" / "ble_research_service.c"
+# The UUIDs of the contract are generated from hardware.yaml (see
+# tools/generate_contracts.py): the firmware includes this header instead of
+# carrying a second copy of the contract.
+CONTRACT_H = FIRMWARE_DIR / "ble" / "synapse_contract_generated.h"
 RAW_CODEC_PY = ROOT / "src" / "synapse24" / "hardware" / "raw_codec.py"
 BUILD_SCRIPT = ROOT / "scripts" / "build_and_flash_firmware.py"
 BRINGUP_DOC = ROOT / "HARDWARE_BRINGUP.md"
@@ -179,9 +183,10 @@ def check_research_service_uuids(hw: dict, report: Report) -> None:
     )
 
     # Both BLE sources are searched: the research service lives in its own
-    # translation unit, separate from the consumer feature-stream server.
+    # translation unit, separate from the consumer feature-stream server, and
+    # the UUID bytes themselves come from the generated contract header.
     ble_sources = ""
-    for path in (GATT_H, RESEARCH_C):
+    for path in (GATT_H, RESEARCH_C, CONTRACT_H):
         if path.is_file():
             ble_sources += path.read_text(encoding="utf-8") + "\n"
     for name, uuid in chars.items():
@@ -264,7 +269,7 @@ def check_consumer_service_contract(hw: dict, report: Report) -> None:
         "hardware.yaml ble.feature_stream must declare service_uuid and characteristic_uuid",
     )
     ble_sources = ""
-    for path in (GATT_H, RESEARCH_C):
+    for path in (GATT_H, RESEARCH_C, CONTRACT_H):
         if path.is_file():
             ble_sources += path.read_text(encoding="utf-8") + "\n"
     report.check(
@@ -275,6 +280,20 @@ def check_consumer_service_contract(hw: dict, report: Report) -> None:
         char is not None and _uuid_bytes_in_source(ble_sources, char),
         f"firmware BLE sources do not declare consumer characteristic UUID {char}",
     )
+    # The UUID bytes must live in the generated header only: a hardcoded copy
+    # in a translation unit is exactly how the contract drifted before.
+    for path in (GATT_H, RESEARCH_C):
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        hardcoded = [
+            uuid for uuid in (service, char) if uuid and _uuid_bytes_in_source(source, uuid)
+        ]
+        report.check(
+            not hardcoded,
+            f"{path.name} hardcodes the UUID bytes {hardcoded}: use the macros of "
+            "synapse_contract_generated.h (tools/generate_contracts.py)",
+        )
     report.check(
         service != _pod(hw, "forearm_hub").get("metadata", {}).get("research_service_uuid"),
         "consumer feature-stream service and research service must not share a UUID",

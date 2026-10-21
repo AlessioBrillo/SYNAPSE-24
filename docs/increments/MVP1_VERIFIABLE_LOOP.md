@@ -48,6 +48,11 @@ Oltre ai P0, l'incremento ha chiuso:
 - **Il backend indicizzava e rihashava il mondo a ogni richiesta**: ora il
   catalogo si ri-indicizza solo quando l'albero cambia, e `file_sha256` è
   il digest reale del file.
+- **Il contratto aveva copie manuali**: UUID, stream id e rate vivevano
+  nel manifest *e* hardcoded nel firmware (con un regex checker che poteva
+  solo notare il drift). Ora `tools/generate_contracts.py` genera gli
+  artefatti (header C + modulo Python) dal manifest e `--check` fallisce
+  sul drift: il firmware include l'header e non porta più copie.
 
 ## Deliverable (per PR)
 
@@ -59,8 +64,29 @@ Oltre ai P0, l'incremento ha chiuso:
 | PR4 | Analisi: HRV su tempi assoluti, stream per tipo, SQI/MAP corretti, gating LF/HF |
 | PR5 | Backend: token, allowlist CORS, confinement dei path, cache, IO non bloccante |
 | PR6 | SDK: codec allineato al firmware, CLI reale (discover/info/record/inspect), suite nel gate |
-| PR7 | Gate: test SDK, `check_interfaces`, conformità dei formati, coverage estesa |
+| PR7 | Gate: test SDK, `check_interfaces`, conformità dei formati, drift degli artefatti del contratto, coverage estesa |
 | PR8 | Documenti: verità delle claim, ADR-001, questo summary, `AGENTS.md` |
+
+## Review indipendente e correzioni
+
+L'incremento è stato sottoposto a due review indipendenti (un agente con
+accesso al repository). I rilievi bloccanti e maggiori sono stati corretti
+prima del merge:
+
+| Rilievo | Correzione |
+|---|---|
+| **Blocker**: la macro generata `SYNAPSE_CONTRACT_UUID_X_BYTES` non era utilizzabile con `BLE_UUID128_INIT` (macro a 16 argomenti): il firmware non compilava | il generatore emette anche `_INIT` (la chiamata completa) e `_BYTES` (la lista, per gli inizializzatori a graffe); i call site usano `_INIT` |
+| Il codec dell'SDK ignorava il flag `flags` e ammetteva frame da 256 byte (budget senza header) | il flag del caller arriva sul filo; il budget è `(244 - 12)` come nel firmware e nell'host; test di parità con i flag |
+| Il motion gate era alimentato con il PPG **interleaved** (red/IR alternati): la SQI di un segnale pulito crollava e la promozione restava irraggiungibile | la finestra è de-interleaved (canale rosso) e l'accelerometro è allineato per campione; test di regressione |
+| `band-core` linkava comunque il provisioning (e `esp_wifi`) | il componente BLE richiede il provisioning solo con il flag, e le chiamate sono compilate fuori: nel band-core la scrittura del provisioning è *rifiutata*, non ignorata |
+| La lunghezza del frame del research service contava i canelli due volte (byte letti fuori dal buffer, notifiche 2-4× troppo lunghe) | la lunghezza è header + valori × dimensione, come nel codec |
+| Il contatore `dropped` mescolava valori e campioni | l'unità è il campione, in firmware, host e SOP |
+| La coverage misurava `sdk/python` e `backend` senza eseguirne i test (79,55% < 80%) | la suite SDK è raccolta nel run di coverage: 84,58% |
+| Il writer FIT del firmware non scriveva il messaggio `file_id` | il messaggio è scritto, con i numeri di campo del profilo |
+| Il writer FIT del firmware non chiudeva il file in caso di errore (il pod abortiva) | il fallimento chiude il file, chiude la sessione e restituisce l'errore; l'acquisition non fa più `ESP_ERROR_CHECK` |
+| Due encoder XDF (host e SDK) | l'host delega all'SDK, anche nel percorso di correzione dei timestamp |
+| L'header XDF perdeva device/acquisition/tier | il writer dell'SDK li scrive quando il caller li fornisce |
+| Il token del WebSocket era accettato nella query string | solo l'header `Authorization` |
 
 ## Cosa NON è in questo incremento (per design)
 
@@ -97,9 +123,13 @@ Oltre ai P0, l'incremento ha chiuso:
 
 Nuovi: `sdk/python/synapse_device/xdf_writer.py`,
 `src/synapse24/acquisition/stream_spool.py`, `src/synapse24/export/`,
+`src/synapse24/contracts_generated.py`,
+`firmware/esp32_band/ble/synapse_contract_generated.h`,
+`tools/generate_contracts.py`,
 `docs/decisions/ADR-001-canonical-paths.md`,
 `docs/increments/MVP1_VERIFIABLE_LOOP.md`, `tests/test_format_conformance.py`,
-`tests/test_firmware_ble_contract.py`, `tests/test_firmware_ppg_sqi_host.py`.
+`tests/test_firmware_ble_contract.py`, `tests/test_firmware_ppg_sqi_host.py`,
+`tests/test_contract_codegen.py`, `scripts/run_gate_locally.sh`.
 
 Modificati: firmware (`ble_gatt_server.c`, `ble_research_service.c`,
 `synapse_raw_frame.[ch]`, `app_main.c`, `main/CMakeLists.txt`, `ppg_sqi.cpp`),

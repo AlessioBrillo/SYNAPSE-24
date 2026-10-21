@@ -287,6 +287,78 @@ def test_sequence_gaps_are_detected() -> None:
     assert all(event.gap >= 1 for event in decoder.drops)
 
 
+def test_the_loss_counter_is_aggregated() -> None:
+    """The `dropped` byte of the header must reach the host's counters.
+
+    The sequence gap says *that* something is missing; the counter says *how
+    much*: a hole of one frame and a hole of a hundred samples are different
+    failures, and the gate has to see both.
+    """
+    from synapse24.hardware.research_client import ResearchStreamDecoder
+
+    decoder = ResearchStreamDecoder()
+    for seq in range(3):
+        frame = encode_frame(
+            RawStream.ECG, seq, 1000 + seq, 0, RawFormat.S16, [10, 20, 30], dropped=7
+        )
+        decoder.feed(frame)
+
+    assert decoder.dropped_sample_summary() == {"ECG": 21}
+    assert not decoder.is_clean()
+
+
+def test_a_clean_stream_has_no_loss_counters() -> None:
+    from synapse24.hardware.research_client import ResearchStreamDecoder
+
+    decoder = ResearchStreamDecoder()
+    frame = encode_frame(RawStream.ECG, 0, 1000, 0, RawFormat.S16, [10, 20, 30])
+    decoder.feed(frame)
+    assert decoder.dropped_sample_summary() == {}
+    assert decoder.is_clean()
+
+
+def test_the_ppg_window_is_de_interleaved_before_the_quality_metrics() -> None:
+    """A clean PPG must score high, even with the red/IR channels interleaved.
+
+    The decoder returns the values interleaved (red, IR, red, IR...). Feeding
+    that mixed trace to the quality metrics puts a strong component at fs/2,
+    outside the cardiac band: the SQI of a *clean* signal collapsed to 0.34
+    and the motion gate never armed, so the T0 -> T1 promotion stayed
+    unreachable.
+    """
+    from synapse24.hardware.research_client import ResearchStreamDecoder
+    from synapse24.signal_quality.ppg import compute_ppg_sqi
+
+    fs = 50.0
+    rate_hz = 50
+    n = int(fs * 20)
+    t = np.arange(n) / fs
+    # A clean pulse train on the red channel, a noisy one on the IR channel
+    # (the realistic case: the two channels are not the same signal).
+    clean = (np.sin(2 * np.pi * 1.2 * t) ** 3 * 1000.0).astype(np.int32)
+    rng = np.random.default_rng(3)
+    noisy = rng.integers(-200, 200, size=n).astype(np.int32)
+
+    decoder = ResearchStreamDecoder()
+    for seq in range(20):
+        block = clean[seq * 25 : (seq + 1) * 25]
+        other = noisy[seq * 25 : (seq + 1) * 25]
+        interleaved = np.column_stack([block, other]).ravel()  # red, IR, red, IR...
+        frame = encode_frame(RawStream.PPG, seq, 1000 + seq, 0, RawFormat.S32, interleaved)
+        decoder.feed(frame)
+
+    values = decoder.tail(RawStream.PPG, 2 * 500)
+    assert values.size >= 2 * 500
+    red = values[0::2]
+
+    sqi_deinterleaved = compute_ppg_sqi(red, rate_hz)
+    sqi_interleaved = compute_ppg_sqi(values, rate_hz)
+    assert sqi_deinterleaved > 0.6, f"the de-interleaved SQI is {sqi_deinterleaved:.3f}"
+    assert sqi_deinterleaved > sqi_interleaved + 0.2, (
+        "the interleaved trace must not be what the quality metrics see"
+    )
+
+
 def test_corrupt_frames_are_counted_not_fatal() -> None:
     pod = SyntheticPod(duration_s=2.0, seed=9, corrupt_version_every=53)
     decoder = replay(pod)

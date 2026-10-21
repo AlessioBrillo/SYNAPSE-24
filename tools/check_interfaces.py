@@ -38,6 +38,8 @@ FIRMWARE_RESEARCH_SERVICE = (
     DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "ble_research_service.c"
 )
 TRANSPORT_PY = DEFAULT_ROOT / "sdk" / "python" / "synapse_device" / "transport.py"
+CONTRACTS_PY = DEFAULT_ROOT / "src" / "synapse24" / "contracts_generated.py"
+CONTRACT_H = DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "synapse_contract_generated.h"
 
 # UUID v1 pattern (lowercase, with hyphens).
 _UUID_RE = re.compile(
@@ -46,6 +48,9 @@ _UUID_RE = re.compile(
 # NimBLE 128-bit UUIDs are stored little-endian: the first init byte is the
 # LAST byte of the canonical UUID string.
 _LEADING_BYTE_RE = re.compile(r"BLE_UUID128_INIT\s*\(\s*0x([0-9a-fA-F]{2})")
+# The generated contract header declares the same bytes as a macro list; its
+# first byte is the same little-endian leading byte.
+_GENERATED_LEADING_BYTE_RE = re.compile(r"_BYTES\s*\\?\s*0x([0-9a-fA-F]{2})")
 
 # C macro name -> expected descriptor field id.
 DEV_FIELD_MACROS = (
@@ -281,10 +286,12 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
         """First init byte of each BLE_UUID128_INIT, as two lowercase hex digits."""
         return {m.group(1).lower() for m in _LEADING_BYTE_RE.finditer(text)}
 
-    # Text sources: hardware manifest + host transport (both carry UUID strings).
+    # Text sources: hardware manifest + host transport + the generated contract
+    # artifacts (all carry the canonical UUID strings).
     for label, path in (
         ("config/hardware.yaml", HARDWARE_YAML),
         ("sdk/python/synapse_device/transport.py", TRANSPORT_PY),
+        ("src/synapse24/contracts_generated.py", CONTRACTS_PY),
     ):
         if not path.is_file():
             continue
@@ -296,16 +303,22 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
                 f"{sorted(missing)}"
             )
 
-    # Firmware source: UUIDs are little-endian byte arrays; compare the leading
-    # (least-significant) byte of each canonical UUID against the init bytes.
-    if FIRMWARE_RESEARCH_SERVICE.is_file():
-        fw_bytes = _firmware_leading_bytes(FIRMWARE_RESEARCH_SERVICE.read_text(encoding="utf-8"))
+    # Firmware source: the UUID bytes live in the generated header (the
+    # firmware carries no second copy); compare the leading (least-significant)
+    # byte of each canonical UUID against the init bytes of the header.
+    firmware_text = ""
+    for path in (FIRMWARE_RESEARCH_SERVICE, CONTRACT_H):
+        if path.is_file():
+            firmware_text += path.read_text(encoding="utf-8") + "\n"
+    if firmware_text:
+        fw_bytes = _firmware_leading_bytes(firmware_text)
+        fw_bytes |= {m.group(1).lower() for m in _GENERATED_LEADING_BYTE_RE.finditer(firmware_text)}
         missing = [u for u in sorted(reference) if u[-2:] not in fw_bytes]
         if missing:
             report.fail(
-                "GATT research-service UUID drift in "
-                "firmware/esp32_band/ble/ble_research_service.c: canonical UUIDs "
-                f"missing (by trailing byte): {missing}"
+                "GATT research-service UUID drift in the firmware BLE sources "
+                "(ble_research_service.c + synapse_contract_generated.h): canonical "
+                f"UUIDs missing (by trailing byte): {missing}"
             )
 
 

@@ -70,9 +70,14 @@ class StreamSpool:
         return rows, stamps
 
     def read_all(self) -> tuple[np.ndarray, np.ndarray]:
-        """Read the whole session back from disk as ``(rows, timestamps)``."""
-        self._data_file.flush()
-        self._ts_file.flush()
+        """Read the whole session back from disk as ``(rows, timestamps)``.
+
+        Works before and after :meth:`close`: closing flushes the handles,
+        the data stays on disk until :meth:`remove`.
+        """
+        if not self._data_file.closed:
+            self._data_file.flush()
+            self._ts_file.flush()
         rows = np.fromfile(self._data_path, dtype=np.float64)
         stamps = np.fromfile(self._ts_path, dtype=np.float64)
         if self.n_channels > 0 and rows.size:
@@ -146,7 +151,17 @@ class SpoolManager:
         self._spools.clear()
 
     def close(self) -> None:
-        """Close every spool and remove the temporary directory."""
+        """Close the spool files, keeping the data on disk.
+
+        The data is needed by the report (the gate reads the samples back),
+        so closing is not the same as removing: use :meth:`cleanup` to
+        delete the files.
+        """
+        for spool in self._spools.values():
+            spool.close()
+
+    def cleanup(self) -> None:
+        """Close the spools and delete their files (and the temp directory)."""
         for spool in self._spools.values():
             spool.remove()
         self._spools.clear()

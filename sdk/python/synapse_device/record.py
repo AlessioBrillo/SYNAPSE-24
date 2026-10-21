@@ -42,17 +42,11 @@ CHAR_UUID_TO_STREAM = {
     "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75": RawStream.MAG,
 }
 
-# Nominal rate per stream (Hz), as declared in config/hardware.yaml. The
-# synthetic transport emits every stream at the same rate, so the recording
-# declares the rate it actually produced: a file that announces 500 Hz and
-# carries 50 Hz samples is a lie the reader can only discover downstream.
-STREAM_RATE_HZ: dict[RawStream, float] = {
-    RawStream.ECG: 500.0,
-    RawStream.PPG: 50.0,
-    RawStream.ACC: 50.0,
-    RawStream.GYRO: 50.0,
-    RawStream.MAG: 50.0,
-}
+# The nominal rate of every stream is in config/hardware.yaml
+# (config/hardware.yaml -> raw_frame / sampling_rate). The synthetic
+# transport emits every stream at the same rate, so the recording declares
+# the rate it actually produced: a file that announces 500 Hz and carries
+# 50 Hz samples is a lie the reader can only discover downstream.
 
 
 class XdfRoundTripError(RuntimeError):

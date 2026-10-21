@@ -25,39 +25,34 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "ble_research_service.h"
+#include "synapse_contract_generated.h"
 #include "synapse_raw_frame.h"
 #include "host/ble_hs_mbuf.h"
 
 static const char *TAG = "SYNAPSE_RESEARCH";
 
-// UUIDs (little-endian) — must match config/hardware.yaml
-// `metadata.research_characteristics` for the forearm_hub pod.
+// UUIDs (little-endian) — generated from config/hardware.yaml
+// (`metadata.research_service_uuid` and `metadata.research_characteristics`
+// for the forearm_hub pod), so the firmware cannot carry a second copy of the
+// contract. Regenerate with: uv run python tools/generate_contracts.py
 static const ble_uuid128_t RESEARCH_SVC_UUID =
-    BLE_UUID128_INIT(0x70, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_SERVICE_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_ECG_UUID =
-    BLE_UUID128_INIT(0x71, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_ECG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_PPG_UUID =
-    BLE_UUID128_INIT(0x72, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_PPG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_ACC_UUID =
-    BLE_UUID128_INIT(0x73, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_ACC_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_GYRO_UUID =
-    BLE_UUID128_INIT(0x74, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_GYRO_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_MAG_UUID =
-    BLE_UUID128_INIT(0x75, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_MAG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_SYNC_UUID =
-    BLE_UUID128_INIT(0x78, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_SYNC_INIT;
 // Power telemetry (INA219): voltage_mv, current_ma, power_mw, battery_pct at 1 Hz.
 // Declared in config/hardware.yaml `research_characteristics.power`.
 static const ble_uuid128_t RESEARCH_CHAR_POWER_UUID =
-    BLE_UUID128_INIT(0x79, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_POWER_INIT;
 
 // Value handles, filled in by ble_gatts_count_cfg/add_svcs at registration.
 static uint16_t s_hdl_ecg;
@@ -372,18 +367,26 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
 
     if (rc != SYNAPSE_RAW_OK) {
         r->dropped_frames++;
-        research_note_drop(stream, count);
+        // The counter is in SAMPLES (the unit of the header byte), not in
+        // values: a refused frame loses `samples` physical samples, and a
+        // ring overflow loses one.
+        research_note_drop(stream, samples);
         ESP_LOGW(TAG, "encode failed for stream 0x%02x: %s", stream->stream_id,
                  synapse_raw_status_str(rc));
     } else {
-        size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * channels * size;
+        /* The frame carries `count` VALUES, so its length is the header plus
+         * count * size bytes. Multiplying by the channel count again (the
+         * old code did) doubled or quadrupled the length of every
+         * multi-channel frame: the notification carried stale bytes of the
+         * static buffer and, when the ring backed up, read past it. */
+        size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * size;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_notify_buf, (uint16_t)frame_len);
         if (om == NULL) {
             r->dropped_frames++;
-            research_note_drop(stream, count);
+            research_note_drop(stream, samples);
         } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
             r->dropped_frames++;
-            research_note_drop(stream, count);
+            research_note_drop(stream, samples);
             os_mbuf_free_chain(om);
         } else {
             /* Transmitted: the loss counter has reached the host, reset it. */

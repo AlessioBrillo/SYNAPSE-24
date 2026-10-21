@@ -150,8 +150,11 @@ FIT_EPOCH = datetime(1989, 12, 31, tzinfo=UTC)
 # Manufacturer id used in file_id / device_info: 255 == "development".
 FIT_MANUFACTURER_DEVELOPMENT = 255
 
-# Application id written in the developer_data_id message (16 bytes).
-APPLICATION_ID = b"SYNAPSE".ljust(16, b"\x00")
+# Application id written in the developer_data_id message (16 bytes). It is
+# the same string the firmware writer uses (firmware/esp32_band/fit/
+# fit_writer.h): a consumer must be able to tell which writer produced a
+# file.
+APPLICATION_ID = b"SYNAPSE24FIT0001"
 APPLICATION_VERSION = 0x53594E41  # "SYNA"
 DEVELOPER_DATA_INDEX = 0
 

@@ -38,6 +38,7 @@ FIT_DIR = BAND / "fit"
 GATT_C = BLE_DIR / "ble_gatt_server.c"
 GATT_H = BLE_DIR / "ble_gatt_server.h"
 RESEARCH_C = BLE_DIR / "ble_research_service.c"
+BLE_CMAKE = BLE_DIR / "CMakeLists.txt"
 APP_MAIN = MAIN_DIR / "app_main.c"
 MAIN_CMAKE = MAIN_DIR / "CMakeLists.txt"
 FIT_C = FIT_DIR / "fit_writer.c"
@@ -326,6 +327,29 @@ def test_the_main_component_requires_the_optional_components_conditionally() -> 
         assert f"if({flag})" in source, f"{component} is not required conditionally"
         block = source.split(f"if({flag})", 1)[1].split("endif()", 1)[0]
         assert component in block, f"the {component} component is not required when {flag} is on"
+
+
+def test_the_ble_component_requires_provisioning_conditionally() -> None:
+    """The BLE component must not pull the provisioning stack into band-core.
+
+    The BLE server calls the provisioning API (write handler, advertising
+    mode): with the flag off, the component is not linked and the calls are
+    compiled out.
+    """
+    cmake = _read(BLE_CMAKE)
+    assert "if(CONFIG_SYNAPSE_FEATURE_PROVISIONING)" in cmake, (
+        "the BLE component must require provisioning conditionally"
+    )
+    block = cmake.split("if(CONFIG_SYNAPSE_FEATURE_PROVISIONING)", 1)[1].split("endif()", 1)[0]
+    assert "provisioning" in block
+
+    source = _read(GATT_C)
+    assert "#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)" in source
+    for call in ("synapse_provisioning_process_cmd", "synapse_provisioning_is_complete"):
+        index = source.index(call)
+        guard = source.rfind("#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)", 0, index)
+        guard_end = source.rfind("#endif", 0, index)
+        assert guard > guard_end, f"{call} is not guarded by the Kconfig flag"
 
 
 def test_the_kconfig_help_documents_the_gating() -> None:

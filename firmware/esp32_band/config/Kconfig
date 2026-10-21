@@ -49,8 +49,10 @@ config SYNAPSE_FEATURE_PROVISIONING
         Enable provisioning flow via BLE GATT for WiFi credentials, cloud URL, and device certificates.
 
         This flag now gates the code: with it off the provisioning component
-        is not linked into the main component, synapse_provisioning_init()
-        is not called, and the device advertises in normal mode only.
+        is not linked (neither into the main component nor into the BLE
+        component), synapse_provisioning_init() is not called, the
+        provisioning characteristic refuses writes, and the device advertises
+        in normal mode only.
 
 config SYNAPSE_FEATURE_OTA
     bool "Enable OTA updates with rollback"

@@ -54,24 +54,23 @@ extern "C" {
 
 // ============================================================================
 // Custom Synapse Service UUID (128-bit)
-// Generated with: uuidgen  (Fase 0 - freeze GATT v1, 27 Settembre 2026)
+// Generated from config/hardware.yaml (tools/generate_contracts.py): the
+// contract has a single source of truth, the firmware only includes it.
 // ============================================================================
+#include "synapse_contract_generated.h"
+
 #define SYNAPSE_CUSTOM_SERVICE_UUID128 \
-    {0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97, \
-     0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9}  // f9e08ffd-3d34-441f-97a6-1bf0958123f1
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_BYTES}  // f9e08ffd-...
 
 // Custom Characteristic UUIDs (128-bit, derived from service UUID)
 #define SYNAPSE_CHAR_FEATURE_STREAM_UUID128 \
-    {0xE9, 0x68, 0x11, 0x92, 0xC3, 0x81, 0xE2, 0xA0, \
-     0x52, 0x41, 0xB3, 0x6C, 0xE5, 0x07, 0x43, 0xDB}  // db4307e5-6cb3-4152-a0e2-81c3921168e9
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_FEATURE_BYTES}  // db4307e5-...
 
 #define SYNAPSE_CHAR_DEVICE_CONFIG_UUID128 \
-    {0x2F, 0x33, 0x1F, 0xA5, 0x64, 0x79, 0x75, 0x8D, \
-     0x9A, 0x47, 0x02, 0x0D, 0x47, 0xD6, 0x68, 0xBF}  // bf68d647-0d02-479a-8d75-7964a51f332f
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_DEVICE_CONFIG_BYTES}  // bf68d647-...
 
 #define SYNAPSE_CHAR_PROVISIONING_UUID128 \
-    {0x4A, 0xB1, 0x3B, 0x5D, 0x3E, 0xA0, 0x61, 0xA1, \
-     0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E}  // 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_PROVISIONING_BYTES}  // 4e200cf1-...
 
 // ============================================================================
 // Advertising payload budget (legacy advertising, BLE 4.x)

@@ -20,7 +20,10 @@
 #include "ble_gatt_server.h"
 #include "ble_gatt_server_priv.h"
 #include "ble_research_service.h"
+#include "synapse_contract_generated.h"
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
 #include "synapse_provisioning.h"
+#endif
 #include "synapse_config.h"
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -46,23 +49,21 @@ static char s_hw_rev[32] = "1.0";
 static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
 static uint16_t s_cfg_len = 0;
 
-// 128-bit UUIDs (little-endian byte order, GATT v1 frozen)
+// 128-bit UUIDs (little-endian byte order, GATT v1 frozen) — generated from
+// config/hardware.yaml, so the firmware cannot carry a second copy of the
+// contract. Regenerate with: uv run python tools/generate_contracts.py
 // Service: f9e08ffd-3d34-441f-97a6-1bf0958123f1
 static const ble_uuid128_t SYN_SVC_UUID =
-    BLE_UUID128_INIT(0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
-                     0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_INIT;
 // Feature stream: db4307e5-6cb3-4152-a0e2-81c3921168e9
 static const ble_uuid128_t FEAT_UUID =
-    BLE_UUID128_INIT(0xE9, 0x68, 0x11, 0x92, 0xC3, 0x81, 0xE2, 0xA0,
-                     0x52, 0x41, 0xB3, 0x6C, 0xE5, 0x07, 0x43, 0xDB);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_FEATURE_INIT;
 // Device config: bf68d647-0d02-479a-8d75-7964a51f332f
 static const ble_uuid128_t CFG_UUID =
-    BLE_UUID128_INIT(0x2F, 0x33, 0x1F, 0xA5, 0x64, 0x79, 0x75, 0x8D,
-                     0x9A, 0x47, 0x02, 0x0D, 0x47, 0xD6, 0x68, 0xBF);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_DEVICE_CONFIG_INIT;
 // Provisioning: 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
 static const ble_uuid128_t PROV_UUID =
-    BLE_UUID128_INIT(0x4A, 0xB1, 0x3B, 0x5D, 0x3E, 0xA0, 0x61, 0xA1,
-                     0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_PROVISIONING_INIT;
 
 // --- characteristic access callbacks -----------------------------------------
 
@@ -126,7 +127,8 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 
 /**
  * @brief Notify Heart Rate Measurement with optional RR interval.
- * Builds a standard 0x2A37 value: flags(0x10 = 16-bit HR) + HR16 + [RR16...].
+ * Builds a standard 0x2A37 value: flags(0x01 = 16-bit HR, 0x10 = RR present)
+ * + HR16 + [RR16...].
  * Call whenever a new HR sample is available; subscribers get the push.
  */
 esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
@@ -141,7 +143,7 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
     uint8_t flags = 0x01; // 16-bit HR value
     if (rr_interval_ms != 0xFFFF) flags |= 0x10; // RR interval present
-    uint8_t val[2 + 2]; // flags + HR16 [+ RR16]
+    uint8_t val[1 + 2 + 2]; // flags + HR16 [+ RR16]
     uint8_t n = 0;
     val[n++] = flags;
     val[n++] = (uint8_t)(hr_bpm & 0xFF);
@@ -202,7 +204,15 @@ static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         uint8_t payload[240];
         if (data_len > sizeof(payload)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         if (data_len) os_mbuf_copydata(ctxt->om, 4, data_len, payload);
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         synapse_provisioning_process_cmd(hdr[0], payload, data_len);
+#else
+        // band-core: no provisioning. The write is refused, not silently
+        // swallowed: a client that tries to provision must know it failed.
+        (void)payload;
+        ESP_LOGW(BLE_TAG, "provisioning is disabled in this build");
+        return BLE_ATT_ERR_UNLIKELY;
+#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -339,8 +349,14 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         g_feat_subscribed = false;
         g_prov_subscribed = false;
         synapse_research_service_on_disconnect();
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
         else synapse_ble_gatt_start_advertising_normal();
+#else
+        // band-core: provisioning is not part of the build, so the pod is
+        // always in normal mode.
+        synapse_ble_gatt_start_advertising_normal();
+#endif
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(BLE_TAG, "Subscribe attr=%d notify=%d",
@@ -406,9 +422,8 @@ static void start_advertising_impl(const char *name) {
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     // Advertise the Synapse consumer service so Averyn can find the device by
     // UUID without connecting first (phase 0 contract).
-    static const ble_uuid128_t svc_uuid128 = BLE_UUID128_INIT(
-        0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
-        0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+    static const ble_uuid128_t svc_uuid128 =
+        SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_INIT;
     fields.uuids128 = (ble_uuid128_t[]){svc_uuid128};
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
@@ -471,11 +486,16 @@ static void on_sync(void) {
     // name and the consumer service UUID. The difference is in what the
     // provisioning characteristic accepts, not in the advertisement, so the
     // two branches are kept explicit instead of duplicating the call.
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
     if (!synapse_provisioning_is_complete()) {
         ESP_LOGI(BLE_TAG, "advertising (provisioning mode)");
     } else {
         ESP_LOGI(BLE_TAG, "advertising (normal mode)");
     }
+#else
+    // band-core: no provisioning in this build, so the pod is always normal.
+    ESP_LOGI(BLE_TAG, "advertising (normal mode: provisioning not in this build)");
+#endif
     start_advertising_impl(SYNAPSE_BLE_DEVICE_NAME);
 }
 

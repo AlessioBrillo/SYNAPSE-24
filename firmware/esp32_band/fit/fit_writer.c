@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -142,6 +143,49 @@ static const synapse_dev_field_t s_dev_fields[SYNAPSE_NUM_DEV_FIELDS] = {
     { SYNAPSE_DEV_FIELD_LF_HF,        2, FIT_BASE_TYPE_UINT16,  "synapse_lf_hf",       "ratio_x100" },
 };
 
+// Write the FIT file_id message (global 0): the identity of the file. A
+// standard parser expects it as the first message: without it the file
+// carries no type, no manufacturer and no serial.
+static void write_file_id(uint32_t serial_number, uint32_t time_created) {
+    uint8_t def[] = {
+        (uint8_t)(FIT_HEADER_DEFINITION | 2u), // definition, local msg type 2
+        0x00, // reserved
+        0x00, // architecture: little endian
+        (uint8_t)(FIT_MESG_FILE_ID & 0xFF),
+        (uint8_t)((FIT_MESG_FILE_ID >> 8) & 0xFF),
+        0x05, // num fields
+        // field 0: type (enum, 1 byte) — 4 = activity
+        FIT_FIELD_FILE_ID_TYPE, 1, FIT_BASE_TYPE_ENUM,
+        // field 1: manufacturer (uint16)
+        FIT_FIELD_FILE_ID_MANUFACTURER, 2, FIT_BASE_TYPE_UINT16,
+        // field 2: product (uint16)
+        FIT_FIELD_FILE_ID_PRODUCT, 2, FIT_BASE_TYPE_UINT16,
+        // field 3: serial_number (uint32z)
+        FIT_FIELD_FILE_ID_SERIAL, 4, FIT_BASE_TYPE_UINT32Z,
+        // field 4: time_created (uint32)
+        FIT_FIELD_FILE_ID_TIME_CREATED, 4, FIT_BASE_TYPE_UINT32,
+    };
+    crc_write(def, sizeof(def));
+
+    uint8_t data[1 + 1 + 2 + 2 + 4 + 4];
+    uint8_t *p = data;
+    *p++ = 0x02; // data message, local msg type 2
+    *p++ = 0x04; // type: activity
+    *p++ = (uint8_t)(FIT_MANUFACTURER_DEVELOPMENT & 0xFF);
+    *p++ = (uint8_t)((FIT_MANUFACTURER_DEVELOPMENT >> 8) & 0xFF);
+    *p++ = 0xFF; *p++ = 0xFF; // product: unknown
+    uint32_t serial = serial_number;
+    *p++ = (uint8_t)(serial & 0xFF);
+    *p++ = (uint8_t)((serial >> 8) & 0xFF);
+    *p++ = (uint8_t)((serial >> 16) & 0xFF);
+    *p++ = (uint8_t)((serial >> 24) & 0xFF);
+    *p++ = (uint8_t)(time_created & 0xFF);
+    *p++ = (uint8_t)((time_created >> 8) & 0xFF);
+    *p++ = (uint8_t)((time_created >> 16) & 0xFF);
+    *p++ = (uint8_t)((time_created >> 24) & 0xFF);
+    crc_write(data, (size_t)(p - data));
+}
+
 // Write FIT Developer Data ID message (global 207): binds a developer data
 // index to the application that owns it. Field layout (FIT profile):
 //   0 developer_id (byte[16]), 1 application_id (byte[16]),
@@ -243,6 +287,9 @@ static void write_record_definition(void) {
     // The developer data contract comes FIRST: a parser resolves the
     // developer field names and types from these messages, so they must be
     // known before the record definition that uses the developer fields.
+    // The file_id (the identity of the file) comes before them: it is the
+    // first message of every FIT file.
+    write_file_id(FIT_INVALID_UINT32, g_session.config.start_time_utc);
     write_developer_data_id();
     write_field_description();
 
@@ -468,19 +515,33 @@ esp_err_t synapse_fit_stop_session(const char *output_path) {
                          (uint8_t)((file_crc >> 8) & 0xFF) };
     // The write position is still at the end of the record data: the CRC
     // goes there. The header is patched afterwards, from the start.
-    if (fwrite(crc_b, 1, FIT_CRC_SIZE, g_file) != FIT_CRC_SIZE) return ESP_FAIL;
+    bool failed = false;
+    if (fwrite(crc_b, 1, FIT_CRC_SIZE, g_file) != FIT_CRC_SIZE) failed = true;
+    if (!failed && fseek(g_file, 0, SEEK_SET) != 0) failed = true;
+    if (!failed && fwrite(g_header, 1, sizeof(g_header), g_file) != sizeof(g_header)) {
+        failed = true;
+    }
+    if (!failed) fflush(g_file);
 
-    if (fseek(g_file, 0, SEEK_SET) != 0) return ESP_FAIL;
-    if (fwrite(g_header, 1, sizeof(g_header), g_file) != sizeof(g_header)) return ESP_FAIL;
-    fflush(g_file);
+    // The size is known: the header, the data and the trailing CRC. (It used
+    // to be read back with ftell() *after* the seek to the start, so the log
+    // always reported the header size.)
+    long total = (long)FIT_FILE_HEADER_SIZE + (long)g_data_size + (long)FIT_CRC_SIZE;
+    (void)total; // the log macros are no-ops in the host build
 
-    long total = ftell(g_file);
-    (void)total;
     fclose(g_file);
     g_file = NULL;
+    g_session.active = false;
+    if (failed) {
+        // The file on the flash is truncated or has a broken header: it is
+        // not a valid FIT file. The handle is released and the session is
+        // closed: a failure here must not leave the pod with an open file
+        // and an active session (the caller aborts the pod otherwise).
+        ESP_LOGE(TAG, "FIT session could not be finalised: %s", g_session.filepath);
+        return ESP_FAIL;
+    }
     ESP_LOGI(TAG, "FIT session stopped: %s records=%lu size=%ld",
              g_session.filepath, (unsigned long)g_session.record_count, total);
-    g_session.active = false;
     return ESP_OK;
 #endif
 }

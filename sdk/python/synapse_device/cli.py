@@ -31,7 +31,7 @@ command                      equivalent in the host pipeline
 from __future__ import annotations
 
 import argparse
-import inspect
+import inspect as _inspect
 import sys
 from pathlib import Path
 
@@ -92,7 +92,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         scanned = BleakScanner.discover(timeout=args.timeout)
         # bleak >= 0.21 exposes an async scanner (a coroutine returning a
         # list); older releases return a dict synchronously.
-        if inspect.isawaitable(scanned):
+        if _inspect.isawaitable(scanned):
             import asyncio  # noqa: PLC0415
 
             found_devices = list(asyncio.run(scanned))

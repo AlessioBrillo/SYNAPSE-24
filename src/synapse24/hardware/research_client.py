@@ -139,7 +139,15 @@ class DeviceClock:
 
 @dataclass
 class ResearchStreamDecoder:
-    """Accumulates decoded frames per stream and exposes numpy-friendly output."""
+    """Accumulates decoded frames per stream and exposes numpy-friendly output.
+
+    ``history_limit`` caps the number of values kept per stream (0 = no cap).
+    The live path sets it: the dataset is written by the *spool* (on disk),
+    so the decoder only needs the recent window the quality metrics work on.
+    Without a cap the decoder keeps every sample of the session in RAM, and
+    a caller that asks for the tail on every notification pays an O(N) copy
+    per notification — quadratic over a session.
+    """
 
     samples: dict[RawStream, list[np.ndarray]] = field(default_factory=dict)
     timestamps: dict[RawStream, list[np.ndarray]] = field(default_factory=dict)
@@ -165,6 +173,15 @@ class ResearchStreamDecoder:
     # pod's counter, so anything mapping pod time into the host domain must
     # use this reconstructed value, never the raw header stamp.
     last_first_us: int = 0
+    # Samples the pod reports as lost, per stream (the `dropped` byte of the
+    # frame header). The sequence gap says *that* something is missing, the
+    # counter says *how much*: a hole of one frame and a hole of a hundred
+    # samples are different failures.
+    dropped_samples: dict[RawStream, int] = field(default_factory=dict)
+    # Maximum number of values kept per stream (0 = unlimited). The live
+    # path sets it: the session is written by the spool (on disk), so the
+    # decoder only needs the recent window.
+    history_limit: int = 0
     # Nominal rate per stream (Hz), used to space the samples inside a frame.
     stream_rates_hz: dict[RawStream, float] = field(default_factory=dict)
 
@@ -241,6 +258,34 @@ class ResearchStreamDecoder:
             samples.astype(np.float64) / UNIT_DIVISOR.get(header.stream, 1.0)
         )
         self.timestamps.setdefault(header.stream, []).append(ts.astype(np.float64))
+        if header.dropped:
+            self.dropped_samples[header.stream] = self.dropped_samples.get(header.stream, 0) + int(
+                header.dropped
+            )
+        self._trim_history(header.stream)
+
+    def _trim_history(self, stream: RawStream) -> None:
+        """Drop the oldest frames of a stream beyond the history limit."""
+        if not self.history_limit:
+            return
+        frames = self.samples.get(stream)
+        if not frames:
+            return
+        total = 0
+        for frame in reversed(frames):
+            total += int(frame.size)
+            if total > self.history_limit:
+                break
+        excess = total - self.history_limit
+        while excess > 0 and len(frames) > 1:
+            first = frames[0]
+            if first.size > excess:
+                break
+            excess -= int(first.size)
+            frames.pop(0)
+            stamps = self.timestamps.get(stream)
+            if stamps:
+                stamps.pop(0)
 
     def _rate_for(self, stream: RawStream) -> float:
         """Nominal rate of a stream, from the manifest (loaded once)."""
@@ -258,6 +303,29 @@ class ResearchStreamDecoder:
             np.concatenate(self.timestamps[stream]),
         )
 
+    def tail(self, stream: RawStream, n_values: int) -> np.ndarray:
+        """The last ``n_values`` values of a stream, without copying the history.
+
+        The live path asks for the tail on every notification: concatenating
+        the whole session each time is quadratic (and, on a 6-hour soak,
+        minutes of pure copying).
+        """
+        frames = self.samples.get(stream)
+        if not frames or n_values <= 0:
+            return np.zeros(0, dtype=np.float64)
+        needed = int(n_values)
+        chunks: list[np.ndarray] = []
+        total = 0
+        for frame in reversed(frames):
+            chunks.append(frame)
+            total += int(frame.size)
+            if total >= needed:
+                break
+        if not chunks:
+            return np.zeros(0, dtype=np.float64)
+        values = np.concatenate(list(reversed(chunks)))
+        return np.asarray(values[-needed:], dtype=np.float64)
+
     def drop_summary(self) -> dict[str, int]:
         """Per-stream count of frames lost in transit."""
         counts: dict[str, int] = {}
@@ -265,9 +333,19 @@ class ResearchStreamDecoder:
             counts[event.stream.name] = counts.get(event.stream.name, 0) + event.gap
         return counts
 
+    def dropped_sample_summary(self) -> dict[str, int]:
+        """Per-stream count of samples the pod reports as lost.
+
+        The `dropped` byte of the frame header carries the magnitude of the
+        loss the pod could not avoid (a full ring, a refused notification).
+        It complements the sequence gap: the gap counts the *frames* the host
+        never received, this counts the *samples* that are missing.
+        """
+        return {stream.name: count for stream, count in self.dropped_samples.items()}
+
     def is_clean(self) -> bool:
         """True when no frames were lost and none were rejected."""
-        return not self.drops and self.frames_rejected == 0
+        return not self.drops and self.frames_rejected == 0 and not self.dropped_samples
 
     def reset(self) -> None:
         """Forget the previous session.
@@ -284,6 +362,7 @@ class ResearchStreamDecoder:
         self.sequences.clear()
         self.clocks.clear()
         self.drops.clear()
+        self.dropped_samples.clear()
         self.frames_seen = 0
         self.frames_rejected = 0
         self.bytes_seen = 0
