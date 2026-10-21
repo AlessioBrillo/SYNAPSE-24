@@ -43,10 +43,14 @@ def main() -> int:
             "set -e; "
             "rm -rf build; "
             "idf.py set-target esp32s3; "
-            f'SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build -j {args.jobs}'
+            f'export IDF_BUILD_PARALLEL_LEVEL={args.jobs}; '
+            'SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build'
         )
     else:
-        script = f"set -e; rm -rf build; idf.py set-target esp32s3; idf.py build -j {args.jobs}"
+        script = (
+            "set -e; rm -rf build; idf.py set-target esp32s3; "
+            f"export IDF_BUILD_PARALLEL_LEVEL={args.jobs}; idf.py build"
+        )
 
     proc = subprocess.run(  # noqa: S603 - fixed image and script
         [
