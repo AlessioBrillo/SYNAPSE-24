@@ -259,7 +259,9 @@ static void write_field_description(void) {
 
     for (uint8_t i = 0; i < SYNAPSE_NUM_DEV_FIELDS; i++) {
         const synapse_dev_field_t *f = &s_dev_fields[i];
-        uint8_t data[1 + 1 + 1 + FIT_FIELD_NAME_SIZE + FIT_FIELD_UNITS_SIZE];
+        // 4 header bytes (data header, developer_data_index, field
+        // definition number, base type) + the two fixed-size strings.
+        uint8_t data[1 + 1 + 1 + 1 + FIT_FIELD_NAME_SIZE + FIT_FIELD_UNITS_SIZE];
         uint8_t *p = data;
         *p++ = 0x02; // data message, local msg type 2
         *p++ = FIT_DEVELOPER_DATA_INDEX;

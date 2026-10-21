@@ -9,7 +9,12 @@
 # mechanism firmware/esp32_band/sensors/CMakeLists.txt already uses for
 # CONFIG_SYNAPSE_FEATURE_GPS / _TEMPERATURE).
 set(SYNAPSE_MAIN_REQUIRES
-    ble acquisition sensors edge_ai signal_quality config power sync)
+    ble acquisition sensors edge_ai signal_quality config power sync
+    # app_main.c reads the MAC from the eFuse: the component is required
+    # explicitly (the IDF 5.x component is named "efuse"), because the
+    # provisioning component that used to pull it in transitively is not
+    # part of the band-core build.
+    efuse)
 set(SYNAPSE_MAIN_PRIV_REQUIRES bt nvs_flash)
 
 if(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)

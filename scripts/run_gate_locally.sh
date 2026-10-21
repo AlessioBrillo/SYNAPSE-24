@@ -31,6 +31,10 @@ step uv run python -m pytest tests/test_format_conformance.py -v --no-cov
 step uv run python -m pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=term-missing tests sdk/python/tests
 step uv run python -m pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py -v --no-cov -p no:cacheprovider
 
+# The local host gate compiles with zig cc (clang); the server compiles with
+# gcc. A source that only clang accepts would pass here and fail there.
+step uv run python scripts/gcc_probe.py
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "GATE SEQUENCE: ALL GREEN"
