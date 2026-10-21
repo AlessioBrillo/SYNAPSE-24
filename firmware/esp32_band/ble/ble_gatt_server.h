@@ -201,6 +201,17 @@ uint8_t synapse_ble_gatt_adv_payload_size(void);
 uint8_t synapse_ble_gatt_scan_response_size(void);
 
 /**
+ * @brief Bind the device identity to the BLE device information service.
+ *
+ * The serial is derived from the public MAC, so a client can bind a device
+ * to its owner. Without this declaration the call in app_main.c is an
+ * implicit declaration (and the IDF build treats it as an error).
+ */
+void synapse_ble_gatt_set_device_info(const char *manufacturer, const char *model,
+                                      const char *serial, const char *fw_version,
+                                      const char *hw_version);
+
+/**
  * @brief Start advertising in provisioning mode
  * Uses custom service UUID in advertising data
  */

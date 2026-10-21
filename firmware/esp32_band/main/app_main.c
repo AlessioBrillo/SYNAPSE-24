@@ -15,6 +15,9 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_efuse.h"
+// The MAC helper lives in esp_mac.h (the esp_hw_support component) since
+// IDF 5.x: including only esp_efuse.h leaves the call undeclared.
+#include "esp_mac.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"

@@ -28,6 +28,14 @@ def main() -> int:
     """Build the band firmware (band-core by default) inside the ESP-IDF image."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=["core", "full"], default="core")
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=4,
+        help="parallel compile jobs (fewer jobs = less memory: the Docker VM "
+        "runs out of memory on this host with the default parallelism)",
+    )
     args = parser.parse_args()
 
     if args.variant == "core":
@@ -35,10 +43,10 @@ def main() -> int:
             "set -e; "
             "rm -rf build; "
             "idf.py set-target esp32s3; "
-            'SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build'
+            f'SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build -j {args.jobs}'
         )
     else:
-        script = "set -e; rm -rf build; idf.py set-target esp32s3; idf.py build"
+        script = f"set -e; rm -rf build; idf.py set-target esp32s3; idf.py build -j {args.jobs}"
 
     proc = subprocess.run(  # noqa: S603 - fixed image and script
         [
