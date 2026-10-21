@@ -41,10 +41,35 @@ __all__ = [
     "DeviceClock",
     "ResearchStreamDecoder",
     "TS_WRAP_US",
+    "normative_stream_rates",
 ]
 
 # The device microsecond counter wraps at 2^32 us (~4295 s).
 TS_WRAP_US = 1 << 32
+
+
+def normative_stream_rates() -> dict[RawStream, float]:
+    """Nominal rate per raw stream, from ``config/hardware.yaml``.
+
+    The manifest is the single source of truth for the rates: the samples of
+    a frame are spaced with the stream period, and a hardcoded literal is how
+    the rates drifted in the first place.
+    """
+    try:
+        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+        rates = forearm_hub_normative_rates()
+    except Exception:  # noqa: BLE001 - rates only affect intra-frame spacing
+        return {}
+    return {
+        RawStream.ECG: float(rates["ecg_hz"]),
+        RawStream.PPG: float(rates["ppg_hz"]),
+        RawStream.ACC: float(rates["imu_hz"]),
+        RawStream.GYRO: float(rates["imu_hz"]),
+        RawStream.MAG: float(rates["imu_hz"]),
+        RawStream.POWER: 1.0,  # one telemetry frame per second
+    }
+
 
 # Unit divisors applied by the firmware when quantising (see
 # synapse_research_unit_t in ble_research_service.h).
@@ -140,6 +165,8 @@ class ResearchStreamDecoder:
     # pod's counter, so anything mapping pod time into the host domain must
     # use this reconstructed value, never the raw header stamp.
     last_first_us: int = 0
+    # Nominal rate per stream (Hz), used to space the samples inside a frame.
+    stream_rates_hz: dict[RawStream, float] = field(default_factory=dict)
 
     def feed(self, frame: bytes | bytearray) -> RawHeader:
         """Decode one GATT notification and buffer its samples.
@@ -198,16 +225,28 @@ class ResearchStreamDecoder:
         device_clock = self.clocks.setdefault(header.stream, DeviceClock())
         first_us = device_clock.extend(header.timestamp_us, header.flags)
         self.last_first_us = first_us
-        # Timestamps within a frame are not carried per sample; the frame
-        # stamp is the first sample's time. The stream's own rate (from
-        # hardware.yaml) is what the consumer uses to space them.
-        ts = np.arange(samples.size // channels, dtype=np.int64)
-        ts = first_us + ts
+        # Timestamps within a frame are not carried per sample: the frame
+        # stamp is the time of the first sample, and the following samples
+        # are spaced by the stream period (1/fs), not by one microsecond.
+        # Spacing them by 1 us collapsed a 500 Hz ECG into a 1 MHz signal.
+        n_samples = samples.size // channels
+        rate_hz = self._rate_for(header.stream)
+        if rate_hz > 0:
+            step_us = 1_000_000.0 / rate_hz
+            ts = first_us + np.arange(n_samples, dtype=np.float64) * step_us
+        else:
+            ts = first_us + np.arange(n_samples, dtype=np.float64)
 
         self.samples.setdefault(header.stream, []).append(
             samples.astype(np.float64) / UNIT_DIVISOR.get(header.stream, 1.0)
         )
         self.timestamps.setdefault(header.stream, []).append(ts.astype(np.float64))
+
+    def _rate_for(self, stream: RawStream) -> float:
+        """Nominal rate of a stream, from the manifest (loaded once)."""
+        if not self.stream_rates_hz:
+            self.stream_rates_hz = normative_stream_rates()
+        return float(self.stream_rates_hz.get(stream, 0.0) or 0.0)
 
     def arrays(self, stream: RawStream) -> tuple[np.ndarray, np.ndarray]:
         """Return concatenated (samples, timestamps_us) for one stream."""

@@ -207,6 +207,31 @@ raw_frame:
   version: 1
   header_bytes: 12
   max_payload_bytes: 244
+  # Header layout (little-endian). Byte 11 used to be a reserved field: it now
+  # carries the loss counter, so the host learns HOW MUCH it will never see
+  # and not only THAT something is missing.
+  #   0  version
+  #   1  stream_id
+  #   2  sequence (uint16, wraps at 65535)
+  #   4  timestamp_us (uint32, low 32 bits of the pod clock)
+  #   8  flags (bit0: the 32-bit timestamp counter wrapped)
+  #   9  sample_count (values, channel-minor)
+  #  10  sample_format
+  #  11  dropped (samples lost for this stream since the previous transmitted
+  #      frame, saturating at 255; 0 = no loss)
+  # The sequence number is consumed when a frame is BUILT, not when the
+  # notification is accepted, so a frame the BLE stack refuses leaves a hole
+  # the host's gap detection can see.
+  header_fields:
+    version: 0
+    stream_id: 1
+    sequence: 2
+    timestamp_us: 4
+    flags: 8
+    sample_count: 9
+    sample_format: 10
+    dropped: 11
+  dropped_max: 255
   stream_ids:
     ecg: 0x01
     ppg: 0x02

@@ -23,6 +23,8 @@ import check_interfaces as ci  # noqa: E402
 FIT_DESCRIPTOR = ROOT / "contracts" / "fit_developer_fields.json"
 FIRMWARE_HEADER = ROOT / "firmware" / "esp32_band" / "fit" / "fit_writer.h"
 EXPORT_SCRIPT = ROOT / "scripts" / "export_session_fit.py"
+EXPORT_MODULE = ROOT / "src" / "synapse24" / "export" / "__init__.py"
+SDK_FIT_MODULE = ROOT / "sdk" / "python" / "synapse_device" / "fit.py"
 WORKER_SCRIPT = ROOT / "worker" / "hrv_worker.py"
 SCHEMAS_DIR = ROOT / "contracts" / "schemas"
 
@@ -35,10 +37,55 @@ def descriptor() -> dict:
 def test_current_interfaces_are_clean(descriptor: dict) -> None:
     """The repository as committed must pass its own interface check."""
     report = ci.Report()
-    ci.check_field_ids_consistent(report, FIRMWARE_HEADER, EXPORT_SCRIPT, WORKER_SCRIPT, descriptor)
+    ci.check_field_ids_consistent(
+        report,
+        FIRMWARE_HEADER,
+        EXPORT_SCRIPT,
+        WORKER_SCRIPT,
+        descriptor,
+        EXPORT_MODULE,
+        SDK_FIT_MODULE,
+    )
     ci.check_descriptor_valid(report, FIT_DESCRIPTOR)
     ci.check_schemas_valid(report, SCHEMAS_DIR)
     assert not report.failures, "; ".join(report.failures)
+
+
+def test_sdk_field_table_drift_is_detected(descriptor: dict, tmp_path: Path) -> None:
+    """A renamed developer field in the SDK writer must fail.
+
+    The SDK is the single writer of the FIT format: a field that does not
+    match the contract would put a different value in the same field for
+    every consumer.
+    """
+    source = SDK_FIT_MODULE.read_text(encoding="utf-8")
+    broken = source.replace('"synapse_sqi"', '"synapse_quality"')
+    broken_module = tmp_path / "fit.py"
+    broken_module.write_text(broken, encoding="utf-8")
+    report = ci.Report()
+    ci.check_sdk_field_table(report, broken_module, descriptor)
+    assert any("diverge from the descriptor" in f for f in report.failures)
+
+
+def test_export_must_delegate_to_the_canonical_writer(descriptor: dict, tmp_path: Path) -> None:
+    """A second implementation of the export must fail the interface check."""
+    broken_script = tmp_path / "export_session_fit.py"
+    broken_script.write_text("# a private FIT writer\n", encoding="utf-8")
+    report = ci.Report()
+    ci.check_export_uses_the_canonical_writer(report, broken_script, EXPORT_MODULE, descriptor)
+    assert any("must delegate" in f for f in report.failures)
+
+
+def test_worker_must_use_the_canonical_reader(tmp_path: Path) -> None:
+    """A hand-rolled FIT parser in the worker must fail the interface check."""
+    broken_worker = tmp_path / "hrv_worker.py"
+    broken_worker.write_text(
+        "def _parse_dev_fields(data, pos, end):\n    return {}, pos\n",
+        encoding="utf-8",
+    )
+    report = ci.Report()
+    ci.check_worker_uses_the_canonical_reader(report, broken_worker)
+    assert any("single implementation" in f for f in report.failures)
 
 
 def test_firmware_fit_field_id_drift_is_detected(
@@ -60,11 +107,16 @@ def test_firmware_fit_field_id_drift_is_detected(
 def test_export_script_field_id_drift_is_detected(
     descriptor: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Changing a field ID in export_session_fit.py must fail."""
+    """A local copy of the field IDs in the export script must fail.
+
+    The script is a thin wrapper: the field table lives in the SDK, and a
+    second copy of the ids in the script is exactly the drift the checker
+    exists to catch.
+    """
     source = EXPORT_SCRIPT.read_text(encoding="utf-8")
     broken = source.replace(
-        "SYNAPSE_DEV_FIELD_SQI = 1",
-        "SYNAPSE_DEV_FIELD_SQI = 9",
+        "from synapse24.export import main  # noqa: E402",
+        "SYNAPSE_DEV_FIELD_SQI = 1\nfrom synapse24.export import main  # noqa: E402",
     )
     broken_script = tmp_path / "export_session_fit.py"
     broken_script.write_text(broken, encoding="utf-8")
@@ -76,7 +128,11 @@ def test_export_script_field_id_drift_is_detected(
 def test_worker_field_id_drift_is_detected(
     descriptor: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Changing a field ID in worker/hrv_worker.py must fail."""
+    """A local copy of the field IDs in the worker must fail.
+
+    The worker takes the ids from the SDK: a private copy in the worker is
+    the drift the checker exists to catch.
+    """
     source = WORKER_SCRIPT.read_text(encoding="utf-8")
     broken = source.replace(
         "SYNAPSE_DEV_FIELD_SQI = 1",

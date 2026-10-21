@@ -11,60 +11,44 @@ import json
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from backend.service import DataPlaneService, JobRunRequest, JobRunResponse  # noqa: E402
+import backend.service as service_module  # noqa: E402
+from backend.service import (  # noqa: E402
+    PATH_OUTSIDE_ALLOWED_ROOTS,
+    DataPlaneService,
+    JobRunRequest,
+    JobRunResponse,
+)
 from synapse24.utils import write_xdf  # noqa: E402
 
 
-def _crc16(data: bytes, crc: int = 0) -> int:
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-    return crc & 0xFFFF
-
-
 def write_dev_fit(path: Path, records: list[dict]) -> None:
-    """Minimal FIT with developer-data message 209 (mirrors export script)."""
-    out = bytearray()
-    hdr = bytearray(14)
-    hdr[0] = 14
-    hdr[8:12] = b".FIT"
-    out += hdr
-    field_sizes = [4, 1, 1, 1, 1, 1, 1, 2, 2, 2]
-    field_types = [134, 2, 2, 2, 2, 2, 2, 132, 132, 132]
-    defn = bytearray()
-    defn.append(0x80 | 0)
-    defn.append(0)
-    defn.append(0)
-    defn += (209).to_bytes(2, "little")
-    defn.append(len(field_sizes))
-    for fs, ft in zip(field_sizes, field_types):
-        defn.append(0)
-        defn.append(fs)
-        defn.append(ft)
-    out += defn
-    out += (_crc16(bytes(defn))).to_bytes(2, "little")
+    """Write a FIT file with Synapse developer data (canonical writer).
+
+    Each record is ``{"timestamp": int, "dev": {field_id: value}}``. The bytes
+    come from the canonical writer (:mod:`synapse_device.fit`), so the fixture
+    is the same format the product writes and the worker reads.
+    """
+    from synapse_device.fit import DEV_FIELDS, FitRecord, FitWriter
+
+    writer = FitWriter()
+    writer.write_file_header()
+    writer.write_file_id(serial_number=1)
+    writer.write_developer_data_id()
+    writer.write_field_descriptions()
     for rec in records:
-        msg = bytearray()
-        msg.append(0)
-        msg += int(rec["timestamp"]).to_bytes(4, "little")
-        msg.append(0)
-        dev = rec["dev"]
-        for fid in range(8):
-            v = int(dev.get(fid, 0))
-            if fid in (5, 6, 7):
-                msg += (v & 0xFFFF).to_bytes(2, "little")
-            else:
-                msg.append(v & 0xFF)
-        out += msg
-        out += (_crc16(bytes(msg))).to_bytes(2, "little")
-    path.write_bytes(bytes(out))
+        dev: dict[str, int] = {}
+        for field in DEV_FIELDS:
+            value = rec["dev"].get(field.field_id)
+            dev[field.name] = int(value) if value is not None else field.invalid
+        writer.write_record(FitRecord(timestamp=int(rec["timestamp"]), heart_rate=0, dev=dev))
+    writer.finalize(path)
 
 
 def write_eeg_xdf(path: Path, n_seconds: int = 300, fs: float = 250.0) -> None:
@@ -182,3 +166,185 @@ def test_app_routes_registered() -> None:
         "/ws/live",
     ):
         assert expected in paths, f"missing route {expected}"
+
+
+# ---------------------------------------------------------------------------
+# Path containment (arbitrary file read hardening)
+# ---------------------------------------------------------------------------
+
+
+def _install_read_spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Install a pathlib read spy; returns the list of paths that get read."""
+    seen: list[str] = []
+    original_open = Path.open
+    original_read_bytes = Path.read_bytes
+
+    def spy_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        seen.append(str(self))
+        return original_open(self, *args, **kwargs)
+
+    def spy_read_bytes(self: Path) -> bytes:
+        seen.append(str(self))
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    monkeypatch.setattr(Path, "read_bytes", spy_read_bytes)
+    return seen
+
+
+def _dispatch_spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every worker dispatch (the worker is what opens the file)."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        service_module,
+        "dispatch",
+        lambda _job_json, file_path: calls.append(str(file_path)) or '{"ok": true}',
+    )
+    return calls
+
+
+def test_run_job_rejects_path_outside_allowed_roots(
+    svc: DataPlaneService,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client path outside the sessions dir is refused and never read."""
+    outside_dir = tmp_path_factory.mktemp("outside")
+    secret = outside_dir / "secret.fit"
+    secret.write_bytes(b"TOP SECRET PAYLOAD")
+    calls = _dispatch_spy(monkeypatch)
+    opened_paths = _install_read_spy(monkeypatch)
+
+    result = svc.run_job("stress_daily", str(secret))
+
+    assert result["ok"] is False
+    assert result["error"] == PATH_OUTSIDE_ALLOWED_ROOTS
+    assert calls == [], "the worker must not be invoked for an out-of-root path"
+    assert str(secret) not in opened_paths, "the out-of-root file must not be read"
+    assert str(secret.resolve()) not in opened_paths
+
+
+def test_run_job_rejects_parent_traversal(
+    svc: DataPlaneService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path escaping the sessions dir through ``..`` is refused."""
+    outside = tmp_path.parent / "traversal_secret.fit"
+    outside.write_bytes(b"TOP SECRET PAYLOAD")
+    traversal = str(tmp_path / ".." / outside.name)
+    calls = _dispatch_spy(monkeypatch)
+    opened_paths = _install_read_spy(monkeypatch)
+
+    result = svc.run_job("stress_daily", traversal)
+
+    assert result["ok"] is False
+    assert result["error"] == PATH_OUTSIDE_ALLOWED_ROOTS
+    assert calls == []
+    assert str(outside) not in opened_paths
+    assert str(outside.resolve()) not in opened_paths
+
+
+def test_run_job_rejects_absolute_path_outside_sessions_dir(
+    svc: DataPlaneService,
+) -> None:
+    """Well-known system paths are refused as well."""
+    for candidate in ("/etc/passwd", "C:/Windows/win.ini", "../../../etc/passwd"):
+        result = svc.run_job("stress_daily", candidate)
+        assert result["ok"] is False, candidate
+        assert result["error"] == PATH_OUTSIDE_ALLOWED_ROOTS, candidate
+
+
+def test_run_job_accepts_path_in_extra_data_root(
+    svc: DataPlaneService,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``SYNAPSE_DATA_ROOTS`` adds an allowed root for client-supplied paths."""
+    extra_root = tmp_path_factory.mktemp("data_root")
+    fit = extra_root / "stress.fit"
+    write_dev_fit(
+        fit,
+        [{"timestamp": i, "dev": {0: v}} for i, v in enumerate([0, 0, 1, 1, 1, 0, 0, 0])],
+    )
+    monkeypatch.setenv("SYNAPSE_DATA_ROOTS", str(extra_root))
+
+    assert extra_root.resolve() in svc.allowed_roots()
+    result = svc.run_job("stress_daily", str(fit))
+    assert result["error"] != PATH_OUTSIDE_ALLOWED_ROOTS
+    assert result["ok"] is True, result.get("error")
+
+
+def test_allowed_roots_defaults_to_sessions_dir(svc: DataPlaneService) -> None:
+    roots = svc.allowed_roots()
+    assert svc.sessions_dir.resolve() in roots
+
+
+def test_run_job_reports_real_file_sha256(svc: DataPlaneService, tmp_path: Path) -> None:
+    """The job carries the real sha256 of the file, not an empty string."""
+    xdf = tmp_path / "session_001.xdf"
+    expected = hashlib.sha256(xdf.read_bytes()).hexdigest()
+
+    result = svc.run_job("hrv_trends", str(xdf))
+
+    assert result["ok"] is True, result.get("error")
+    assert result["file_sha256"] == expected
+
+
+# ---------------------------------------------------------------------------
+# Caching
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_is_not_reindexed_when_tree_is_unchanged(
+    svc: DataPlaneService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalog is indexed once and reused until the tree changes."""
+    calls: list[str] = []
+    original = service_module.index_directory
+
+    def counting(root: Any) -> Any:
+        calls.append(str(root))
+        return original(root)
+
+    monkeypatch.setattr(service_module, "index_directory", counting)
+
+    svc.catalog()
+    svc.catalog()
+    svc.session(next(iter(svc.catalog().sessions)))
+
+    assert len(calls) == 1
+
+
+def test_catalog_is_reindexed_after_tree_change(
+    svc: DataPlaneService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new file in the sessions dir invalidates the cached catalog."""
+    calls: list[str] = []
+    original = service_module.index_directory
+
+    def counting(root: Any) -> Any:
+        calls.append(str(root))
+        return original(root)
+
+    monkeypatch.setattr(service_module, "index_directory", counting)
+
+    svc.catalog()
+    assert len(calls) == 1
+
+    write_eeg_xdf(svc.sessions_dir / "session_002.xdf", n_seconds=2, fs=50.0)
+    cat = svc.catalog()
+
+    assert len(calls) == 2
+    assert len(cat.sessions) == 2
+
+
+def test_file_sha256_is_cached(svc: DataPlaneService, tmp_path: Path) -> None:
+    """Repeated digest computations reuse the cached value."""
+    xdf = tmp_path / "session_001.xdf"
+    first = svc.file_sha256(xdf)
+    second = svc.file_sha256(xdf)
+    assert first == second
+    assert first == hashlib.sha256(xdf.read_bytes()).hexdigest()

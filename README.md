@@ -87,6 +87,48 @@ uv run pytest --cov=src --cov-fail-under=80
 | MIT-BIH R-peak PPV | ≥99.6% | 99.6%+ (standard) |
 | RMSSD MAE | <5 ms | — |
 
+## Command-Line Interfaces
+
+The stack ships two CLIs, one per side of the loop:
+
+| CLI | Package | Role | Commands |
+|---|---|---|---|
+| `synapse` | `sdk/python/synapse_device/` (Apache-2.0) | **device layer**: codec, transport, clock, XDF/FIT readers and writers | `discover`, `info`, `record`, `inspect` |
+| `synapse-sessions`, `synapse-report`, `synapse-export` | `src/synapse24/` (host pipeline) | **analysis / representation**: session catalog, SessionReport v1, XDF → FIT export with HRV | catalog / report / export |
+
+```bash
+# Device layer (SDK)
+synapse discover                                     # scan for pods (BLE adapter required)
+synapse info                                         # device info / battery / sensors
+synapse record --source synthetic --out session.xdf --duration 30
+synapse inspect session.xdf                          # streams of an XDF, records of a FIT
+
+# Host pipeline
+synapse-sessions index data/sessions --out catalog.json
+synapse-report catalog.json <session_id>
+synapse-export session.xdf session.fit --window-s 30
+```
+
+The SDK CLI no longer offers `export`, `index`, `report` or `analyze`: those
+commands were stubs that never worked, and the analysis/representation side now
+lives in the host pipeline, so the same job is never implemented twice.
+Invoking one of them prints where it moved and exits with code 2.
+`python -m synapse24.sessions`, `python -m synapse24.report` and
+`uv run python scripts/export_session_fit.py` remain available as equivalent
+entry points. `synapse record` currently records from the synthetic source
+only — BLE recording is not implemented yet.
+
+There is exactly one encoder per format: `synapse_device.fit` (FIT) and
+`synapse_device.xdf_writer` (XDF). The host pipeline and the export script
+write with them, the stateless worker reads FIT with `synapse_device.fit`, and
+`tests/test_format_conformance.py` proves the files are standard — readable by
+the third-party parsers `fitdecode` and `pyxdf`.
+
+The same read-side services are exposed over HTTP by the Data Plane API
+(`backend/`), local-only by default (`127.0.0.1:8000`), with an explicit CORS
+origin allowlist and an optional bearer token (`SYNAPSE_API_TOKEN`); see
+[docs/contracts/AVERYN_INTERFACE.md](docs/contracts/AVERYN_INTERFACE.md).
+
 ## Project Structure
 
 ```
@@ -217,12 +259,12 @@ SYNAPSE-24/
 ### ECG Metrics
 - **R-peak Sensitivity/PPV** vs. annotated beats (tolerance: 50ms)
 - **RMSSD MAE** between detected and reference RR intervals
-- **HRV**: time-domain (SDNN, RMSSD, pNN50) + frequency-domain (LF, HF, LF/HF)
+- **HRV**: time-domain (SDNN, RMSSD, pNN50) + frequency-domain (LF, HF, LF/HF — the ratio is reported only for windows ≥120 s; below that the `lf_hf_ratio` key is absent and `lf_hf_status` is `window_too_short`)
 
 ### PPG Metrics
-- **SQI** (Signal Quality Index): weighted combination of perfusion index, spectral entropy, kurtosis, peak regularity
+- **SQI** (Signal Quality Index): weighted combination of perfusion index, spectral entropy, spectral SNR, peak/RR regularity
 - **Perfusion Index**: (AC/DC) × 100%
-- **MAP** (Motion Artifact Probability): spectral flatness + HF energy + accelerometer correlation
+- **MAP** (Motion Artifact Probability): spectral flatness + HF energy + accelerometer correlation (the accelerometer is resampled onto the PPG time base instead of being silently dropped)
 
 ### EEG Metrics
 - **Spectral Flatness** (Wiener entropy): tonal vs. noisy spectrum
@@ -350,6 +392,8 @@ system target) are `docs/hardware/POWER_BUDGET.md`.
 - **Roadmap**: [Roadmap.md](Roadmap.md) — Budget, milestones, dataset references
 - **Hardware gates**: [docs/hardware/READINESS_GATE.md](docs/hardware/READINESS_GATE.md) — what must be true before spending money on sensors
 - **Hardware bringup**: [docs/hardware/BRINGUP_SOP.md](docs/hardware/BRINGUP_SOP.md) — box-to-XDF procedure
+- **Increments**: [docs/increments/](docs/increments/) — what each increment changed, with its acceptance evidence
+- **Decisions**: [docs/decisions/ADR-001-canonical-paths.md](docs/decisions/ADR-001-canonical-paths.md) — one canonical path for the device layer and the formats
 - **WESAD**: Schmidt et al., ICMI 2018, DOI 10.1145/3242969.3242985
 - **MIT-BIH**: Moody & Mark, 2001, PhysioNet
 - **LSL**: Kothe et al., Imaging Neuroscience 2025, DOI 10.1162/IMAG.a.136

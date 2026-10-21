@@ -19,7 +19,9 @@
 #include "synapse_sensors.h"
 #include "synapse_signal_quality.h"
 #include "synapse_power.h"
+#if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
 #include "fit_writer.h"
+#endif
 
 static const char *TAG = "SYNAPSE_ACQ";
 
@@ -473,10 +475,13 @@ static esp_err_t start_session_internal(const acq_session_config_t *config) {
     g_acq.session.elapsed_sec = 0;
     
     // Generate FIT file path
-    snprintf(g_acq.session.filepath, sizeof(g_acq.session.filepath), 
+    snprintf(g_acq.session.filepath, sizeof(g_acq.session.filepath),
              "/storage/session_%08x.fit", (unsigned)g_acq.session.start_time_utc);
-    
-    // Start FIT session
+
+#if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
+    // Start FIT session. The band-core build has no FIT storage: the session
+    // still runs, it is simply not written to the device (the host owns the
+    // recording).
     fit_session_config_t fit_cfg = {
         .sport_type = (fit_sport_t)config->sport_type,
         .start_time_utc = g_acq.session.start_time_utc,
@@ -484,6 +489,7 @@ static esp_err_t start_session_internal(const acq_session_config_t *config) {
         .has_gps = config->enable_gps,
     };
     ESP_ERROR_CHECK(synapse_fit_start_session(&fit_cfg));
+#endif
     
     g_acq.session_active = true;
     
@@ -504,7 +510,9 @@ static esp_err_t stop_session_internal(void) {
     if (!g_acq.session_active) return ESP_OK;
     
     // Stop FIT session
+#if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
     ESP_ERROR_CHECK(synapse_fit_stop_session(NULL));
+#endif
     
     // Call session callback
     if (g_session_callback) {

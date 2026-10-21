@@ -15,6 +15,7 @@ cannot fail.
 from __future__ import annotations
 
 import ctypes
+import os
 from pathlib import Path
 
 import pytest
@@ -44,13 +45,22 @@ INCLUDES = [
 
 
 @pytest.fixture(scope="module")
-def lib() -> ctypes.CDLL | None:
+def lib(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL | None:
     """Compiled shared library, or None when the host blocks loading it.
 
     A missing compiler fails the build (never skips); only an OS that refuses
     to load a freshly built library yields None, and those tests skip.
+
+    The build directory is unique per process and lives inside the repository
+    (the host policy refuses to load a freshly built DLL from the temporary
+    directory): a fixed name made the gate flaky, because the DLL of the
+    previous session was still locked.
     """
-    out = build(ROOT / "build" / "firmware_host_ina219", SOURCES, extra_includes=INCLUDES)
+    out = build(
+        ROOT / "build" / f"firmware_host_ina219_{os.getpid()}",
+        SOURCES,
+        extra_includes=INCLUDES,
+    )
     return try_load(out)
 
 

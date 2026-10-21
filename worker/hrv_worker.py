@@ -35,6 +35,9 @@ import numpy as np
 
 # project imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
+from synapse_device.fit import DEV_FIELDS, read_fit
+
 from synapse24.signal_quality.ecg import compute_hrv_metrics, detect_r_peaks_neurokit
 
 # Allow running both as `python worker/hrv_worker.py` and as a module.
@@ -120,133 +123,28 @@ DEV_FIELD_INVALID_UINT16 = 0xFFFF
 
 
 # ---------------------------------------------------------------------------
-# FIT reader (hand-rolled, mirrors scripts/export_session_fit.py)
+# FIT reader (canonical implementation: synapse_device.fit)
 # ---------------------------------------------------------------------------
 
-
-def _parse_dev_fields(data: bytes, pos: int, end: int) -> tuple[dict[str, int], int]:
-    """Parse the 8 Synapse developer fields at `pos`, returning (vals, new_pos)."""
-    vals: dict[str, int] = {}
-    for field_id in (
-        SYNAPSE_DEV_FIELD_STRESS,
-        SYNAPSE_DEV_FIELD_SQI,
-        SYNAPSE_DEV_FIELD_MAP,
-        SYNAPSE_DEV_FIELD_ECG_QUALITY,
-        SYNAPSE_DEV_FIELD_SLEEP_STAGE,
-        SYNAPSE_DEV_FIELD_RMSSD,
-        SYNAPSE_DEV_FIELD_SDNN,
-        SYNAPSE_DEV_FIELD_LF_HF,
-    ):
-        if pos + 1 > end:
-            break
-        v = data[pos]
-        pos += 1
-        if field_id in (
-            SYNAPSE_DEV_FIELD_RMSSD,
-            SYNAPSE_DEV_FIELD_SDNN,
-            SYNAPSE_DEV_FIELD_LF_HF,
-        ):
-            if pos + 1 > end:
-                break
-            v |= data[pos] << 8
-            pos += 1
-        vals[field_id] = v
-    return vals, pos
-
-
-def _parse_definition(
-    data: bytes,
-    pos: int,
-    end: int,
-    lt: int,
-    defs: dict[int, int],
-    def_data_len: dict[int, int],
-    dev_local_types: set[int],
-) -> int:
-    """Parse a FIT definition message; returns new position."""
-    # definition: reserved(1), arch(1), global mesg num(2), num fields(1)
-    if pos + 5 > end:
-        return pos
-    pos += 2  # reserved + arch
-    gnum = struct.unpack_from("<H", data, pos)[0]
-    pos += 2
-    nfields = data[pos]
-    pos += 1
-    defs[lt] = gnum  # type: ignore[name-defined]
-    if gnum == 209:
-        dev_local_types.add(lt)  # type: ignore[name-defined]
-    total = 0
-    for _ in range(nfields):
-        if pos + 3 > end:
-            break
-        _fnum = data[pos]
-        fsize = data[pos + 1]
-        ftype = data[pos + 2]
-        pos += 3
-        # Field size is declared explicitly in the definition; do not
-        # derive it from base_type (STRING is 17 bytes, base_type=7).
-        total += fsize
-    def_data_len[lt] = total  # type: ignore[name-defined]
-    # definition messages also carry a 2-byte CRC after the fields
-    if pos + 2 <= end:
-        pos += 2
-    return pos
+# Contract field id -> name, so the reader's output can be keyed the way the
+# job payloads expect.
+_DEV_FIELD_ID_BY_NAME = {field.name: field.field_id for field in DEV_FIELDS}
 
 
 def read_fit_developer_records(path: Path) -> list[dict]:
-    """Yield per-record developer field values from a FIT file.
+    """Return per-record developer field values from a FIT file.
 
-    Only understands the flat Synapse developer layout written by
-    scripts/export_session_fit.py: message 209 (developer data) with a
-    timestamp + developer_data_index + fields in fixed order.
+    The FIT decoding is the SDK's canonical reader (one implementation for
+    the whole project); this adapter only re-keys the developer values with
+    the contract field ids.
     """
-    data = path.read_bytes()
-    if len(data) < 14 or data[8:12] != b".FIT":
-        return []
-
     records: list[dict] = []
-    pos = 14  # skip header (+ header CRC already counted)
-    end = len(data)
-    # local msg type -> global mesg num (from definition messages)
-    defs: dict[int, int] = {}
-    # local msg type -> total data-bytes per record (computed from def fields)
-    def_data_len: dict[int, int] = {}
-    # local msg types used for developer data (global mesg num 209)
-    dev_local_types: set[int] = set()
-
-    while pos < end:
-        b = data[pos]
-        pos += 1
-        is_def = bool(b & 0x80)
-        lt = b & 0x3F
-        if is_def:
-            pos = _parse_definition(data, pos, end, lt, defs, def_data_len, dev_local_types)
-            continue
-
-        # Data message: 1 byte header already consumed. If we know its size,
-        # skip it unless it is the developer data block.
-        if lt in dev_local_types:
-            if pos + 5 > end:
-                break
-            ts = struct.unpack_from("<I", data, pos)[0]
-            pos += 4
-            dev_idx = data[pos]
-            pos += 1
-            vals, pos = _parse_dev_fields(data, pos, end)
-            records.append({"timestamp": ts, "dev": vals})
-            # developer data also ends with a 2-byte CRC
-            if pos + 2 <= end:
-                pos += 2
-        elif lt in def_data_len:
-            # standard record: skip whole payload + CRC
-            skip = def_data_len[lt]
-            if pos + skip + 2 > end:
-                break
-            pos += skip + 2
-        else:
-            # Unknown data message without a definition: stop rather than corrupt.
-            break
-
+    for record in read_fit(path).records:
+        dev = {
+            _DEV_FIELD_ID_BY_NAME.get(name, name): int(value)
+            for name, value in (record.get("dev") or {}).items()
+        }
+        records.append({"timestamp": record["timestamp"], "dev": dev})
     return records
 
 
@@ -256,47 +154,84 @@ def read_fit_developer_records(path: Path) -> list[dict]:
 
 
 def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
-    """Compute RMSSD/SDNN per window from an XDF's ECG/PPG stream."""
+    """Compute RMSSD/SDNN per window from an XDF's ECG/PPG stream.
+
+    The analysed stream is selected **by type** (ECG first, then PPG): the
+    stream with the most samples may be an IMU stream, and analysing it
+    would produce plausible but meaningless numbers.
+
+    Every instant lives in the same clock domain: the R-peak times are
+    derived from the stream timestamps (``t0 + index / fs``), so a window
+    boundary is an absolute instant.
+    """
     import numpy as np
     import pyxdf  # imported lazily so the module imports without it
 
     streams, _ = pyxdf.load_xdf(str(path))
-    best = None
+    candidates: list[tuple[str, str, np.ndarray, np.ndarray]] = []
     for s in streams:
         ts = s.get("time_stamps")
         series = s.get("time_series")
         if ts is None or series is None:
             continue
-        if best is None or len(ts) > len(best["timestamps"]):
-            best = {
-                "timestamps": np.asarray(ts, dtype=float).ravel(),
-                "data": np.asarray(series),
-            }
-    if best is None:
+        info = s.get("info", {}) or {}
+
+        def _first(key: str) -> str:
+            value = info.get(key, "")
+            if isinstance(value, list):
+                value = value[0] if value else ""
+            return str(value or "")
+
+        candidates.append(
+            (
+                _first("name"),
+                _first("type"),
+                np.asarray(ts, dtype=float).ravel(),
+                np.asarray(series),
+            )
+        )
+
+    selected = None
+    for wanted in ("ECG", "PPG"):
+        for name, stype, ts, series in candidates:
+            if wanted in f"{name} {stype}".upper():
+                selected = (name, stype, ts, series)
+                break
+        if selected is not None:
+            break
+    if selected is None:
         return []
 
-    sig = best["data"]
+    _name, _type, ts, series = selected
+    sig = series
     if sig.ndim > 1:
         sig = sig[:, 0]
     sig = sig.astype(np.float64)
-    ts = best["timestamps"]
-    fs = 1.0 / np.median(np.diff(ts[ts > 0])) if len(ts) > 1 else 500.0
+    if len(ts) < 2:
+        return []
+
+    diffs = np.diff(ts)
+    diffs = diffs[diffs > 0]
+    fs = 1.0 / np.median(diffs) if len(diffs) else 500.0
 
     try:
         r_peaks = detect_r_peaks_neurokit(sig, int(fs))
     except Exception:
         r_peaks = np.array([], dtype=np.int64)
 
-    rr_times = r_peaks / fs if len(r_peaks) else np.array([])
     t0, t1 = float(ts[0]), float(ts[-1])
+    # Absolute time of every R-peak (the peak index is a position in the
+    # signal, not an instant: mixing the two produced empty windows).
+    peak_times = t0 + (r_peaks / fs) if len(r_peaks) else np.array([], dtype=np.float64)
+
     out = []
     n_windows = max(1, int((t1 - t0) // window_s))
     for wi in range(n_windows):
         w0 = t0 + wi * window_s
         w1 = min(t0 + (wi + 1) * window_s, t1)
-        mask = (rr_times >= w0) & (rr_times < w1)
+        mask = (peak_times >= w0) & (peak_times < w1)
         win = r_peaks[mask]
-        hrv = compute_hrv_metrics(win, int(fs)) if len(win) >= 2 else {}
+        hrv = compute_hrv_metrics(win, int(fs), window_duration_s=window_s) if len(win) >= 2 else {}
         out.append(
             {
                 "window_start": w0,
@@ -456,6 +391,11 @@ def run_stress_daily(job: Job, file_path: Path) -> JobResult:
     daily_average = (n_stress / n) * 100.0 if n else 0.0
     peak_stress = 1.0 if n_stress else 0.0
 
+    # The covered window is the real duration spanned by the records, not a
+    # record count: the payload field is a duration in seconds.
+    timestamps = [r["timestamp"] for r in records if isinstance(r.get("timestamp"), (int, float))]
+    window_s = float(max(timestamps) - min(timestamps)) if len(timestamps) > 1 else 0.0
+
     # Recovery periods: windows of >=3 consecutive baseline labels.
     recovery_periods = 0
     run = 0
@@ -489,7 +429,7 @@ def run_stress_daily(job: Job, file_path: Path) -> JobResult:
         "stress_prob": round(n_stress / n, 4),
         "baseline_prob": round(n_baseline / n, 4),
         "artifact_prob": round(n_artifact / n, 4),
-        "window_s": float(n),
+        "window_s": window_s,
         "daily_average": round(daily_average, 2),
         "peak_stress": peak_stress,
         "recovery_periods": recovery_periods,

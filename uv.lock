@@ -1071,6 +1071,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fitdecode"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/19/1bde056f443d8ce890dbc0f0bd8a216cc9ebfda4221619767f80cf1835e2/fitdecode-0.11.0.tar.gz", hash = "sha256:52d920e50eaa76eb065b20bfd4e42f72195e894a079098dacc1cafa908cd4b83", size = 107149, upload-time = "2025-08-06T08:08:42.105Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/7b/75829f9b77b2546f955ec265de10de993939bf3218b5d957ca79803a2d28/fitdecode-0.11.0-py3-none-any.whl", hash = "sha256:a1bdb9b4d1e9ebac0001fc58c22fe07a3f9967ca4e13258c6ef99cdb8d697a78", size = 109961, upload-time = "2025-08-06T08:08:39.033Z" },
+]
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
@@ -4010,6 +4019,7 @@ dependencies = [
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "synapse-device" },
     { name = "tensorflow-cpu" },
     { name = "tqdm" },
     { name = "wfdb" },
@@ -4021,6 +4031,7 @@ dev = [
     { name = "bleak" },
     { name = "esptool" },
     { name = "fastapi" },
+    { name = "fitdecode" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "jsonschema" },
@@ -4055,6 +4066,7 @@ dev = [
     { name = "bleak" },
     { name = "esptool" },
     { name = "fastapi" },
+    { name = "fitdecode" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "jsonschema" },
@@ -4091,6 +4103,7 @@ requires-dist = [
     { name = "esptool", marker = "extra == 'dev'", specifier = ">=4.8.0,<5.0" },
     { name = "esptool", marker = "extra == 'hardware'", specifier = ">=4.8.0,<5.0" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.100.0,<1.0" },
+    { name = "fitdecode", marker = "extra == 'dev'", specifier = ">=0.11.0,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0,<1.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0,<7.0" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0,<6.0" },
@@ -4120,6 +4133,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0,<1.0" },
     { name = "scikit-learn", specifier = ">=1.5.0,<2.0" },
     { name = "scipy", specifier = ">=1.13.0,<2.0" },
+    { name = "synapse-device", editable = "sdk/python" },
     { name = "tensorflow-cpu", specifier = ">=2.16.2" },
     { name = "tqdm", specifier = ">=4.66.0,<5.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0" },
@@ -4138,6 +4152,7 @@ dev = [
     { name = "bleak", specifier = ">=0.22.0,<1.0" },
     { name = "esptool", specifier = ">=4.8.0,<5.0" },
     { name = "fastapi", specifier = ">=0.100.0,<1.0" },
+    { name = "fitdecode", specifier = ">=0.11.0,<1.0" },
     { name = "httpx", specifier = ">=0.24.0,<1.0" },
     { name = "hypothesis", specifier = ">=6.100.0,<7.0" },
     { name = "jsonschema", specifier = ">=4.0,<6.0" },
@@ -4163,6 +4178,28 @@ hardware = [
     { name = "pylsl", specifier = ">=1.16.0,<2.0" },
     { name = "pyserial", specifier = ">=3.5" },
 ]
+
+[[package]]
+name = "synapse-device"
+version = "0.1.0.dev0"
+source = { editable = "sdk/python" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bleak", marker = "extra == 'ble'", specifier = ">=0.22.0,<1.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "numpy", specifier = ">=1.26,<2.0" },
+    { name = "pydantic", specifier = ">=2.7,<3.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyxdf", marker = "extra == 'xdf'", specifier = ">=1.16,<2.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16" },
+]
+provides-extras = ["dev", "xdf", "ble"]
 
 [[package]]
 name = "tensorboard"

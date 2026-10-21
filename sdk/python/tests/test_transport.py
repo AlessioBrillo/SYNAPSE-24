@@ -70,7 +70,9 @@ def test_emits_real_frames():
 
 def test_roundtrip_via_codec():
     samples = np.array([[100, 200], [300, 400]], dtype=np.float64)
-    frame = encode_frame(RawStream.PPG, RawFormat.S16, 5, 7, samples)
+    frame = encode_frame(RawStream.PPG, 7, 5, 0, RawFormat.S16, samples)
     header, out = decode_frame(frame)
     assert header.sample_count == 2
+    assert header.sequence == 7
+    assert header.timestamp_us == 5
     np.testing.assert_array_equal(out, samples)

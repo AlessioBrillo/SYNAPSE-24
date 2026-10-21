@@ -45,10 +45,12 @@ from synapse24.acquisition.state_machine import (
     MotionGateConfig,
     Tier,
 )
+from synapse24.acquisition.stream_spool import DEFAULT_TAIL_SAMPLES, SpoolManager
 from synapse24.hardware.raw_codec import RawStream
 from synapse24.hardware.raw_ingest import RawFrameIngestor
 from synapse24.ingestion import CerelogEEGConfig, CerelogEEGManager
 from synapse24.signal_quality import Tier as QualityTier
+from synapse24.signal_quality.ppg import compute_ppg_quality
 from synapse24.utils import verify_xdf_roundtrip
 
 try:
@@ -150,17 +152,30 @@ class BLEDataParser:
 
 
 class LSLStreamManager:
-    """Manages LSL outlets for all sensor streams."""
+    """Manages LSL outlets for all sensor streams.
+
+    The samples are spooled to disk (see
+    :class:`synapse24.acquisition.stream_spool.SpoolManager`): a 6-hour
+    session at 500 Hz is ~11M samples, which does not fit in Python lists.
+    Only a bounded tail stays in memory, and the full session is read back
+    once, when the XDF is written.
+    """
 
     def __init__(self):
         self.outlets: dict[str, Any] = {}
         self.stream_configs: dict[str, dict] = {}
+        self.spool = SpoolManager()
+        # Bounded in-memory view of every stream (the analysis tail).
         self.stream_buffers: dict[str, list] = {}
         self.stream_timestamps: dict[str, list] = {}
 
     def create_outlets(self, stream_configs: list[dict]) -> None:
         if pylsl is None:
             raise RuntimeError("pylsl not available")
+
+        # A new session starts with an empty spool: the gates judge the
+        # samples of *this* run, never the ones of the previous one.
+        self.spool.reset()
 
         for cfg in stream_configs:
             info = pylsl.StreamInfo(
@@ -178,6 +193,7 @@ class LSLStreamManager:
             self.stream_configs[cfg["name"]] = cfg
             self.stream_buffers[cfg["name"]] = []
             self.stream_timestamps[cfg["name"]] = []
+            self.spool.spool(cfg["name"])
 
     def push_sample(self, name: str, sample: np.ndarray, timestamp: float) -> None:
         if name in self.outlets:
@@ -185,18 +201,30 @@ class LSLStreamManager:
             # anything array-like, and crashing here would kill a recording
             # on its very first sample.
             self.outlets[name].push_sample(np.asarray(sample, dtype=np.float32), timestamp)
-        if name in self.stream_buffers:
-            self.stream_buffers[name].append(np.asarray(sample, dtype=np.float64).copy())
-            self.stream_timestamps[name].append(timestamp)
+        if name in self.stream_configs:
+            row = np.asarray(sample, dtype=np.float64).ravel()
+            self.spool.append(name, row, timestamp)
+            buffers = self.stream_buffers.setdefault(name, [])
+            stamps = self.stream_timestamps.setdefault(name, [])
+            buffers.append(row.copy())
+            stamps.append(float(timestamp))
+            if len(buffers) > DEFAULT_TAIL_SAMPLES:
+                del buffers[: len(buffers) - DEFAULT_TAIL_SAMPLES]
+                del stamps[: len(stamps) - DEFAULT_TAIL_SAMPLES]
+
+    def stream_array(self, name: str) -> np.ndarray:
+        """Every sample of a stream, read back from the spool."""
+        rows, _stamps = self.spool.read_all(name)
+        return rows
 
     def close(self) -> None:
         # pylsl's StreamOutlet frees its native handle in __del__; calling it
         # explicitly and then dropping the reference double-frees (the
         # "access violation reading 0xFFFF..." teardown noise). Clearing the
-        # references is enough — and the sample buffers must survive, because
-        # the XDF gate proof is written *after* the session closes.
+        # references is enough — and the stream metadata and the spooled
+        # samples must survive, because the XDF gate proof is written *after*
+        # the session closes.
         self.outlets.clear()
-        self.stream_configs.clear()
 
 
 class Phase1Validator:
@@ -573,7 +601,12 @@ class Phase1Validator:
         promotion_occurred: bool,
         immobility_start: float | None,
     ) -> tuple[bool, float | None]:
-        """Check for T0 -> T1 promotion on immobility."""
+        """Check for T0 -> T1 promotion on immobility.
+
+        The promotion is *performed* on the state machine, not just flagged:
+        a validator that only sets a boolean leaves the pod in Tier 0 while
+        the report claims the transition happened.
+        """
         if (
             self.controller
             and self.controller.state_machine.is_tier0()
@@ -588,7 +621,11 @@ class Phase1Validator:
                     and self.controller._motion_gate_armed()
                 ):
                     self.logger.info(f"PROMOTION: T0 -> T1 at {elapsed:.1f}s (immobility held)")
-                    promotion_occurred = True
+                    promoted = self.controller.state_machine.promote_to_tier1(
+                        "immobility_held",
+                        metadata={"elapsed_s": elapsed},
+                    )
+                    promotion_occurred = promotion_occurred or promoted
                     immobility_start = None
         else:
             immobility_start = None
@@ -601,7 +638,10 @@ class Phase1Validator:
         demotion_occurred: bool,
         movement_detected: bool,
     ) -> tuple[bool, bool]:
-        """Check for T1 -> T0 demotion on movement."""
+        """Check for T1 -> T0 demotion on movement.
+
+        As for the promotion, the demotion is performed on the state machine.
+        """
         if self.controller and self.controller.state_machine.is_tier1() and not movement_detected:
             if self.lsl_manager.stream_buffers.get("SYNAPSE_ACC_T0"):
                 latest_acc = self.lsl_manager.stream_buffers["SYNAPSE_ACC_T0"][-1]
@@ -610,7 +650,11 @@ class Phase1Validator:
                     self.logger.info(
                         f"DEMOTION: T1 -> T0 at {elapsed:.1f}s (movement: {acc_mag:.2f}g)"
                     )
-                    demotion_occurred = True
+                    demoted = self.controller.state_machine.demote_to_tier0(
+                        "movement_detected",
+                        metadata={"acc_magnitude_g": acc_mag, "elapsed_s": elapsed},
+                    )
+                    demotion_occurred = demotion_occurred or demoted
                     movement_detected = True
 
         if movement_detected and self.lsl_manager.stream_buffers.get("SYNAPSE_ACC_T0"):
@@ -632,11 +676,10 @@ class Phase1Validator:
         self.logger.info(f"Saving XDF to {xdf_path}...")
 
         streams_for_xdf = []
-        for name, data in self.lsl_manager.stream_buffers.items():
-            if not data:
+        for name in sorted(self.lsl_manager.spool.counts()):
+            data_arr, timestamps = self.lsl_manager.spool.read_all(name)
+            if data_arr.size == 0:
                 continue
-            timestamps = np.array(self.lsl_manager.stream_timestamps[name], dtype=np.float64)
-            data_arr = np.array(data, dtype=np.float64)
             if data_arr.ndim == 1:
                 data_arr = data_arr.reshape(-1, 1)
 
@@ -765,7 +808,7 @@ class Phase1Validator:
         canonical research-service path did not, so the gates measured
         zero samples against a conforming pod.
         """
-        return {name: len(buf) for name, buf in self.lsl_manager.stream_buffers.items()}
+        return dict(self.lsl_manager.spool.counts())
 
     def _tier0_sync_gate(self, sync_status_t0: dict) -> ValidationGateResult:
         """T0 sync gate: the clock model's evidence, or an honest failure.
@@ -1265,13 +1308,16 @@ class Phase1Validator:
         }
 
     def _outlet_array(self, outlet: str, channel: int | None = None) -> Any:
-        """Buffered samples of one LSL outlet, as a 2-D array."""
+        """Buffered samples of one LSL outlet, as a 2-D array.
+
+        The samples come from the on-disk spool, so the array covers the whole
+        session and not only the in-memory tail.
+        """
         import numpy as np
 
-        rows = self.lsl_manager.stream_buffers.get(outlet, [])
-        if not rows:
+        arr = self.lsl_manager.stream_array(outlet)
+        if arr.size == 0:
             return np.zeros(0)
-        arr = np.asarray(rows, dtype=np.float64)
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1)
         return arr if channel is None else arr[:, channel]
@@ -1498,6 +1544,47 @@ class Phase1Validator:
         if self.controller:
             self.controller.update_imu(accel_magnitude=acc_mag, timestamp=timestamp)
 
+        self._feed_motion_quality(timestamp)
+
+    def _feed_motion_quality(self, timestamp: float) -> None:
+        """Feed the measured PPG quality into the promotion gate.
+
+        The motion gate is armed by *measured* signal quality
+        (Architecture.md §74). Without this feed the gate never arms, the
+        T0 -> T1 promotion is unreachable, and the tiered acquisition is
+        decorative: the state machine stays in Tier 0 for the whole session.
+        """
+        if self.controller is None:
+            return
+        ppg, _ts = self.raw_ingestor.decoder.arrays(RawStream.PPG)
+        if ppg.size < 32:
+            return
+        rate_hz = float(self._nominal_rates().get("SYNAPSE_PPG_T0", 50.0) or 50.0)
+        window = ppg[-int(rate_hz * 10) :] if rate_hz else ppg[-512:]
+        if window.ndim > 1:
+            window = window[:, 0]
+        acc, _acc_ts = self.raw_ingestor.decoder.arrays(RawStream.ACC)
+        acc_mag = None
+        if acc.size >= 3 * window.shape[0]:
+            # The decoder returns the samples flat: the accelerometer is
+            # 3-axis, so the tail is reshaped before the magnitude.
+            acc_tail = np.asarray(acc[-3 * window.shape[0] :], dtype=np.float64).reshape(-1, 3)
+            acc_mag = np.linalg.norm(acc_tail, axis=1)
+        try:
+            quality = compute_ppg_quality(
+                np.asarray(window, dtype=np.float64),
+                int(rate_hz),
+                accel_magnitude=acc_mag,
+            )
+        except Exception:  # pragma: no cover - depends on the signal
+            self.logger.debug("PPG quality computation failed", exc_info=True)
+            return
+        self.controller.update_motion_quality(
+            ppg_sqi=quality.get("ppg_sqi"),
+            motion_artifact_prob=quality.get("motion_artifact_prob"),
+            timestamp=timestamp,
+        )
+
     async def _subscribe_characteristics(self) -> None:
         ble_chars = self.config["bringup"]["ble"]["characteristics"]
         for name, char_uuid in ble_chars.items():
@@ -1624,9 +1711,11 @@ def main() -> int:
         "--legacy-format",
         action="store_true",
         help=(
-            "Accept the legacy Nordic-UART sensor_sample_t wire format "
-            "(default: research service only; unrecognised payloads are "
-            "reported, never silently mis-parsed)"
+            "DEPRECATED: accept the legacy Nordic-UART sensor_sample_t wire "
+            "format (default: research service only; unrecognised payloads are "
+            "reported, never silently mis-parsed). Kept for pods that still "
+            "run the old firmware; it is removed once the research service is "
+            "validated on the bench."
         ),
     )
     parser.add_argument(

@@ -74,6 +74,25 @@ extern "C" {
      0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E}  // 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
 
 // ============================================================================
+// Advertising payload budget (legacy advertising, BLE 4.x)
+// ============================================================================
+// A legacy advertising packet (and a legacy scan response) carries at most
+// 31 bytes of AD structures. Every structure costs a length byte and a type
+// byte on top of its value, so the budget is computed from the structures
+// the band actually advertises instead of being guessed.
+#define SYNAPSE_BLE_ADV_PAYLOAD_MAX 31u
+/** flags: length byte + type byte + 2 value bytes. */
+#define SYNAPSE_BLE_ADV_FLAGS_BYTES 3u
+/** one 128-bit service UUID: length byte + type byte + 16 value bytes. */
+#define SYNAPSE_BLE_ADV_UUID128_BYTES 18u
+/** one 16-bit service UUID: length byte + type byte + 2 value bytes. */
+#define SYNAPSE_BLE_ADV_UUID16_BYTES 4u
+/** complete local name: length byte + type byte + the name itself. */
+#define SYNAPSE_BLE_ADV_NAME_OVERHEAD_BYTES 2u
+#define SYNAPSE_BLE_ADV_NAME_BYTES(name_len) \
+    (SYNAPSE_BLE_ADV_NAME_OVERHEAD_BYTES + (unsigned)(name_len))
+
+// ============================================================================
 // Feature Stream Payload Format (packed, fits in MTU-3 bytes)
 // ============================================================================
 #define SYNAPSE_FEATURE_STREAM_VERSION  1
@@ -85,11 +104,11 @@ typedef struct __attribute__((packed)) {
     uint16_t sequence;          // Incremented per notification for reassembly (u16)
     uint16_t heart_rate;        // bpm, 0xFFFF = invalid
     uint16_t rr_interval_ms;    // ms, 0xFFFF = no RR available
-    uint8_t  ppg_sqi;           // 0-255 (0.0-1.0 scaled)
-    uint8_t  ppg_map;           // 0-255 (0.0-1.0 scaled)
-    uint8_t  ecg_quality;       // 0-255 (0.0-1.0 scaled)
+    uint8_t  ppg_sqi;           // 0-255 (0.0-1.0 scaled), 0xFF = not available
+    uint8_t  ppg_map;           // 0-255 (0.0-1.0 scaled), 0xFF = not available
+    uint8_t  ecg_quality;       // 0-255 (0.0-1.0 scaled), 0xFF = not available
     uint8_t  stress_level;      // 0=baseline, 1=stress, 2=artifact, 3=unknown
-    uint8_t  motion_level;      // 0-255 (0.0-1.0 scaled)
+    uint8_t  motion_level;      // 0-255 (0.0-1.0 scaled), 0xFF = not available
     uint8_t  battery_level;     // 0-100%
     uint8_t  charging;          // 0=no, 1=yes
     uint8_t  sport_type;        // 0=generic, 1=running, 2=cycling, 3=swimming, 4=sleep
@@ -150,10 +169,37 @@ typedef struct __attribute__((packed)) {
 
 /**
  * @brief Initialize BLE GATT Server
- * Registers all standard services + custom Synapse service
+ * Registers all standard services + custom Synapse service.
+ *
+ * The Synapse Research Service is registered here too, BEFORE the NimBLE
+ * host task starts: NimBLE calls ble_gatts_start() automatically when the
+ * host starts, and after that ble_gatts_add_svcs() fails with
+ * BLE_HS_EBUSY, so a service registered later would silently lose the
+ * dataset path (and abort the boot).
+ *
  * @return ESP_OK on success
  */
 esp_err_t synapse_ble_gatt_init(void);
+
+/**
+ * @brief Byte size of the advertising packet the band broadcasts.
+ *
+ * Advertising packet: flags + the 128-bit Synapse consumer service UUID.
+ * Scan response: the complete device name + the 16-bit Heart Rate service
+ * UUID (so a standard HR client still finds the device by UUID).
+ *
+ * Both must stay within SYNAPSE_BLE_ADV_PAYLOAD_MAX (31 bytes); the values
+ * are exposed so the budget can be asserted by a test.
+ *
+ * @return Advertising packet size in bytes
+ */
+uint8_t synapse_ble_gatt_adv_payload_size(void);
+
+/**
+ * @brief Byte size of the scan response the band broadcasts.
+ * @return Scan response size in bytes
+ */
+uint8_t synapse_ble_gatt_scan_response_size(void);
 
 /**
  * @brief Start advertising in provisioning mode

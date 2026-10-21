@@ -22,9 +22,15 @@
 #include "ble_gatt_server.h"
 #include "ble_research_service.h"
 #include "wired_sync_handler.h"
+#if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
 #include "fit_writer.h"
+#endif
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
 #include "synapse_provisioning.h"
+#endif
+#if defined(CONFIG_SYNAPSE_FEATURE_OTA)
 #include "synapse_ota.h"
+#endif
 #include "synapse_acquisition.h"
 #include "synapse_sensors.h"
 #include "synapse_edge_ai.h"
@@ -102,12 +108,17 @@ void app_main(void)
         ESP_LOGW(TAG, "Edge AI init failed: %s", esp_err_to_name(ret));
     }
 
-    // 7. Initialize FIT writer (LittleFS)
+    // 7. Initialize FIT writer (LittleFS). Gated by the Kconfig flag: the
+    //    band-core build (sdkconfig.defaults.core) ships without FIT storage,
+    //    and a mount failure must not abort the boot of a device whose
+    //    dataset path is the BLE research service, not the flash file.
+#if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
     ret = synapse_fit_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "FIT init failed: %s", esp_err_to_name(ret));
-        return;
+        ESP_LOGW(TAG, "FIT init failed (%s): FIT recording disabled",
+                 esp_err_to_name(ret));
     }
+#endif
 
     // 8. Initialize BLE GATT Server
     ret = synapse_ble_gatt_init();
@@ -128,26 +139,28 @@ void app_main(void)
                                          CONFIG_SYNAPSE_HARDWARE_VERSION);
     }
 
-    // 8b. Synapse Research Service: raw samples + on-device timestamps.
-    //     This is the dataset path (config/hardware.yaml -> raw_frame) and is
-    //     independent of the consumer feature stream registered above.
-    ret = synapse_research_service_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Research service init failed: %s", esp_err_to_name(ret));
-        return;
-    }
+    // 8b. The Synapse Research Service (raw samples + on-device timestamps)
+    //     is registered by synapse_ble_gatt_init(), BEFORE the NimBLE host
+    //     task starts: after the host starts, ble_gatts_add_svcs() fails
+    //     with BLE_HS_EBUSY. It is the dataset path
+    //     (config/hardware.yaml -> raw_frame) and is independent of the
+    //     consumer feature stream registered above.
 
     // 9. Initialize provisioning module
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
     ret = synapse_provisioning_init(s_system_events);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Provisioning init failed: %s", esp_err_to_name(ret));
     }
+#endif
 
     // 10. Initialize OTA module
+#if defined(CONFIG_SYNAPSE_FEATURE_OTA)
     ret = synapse_ota_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "OTA init failed: %s", esp_err_to_name(ret));
     }
+#endif
 
     // 11. Initialize acquisition FSM (T0/T1/T2)
     ret = synapse_acquisition_init(s_system_events);
@@ -177,6 +190,7 @@ void app_main(void)
 #endif
 
     // 13. Check if provisioning is needed
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
     bool provisioned = synapse_provisioning_is_complete();
     if (!provisioned) {
         ESP_LOGI(TAG, "Device not provisioned, starting provisioning mode");
@@ -184,10 +198,16 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "Device provisioned, starting normal operation");
         synapse_ble_gatt_start_advertising_normal();
-        
+
         // Connect to WiFi and cloud
         synapse_provisioning_connect_wifi();
     }
+#else
+    // Provisioning is compiled out (band-core): the device is always
+    // provisioned, so it advertises in normal mode.
+    ESP_LOGI(TAG, "Provisioning disabled, starting normal operation");
+    synapse_ble_gatt_start_advertising_normal();
+#endif
 
     // 14. Main loop - runs acquisition FSM and handles events
     ESP_LOGI(TAG, "Entering main loop");
@@ -220,23 +240,32 @@ void app_main(void)
                 else if (stress.predicted_class == 2) stress_level = 2; // artifact
             }
 
-            uint8_t ppg_sqi = 0;
-            uint8_t ppg_map = 0;
-            uint8_t ecg_quality = 0;
+            // 0xFF means "not available" and 0xFFFF means "invalid": a
+            // fabricated 0 would be read as a perfect measurement (or, for
+            // the heart rate, as a dead patient), which is worse than saying
+            // "no value".
+            uint16_t hr_bpm = 0xFFFF;   // invalid heart rate
+            uint8_t ppg_sqi = 0xFF;     // not available
+            uint8_t ppg_map = 0xFF;     // not available
+            uint8_t ecg_quality = 0xFF; // the signal-quality module exposes no
+                                       // validated ECG quality yet
             if (ppg.valid) {
+                // 0 bpm is not a legal Heart Rate Measurement Value, so a
+                // zero reading is reported as "invalid" instead.
+                hr_bpm = (ppg.hr_bpm > 0.0f) ? (uint16_t)ppg.hr_bpm : 0xFFFF;
                 ppg_sqi = (uint8_t)(ppg.sqi * 255.0f);
                 ppg_map = (uint8_t)(ppg.motion_artifact_prob * 255.0f);
             }
 
             (void)synapse_ble_gatt_push_feature(
-                (uint16_t)ppg.hr_bpm,           // hr_bpm (0xFFFF if invalid)
-                0xFFFF,                         // rr_interval_ms (genuine RR only; not RMSSD)
+                hr_bpm,                     // hr_bpm (0xFFFF if invalid)
+                0xFFFF,                     // rr_interval_ms (genuine RR only; not RMSSD)
                 ppg_sqi,
                 ppg_map,
                 ecg_quality,
                 stress_level,
-                0,                                // motion_level (placeholder until IMU feature wired)
-                0x7FFF                            // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
+                0xFF,                       // motion_level (0xFF = not available)
+                0x7FFF                       // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
             );
         }
         // --------------------------------------------------------------------
@@ -245,10 +274,14 @@ void app_main(void)
         synapse_acquisition_tick();
 
         // Handle provisioning if in progress
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         synapse_provisioning_process();
+#endif
 
         // Handle OTA if in progress
+#if defined(CONFIG_SYNAPSE_FEATURE_OTA)
         synapse_ota_process();
+#endif
 
         // Process BLE events
         synapse_ble_gatt_process_events();

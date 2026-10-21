@@ -42,7 +42,7 @@ class _CRawHeader(ctypes.Structure):
         ("flags", ctypes.c_uint8),
         ("sample_count", ctypes.c_uint8),
         ("sample_format", ctypes.c_uint8),
-        ("reserved", ctypes.c_uint8),
+        ("dropped", ctypes.c_uint8),
     ]
 
 
@@ -62,6 +62,7 @@ def codec(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         ctypes.c_uint16,
         ctypes.c_uint32,
         ctypes.c_uint8,
+        ctypes.c_uint16,
         ctypes.c_uint8,
         ctypes.c_void_p,
         ctypes.c_uint8,
@@ -97,6 +98,7 @@ def _c_encode(
     flags: int,
     fmt: RawFormat,
     samples: np.ndarray,
+    dropped: int = 0,
 ) -> bytes:
     n = int(samples.size)
     out = ctypes.create_string_buffer(MAX_PAYLOAD)
@@ -105,6 +107,7 @@ def _c_encode(
         sequence & 0xFFFF,
         timestamp_us & 0xFFFFFFFF,
         flags & 0xFF,
+        dropped & 0xFFFF,
         int(fmt),
         samples.ctypes.data_as(ctypes.c_void_p),
         n & 0xFF,
@@ -194,6 +197,7 @@ def test_encoder_rejects_oversized_frames(codec: ctypes.CDLL) -> None:
         0,
         0,
         0,
+        0,
         int(fmt),
         samples.ctypes.data_as(ctypes.c_void_p),
         (n + 1) & 0xFF,
@@ -201,6 +205,36 @@ def test_encoder_rejects_oversized_frames(codec: ctypes.CDLL) -> None:
         MAX_PAYLOAD,
     )
     assert rc != 0, "encoder accepted a frame that cannot fit a notification"
+
+
+def test_loss_counter_travels_in_the_header(codec: ctypes.CDLL) -> None:
+    """The `dropped` byte must survive the C -> Python -> C round-trip.
+
+    The byte that used to be reserved carries the samples lost since the
+    previous frame: without it the host can detect *that* something is
+    missing, but not *how much*.
+    """
+    samples = np.array([1, 2, 3], dtype=np.int16)
+    frame = _c_encode(codec, int(RawStream.ECG), 7, 1234, 0, RawFormat.S16, samples, dropped=7)
+
+    header, _decoded = decode_frame(frame)
+    assert header.dropped == 7
+
+    py_frame = encode_frame(
+        RawStream.ECG, 7, 1234, 0, RawFormat.S16, samples.astype(np.int64), dropped=7
+    )
+    assert py_frame == frame, "C and Python disagreed on the loss counter"
+
+    c_header, _ = _c_decode_all(codec, py_frame)
+    assert c_header.dropped == 7
+
+
+def test_loss_counter_is_saturated(codec: ctypes.CDLL) -> None:
+    """More than 255 lost samples saturate: a byte cannot express more."""
+    samples = np.array([7], dtype=np.int8)
+    frame = _c_encode(codec, int(RawStream.ECG), 1, 0, 0, RawFormat.S8, samples, dropped=300)
+    header, _ = decode_frame(frame)
+    assert header.dropped == 255
 
 
 def test_decoder_rejects_truncated_and_bad_version() -> None:

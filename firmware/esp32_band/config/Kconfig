@@ -36,17 +36,31 @@ config SYNAPSE_FEATURE_FIT_STORAGE
     help
         Enable FIT writer with SPIFFS backend for session recording.
 
+        This flag now gates the code, not only the menu entry: with it off
+        the fit component is not linked into the main component and
+        synapse_fit_init() is not called at all. A FIT mount failure is
+        logged as a warning and the device keeps running (the BLE research
+        service is the dataset path, the flash file is only an export).
+
 config SYNAPSE_FEATURE_PROVISIONING
     bool "Enable BLE provisioning (WiFi + Cloud + mTLS)"
     default y
     help
         Enable provisioning flow via BLE GATT for WiFi credentials, cloud URL, and device certificates.
 
+        This flag now gates the code: with it off the provisioning component
+        is not linked into the main component, synapse_provisioning_init()
+        is not called, and the device advertises in normal mode only.
+
 config SYNAPSE_FEATURE_OTA
     bool "Enable OTA updates with rollback"
     default y
     help
         Enable OTA firmware updates with automatic rollback on failed boots.
+
+        This flag now gates the code: with it off the ota component is not
+        linked into the main component and neither synapse_ota_init() nor
+        synapse_ota_process() are called.
 
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"

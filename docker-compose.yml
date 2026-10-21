@@ -7,10 +7,13 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      - PYTHONPATH=/app/src:/app
-      - SYNAPSE_SESSIONS_DIR=/app/data/sessions
+      PYTHONPATH: /app/src:/app
+      SYNAPSE_SESSIONS_DIR: /app/data/sessions
+      # Optional bearer token: when set, every /api endpoint (except the
+      # /api/health liveness probe) requires "Authorization: Bearer <token>".
+      SYNAPSE_API_TOKEN: ${SYNAPSE_API_TOKEN:-}
     volumes:
       - ./backend:/app/backend:ro
       - ./worker:/app/worker:ro

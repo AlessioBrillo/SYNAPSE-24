@@ -39,6 +39,7 @@ int synapse_raw_frame_encode(uint8_t stream_id,
                              uint16_t sequence,
                              uint32_t timestamp_us_lo,
                              uint8_t flags,
+                             uint16_t dropped,
                              uint8_t format,
                              const void *samples,
                              uint8_t sample_count,
@@ -80,7 +81,10 @@ int synapse_raw_frame_encode(uint8_t stream_id,
     out[8] = flags;
     out[9] = sample_count;
     out[10] = format;
-    out[11] = 0u; /* reserved */
+    /* Loss magnitude since the previous transmitted frame (0 = none). The
+     * byte is saturated so a long outage cannot wrap around to "no loss". */
+    out[11] = (dropped > SYNAPSE_RAW_DROPPED_MAX) ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
+                                                   : dropped;
 
     if (sample_count != 0u) {
         /* The caller hands us native-endian samples; the wire format is
@@ -135,7 +139,7 @@ int synapse_raw_frame_decode(const uint8_t *frame,
     header->flags = frame[8];
     header->sample_count = count;
     header->sample_format = format;
-    header->reserved = frame[11];
+    header->dropped = frame[11];
 
     return (int)SYNAPSE_RAW_FRAME_HEADER_SIZE;
 }

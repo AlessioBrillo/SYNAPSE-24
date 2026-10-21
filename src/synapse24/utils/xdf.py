@@ -21,6 +21,10 @@ import numpy.typing as npt
 import pyxdf
 from pylsl import StreamInfo, StreamOutlet, local_clock
 
+# The XDF chunk encoder is the SDK's (Apache-2.0 device layer): one
+# implementation of the format, shared by the host pipeline and the SDK CLI.
+from synapse_device.xdf_writer import write_xdf as _write_xdf_chunks
+
 # XDF 1.0 format constants
 XDF_MAGIC = b"XDF:"
 XDF_VERSION = 1
@@ -322,6 +326,10 @@ def write_xdf(  # noqa: PLR0915
 ) -> None:
     """Write multiple streams to XDF 1.0 file.
 
+    The format encoder lives in the SDK (``synapse_device.xdf_writer``), which
+    is the single implementation of the XDF chunk layout: the host pipeline
+    and the SDK CLI write files that ``pyxdf`` reads back identically.
+
     Args:
         output_path: Path to output .xdf file
         streams: List of stream dictionaries with keys:
@@ -330,126 +338,83 @@ def write_xdf(  # noqa: PLR0915
             - 'info': StreamInfo object, StreamConfig, or dict with stream metadata
         file_metadata: Optional file-level metadata
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: list[dict[str, Any]] = []
+    for stream_dict in streams:
+        data = stream_dict["data"]
+        timestamps = stream_dict["timestamps"]
+        info = stream_dict["info"]
 
-    with open(output_path, "wb") as f:
-        # Magic bytes (not a chunk), then FILEHEADER chunk with XML payload.
-        f.write(XDF_MAGIC)
-        _write_xdf_chunk(f, XDF_CHUNK_TAGS["FILEHEADER"], XDF_FILEHEADER_XML)
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        n_samples, n_channels = data.shape
 
-        # Process each stream (1-based stream IDs per XDF 1.0)
-        for stream_id, stream_dict in enumerate(streams, start=1):
-            data = stream_dict["data"]
-            timestamps = stream_dict["timestamps"]
-            info = stream_dict["info"]
+        if len(timestamps) != n_samples:
+            raise ValueError(f"Timestamp count ({len(timestamps)}) != sample count ({n_samples})")
 
-            # Normalize data to 2D (n_samples, n_channels)
-            if data.ndim == 1:
-                data = data.reshape(-1, 1)
-            n_samples, n_channels = data.shape
+        # Extract StreamConfig. A StreamInfo carries its full header
+        # (channel_format, labels, units, tier/device metadata) only in
+        # its XML: re-deriving a bare config from scalar accessors drops
+        # channel_format, so string streams (Markers/Metadata) were
+        # re-emitted as float32 headers while the payload stayed strings.
+        # pyxdf then consumed the wrong byte count per sample and silently
+        # dropped every stream after the corrupted one.
+        header_xml: bytes | None = None
+        if isinstance(info, StreamConfig):
+            config = info
+        elif isinstance(info, StreamInfo):
+            original_xml = info.as_xml()
+            config = StreamConfig(
+                name=info.name(),
+                stream_type=info.type(),
+                channel_count=info.channel_count(),
+                sampling_rate=info.nominal_srate(),
+                channel_format=_channel_format_from_xml(original_xml),
+                source_id=info.source_id(),
+            )
+            header_xml = original_xml.encode("utf-8")
+        elif isinstance(info, dict):
+            dict_type = info.get("type", "Other")
+            dict_format = info.get(
+                "channel_format",
+                "string" if dict_type in ("Markers", "Metadata") else "float32",
+            )
+            config = StreamConfig(
+                name=info.get("name", "STREAM"),
+                stream_type=dict_type,
+                channel_count=info.get("channel_count", n_channels),
+                sampling_rate=info.get("sampling_rate", 0),
+                channel_format=dict_format,
+                channel_names=info.get("channel_names", []),
+                channel_units=info.get("channel_units", []),
+                source_id=info.get("source_id", ""),
+                tier=info.get("tier", 0),
+                metadata=info.get("metadata", {}),
+            )
+        else:
+            raise TypeError(f"Unsupported info type: {type(info)}")
 
-            # Validate timestamps
-            if len(timestamps) != n_samples:
-                raise ValueError(
-                    f"Timestamp count ({len(timestamps)}) != sample count ({n_samples})"
-                )
-            if not np.all(np.diff(timestamps) >= 0):
-                # Allow equal timestamps for irregular streams, but warn
-                pass
+        if config.channel_count != n_channels:
+            raise ValueError(
+                f"Channel count mismatch: config={config.channel_count}, data={n_channels}"
+            )
 
-            # Extract StreamConfig. A StreamInfo carries its full header
-            # (channel_format, labels, units, tier/device metadata) only in
-            # its XML: re-deriving a bare config from scalar accessors drops
-            # channel_format, so string streams (Markers/Metadata) were
-            # re-emitted as float32 headers while the payload stayed strings.
-            # pyxdf then consumed the wrong byte count per sample and silently
-            # dropped every stream after the corrupted one.
-            header_xml_override: bytes | None = None
-            if isinstance(info, StreamConfig):
-                config = info
-            elif isinstance(info, StreamInfo):
-                original_xml = info.as_xml()
-                config = StreamConfig(
-                    name=info.name(),
-                    stream_type=info.type(),
-                    channel_count=info.channel_count(),
-                    sampling_rate=info.nominal_srate(),
-                    channel_format=_channel_format_from_xml(original_xml),
-                    source_id=info.source_id(),
-                )
-                header_xml_override = original_xml.encode("utf-8")
-            elif isinstance(info, dict):
-                dict_type = info.get("type", "Other")
-                dict_format = info.get(
-                    "channel_format",
-                    "string" if dict_type in ("Markers", "Metadata") else "float32",
-                )
-                config = StreamConfig(
-                    name=info.get("name", "STREAM"),
-                    stream_type=dict_type,
-                    channel_count=info.get("channel_count", n_channels),
-                    sampling_rate=info.get("sampling_rate", 0),
-                    channel_format=dict_format,
-                    channel_names=info.get("channel_names", []),
-                    channel_units=info.get("channel_units", []),
-                    source_id=info.get("source_id", ""),
-                    tier=info.get("tier", 0),
-                    metadata=info.get("metadata", {}),
-                )
-            else:
-                raise TypeError(f"Unsupported info type: {type(info)}")
+        entry: dict[str, Any] = {
+            "name": config.name,
+            "type": config.stream_type,
+            "channel_count": config.channel_count,
+            "sampling_rate": config.sampling_rate,
+            "channel_format": config.channel_format,
+            "channel_names": config.channel_names,
+            "channel_units": config.channel_units,
+            "source_id": config.source_id,
+            "data": data,
+            "timestamps": timestamps,
+        }
+        if header_xml is not None:
+            entry["header_xml"] = header_xml
+        payload.append(entry)
 
-            # Validate channel count
-            if config.channel_count != n_channels:
-                raise ValueError(
-                    f"Channel count mismatch: config={config.channel_count}, data={n_channels}"
-                )
-
-            # STREAMHEADER chunk (XML). Prefer the original StreamInfo XML
-            # when available: it preserves channel labels, units and
-            # tier/device metadata that scalar re-derivation would drop.
-            if header_xml_override is not None:
-                xml_bytes = header_xml_override
-            else:
-                stream_info = create_stream_info(config)
-                xml_bytes = stream_info.as_xml().encode("utf-8")
-            _write_xdf_chunk(f, XDF_CHUNK_TAGS["STREAMHEADER"], xml_bytes, stream_id)
-
-            # SAMPLES chunk(s), one per block. XDF 1.0 layout per sample:
-            # [u8 ts_flag][f64 ts if flag != 0][channel values]. Timestamps are
-            # always written explicitly (no delta inference on the write path).
-            block_size = 10000  # samples per block
-            for block_start in range(0, n_samples, block_size):
-                block_end = min(block_start + block_size, n_samples)
-                block_samples = data[block_start:block_end]
-                block_timestamps = np.asarray(timestamps[block_start:block_end], dtype=np.float64)
-
-                samples_data = bytearray()
-                _write_varlen_int(samples_data, block_end - block_start)
-
-                # Check if data is string/object type (for markers, metadata)
-                is_string_data = block_samples.dtype.kind in ("U", "S", "O")
-
-                if is_string_data:
-                    for i in range(block_end - block_start):
-                        samples_data.extend(b"\x01")
-                        samples_data.extend(struct.pack("<d", float(block_timestamps[i])))
-                        for j in range(n_channels):
-                            encoded = str(block_samples[i, j]).encode("utf-8")
-                            _write_varlen_int(samples_data, len(encoded))
-                            samples_data.extend(encoded)
-                else:
-                    rows = np.ascontiguousarray(block_samples, dtype=np.float32)
-                    for i in range(block_end - block_start):
-                        samples_data.extend(b"\x01")
-                        samples_data.extend(struct.pack("<d", float(block_timestamps[i])))
-                        samples_data.extend(rows[i].tobytes())
-
-                _write_xdf_chunk(f, XDF_CHUNK_TAGS["SAMPLES"], bytes(samples_data), stream_id)
-
-        # BOUNDARY chunk with spec signature (enables pyxdf forward-scan).
-        _write_xdf_chunk(f, XDF_CHUNK_TAGS["BOUNDARY"], XDF_BOUNDARY_SIGNATURE)
+    _write_xdf_chunks(Path(output_path), payload, file_metadata)
 
 
 def generate_synthetic_timestamps(

@@ -31,6 +31,33 @@ Chiudere, in software e senza hardware, il loop **device → host → analisi �
 | PR5 | `tools/check_baseline_claim.py` nel gate; `docs/baselines/phase0_results.json` placeholder; WESAD/Sleep-EDF non verificabili su questo host documentati | ✅ |
 | PR6 | README (badge Woodpecker, numeri veri, struttura, nota baseline), firmware README (NimBLE/SPIFFS/26 B), `compliance/LICENSING.md` split, `firmware/LICENSE` (MIT), `sdk/python/LICENSE` (Apache-2.0), frontend archiviato, increment summary | ✅ |
 
+## Correzioni successive (incremento MVP-1, 2026-10-20)
+
+Questo documento resta il registro di quell'incremento, ma alcune sue
+affermazioni non reggevano il confronto con l'hardware e con i formati.
+L'incremento **MVP-1 — Loop verificabile**
+(`docs/increments/MVP1_VERIFIABLE_LOOP.md`) le ha corrette; le note qui
+servono a non rileggere le claim come se fossero ancora vere:
+
+- **"SDK Python v0: codec, clock, transport, FIT writer, XDF reader,
+  session model, `synapse` CLI (discover/info/record/export/index/report/
+  analyze)"**: i quattro comandi di analisi erano stub (`return 2`) e il
+  FIT writer non produceva un file leggibile da un parser standard. Ora
+  l'SDK è il *device layer* (`discover/info/record/inspect`), i comandi di
+  analisi stanno nel pipeline dell'host (`synapse-sessions`,
+  `synapse-report`, `synapse-export`) e i formati sono validati da
+  `fitdecode` e `pyxdf` nel gate.
+- **"Data plane locale/offline, self-host, nessuna auth"**: il piano dati
+  ora ha un token bearer opzionale (`SYNAPSE_API_TOKEN`), un allowlist di
+  origini CORS e un confine esplicito per i percorsi forniti dal client.
+- **"Nessun claim nei doc senza comando/test che lo copra"**: era vero per
+  i documenti di quell'incremento, non per il resto del repository: i
+  formati e la suite dell'SDK non erano coperti da alcun test nel gate.
+  Ora lo sono.
+
+La decisione di struttura (un solo percorso canonico, SDK = device layer)
+è in `docs/decisions/ADR-001-canonical-paths.md`.
+
 ## Cosa NON è in questo incremento (per design)
 
 - OTA firmata (Ed25519), provisioning mTLS/CSR, GPS, TMP117, sessione FIT on-device, multi-pod wired sync.

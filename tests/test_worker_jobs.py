@@ -30,65 +30,31 @@ from worker.job_contract import (  # noqa: E402
     JobType,
 )
 
-# ---- FIT test fixture writer (developer data message 209) -----------------
-
-_DEV_FIELD_SIZES = [4, 1, 1, 1, 1, 1, 1, 2, 2, 2]  # ts, idx, 5x u8, 3x u16
-
-
-def _crc16(data: bytes, crc: int = 0) -> int:
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-    return crc & 0xFFFF
+# ---- FIT test fixture writer (canonical writer: synapse_device.fit) --------
 
 
 def write_dev_data_fit(path: Path, records: list[dict]) -> None:
-    """Minimal FIT with one developer-data definition (msg 209) + data records.
+    """Write a FIT file with Synapse developer data, one record per entry.
 
-    Each record: {"timestamp": int, "dev": {field_id: value}}.
-    Mirrors the layout written by scripts/export_session_fit.py so the worker's
-    hand-rolled reader can parse it.
+    Each record: {"timestamp": int, "dev": {field_id: value}}. The bytes come
+    from the canonical writer (:mod:`synapse_device.fit`), so the fixture is
+    the same format the product writes — and the worker's reader is the
+    canonical reader, not a second parser.
     """
-    out = bytearray()
-    # File header (14 bytes): header_size, .FIT magic at offset 8-11.
-    hdr = bytearray(14)
-    hdr[0] = 14
-    hdr[8:12] = b".FIT"
-    out += hdr
+    from synapse_device.fit import DEV_FIELDS, FitRecord, FitWriter
 
-    # Definition message: local type 0, global mesg num 209, 10 fields.
-    field_types = [134, 2, 2, 2, 2, 2, 2, 132, 132, 132]
-    defn = bytearray()
-    defn.append(0x80 | 0)  # definition, local type 0
-    defn.append(0)  # reserved
-    defn.append(0)  # arch = little-endian
-    defn += (209).to_bytes(2, "little")
-    defn.append(len(_DEV_FIELD_SIZES))  # num fields
-    for fs, ft in zip(_DEV_FIELD_SIZES, field_types):
-        defn.append(0)  # field number (unused by reader)
-        defn.append(fs)
-        defn.append(ft)
-    out += defn
-    out += (_crc16(bytes(defn))).to_bytes(2, "little")
-
-    # Data records.
+    writer = FitWriter()
+    writer.write_file_header()
+    writer.write_file_id(serial_number=1)
+    writer.write_developer_data_id()
+    writer.write_field_descriptions()
     for rec in records:
-        msg = bytearray()
-        msg.append(0)  # data message, local type 0
-        msg += int(rec["timestamp"]).to_bytes(4, "little")
-        msg.append(0)  # developer_data_index
-        dev = rec["dev"]
-        for fid in range(8):
-            v = int(dev.get(fid, 0))
-            if fid in (5, 6, 7):
-                msg += (v & 0xFFFF).to_bytes(2, "little")
-            else:
-                msg.append(v & 0xFF)
-        out += msg
-        out += (_crc16(bytes(msg))).to_bytes(2, "little")
-
-    path.write_bytes(bytes(out))
+        dev = {}
+        for field in DEV_FIELDS:
+            value = rec["dev"].get(field.field_id)
+            dev[field.name] = int(value) if value is not None else field.invalid
+        writer.write_record(FitRecord(timestamp=int(rec["timestamp"]), heart_rate=0, dev=dev))
+    writer.finalize(path)
 
 
 # ---- XDF test fixture writer ---------------------------------------------

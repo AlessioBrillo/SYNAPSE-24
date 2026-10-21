@@ -24,9 +24,17 @@
  *     4     4  timestamp_us_lo  uint32, low 32 bits of device microseconds
  *     8     1  flags            bit0 = ts_epoch_wrapped
  *     9     1  sample_count     number of samples in this frame
- *    10     1  sample_format    (synapse_raw_format_t)
- *    11     1  reserved         must be 0
+ *    10     1  sample_format    (synapse_raw_stream_t format)
+ *    11     1  dropped          samples lost for this stream since the previous
+ *                               transmitted frame, saturating at 255 (0 = none)
  *    12  ...  samples          sample_count values, little-endian two's compl.
+ *
+ * Loss reporting: the sequence number is incremented when a frame is BUILT,
+ * not when the notification is accepted, so a frame the BLE stack refused
+ * leaves a hole in the sequence that the host's gap detection sees. The
+ * `dropped` byte carries the magnitude of the loss (samples lost since the
+ * previous transmitted frame), so a consumer can tell a one-sample hiccup
+ * from a whole frame that never left the pod.
  */
 
 #ifndef SYNAPSE_RAW_FRAME_H
@@ -52,6 +60,9 @@ extern "C" {
 
 /** Flag: the 32-bit device microsecond counter wrapped between frames. */
 #define SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED 0x01u
+
+/** Largest loss magnitude the `dropped` header byte can carry. */
+#define SYNAPSE_RAW_DROPPED_MAX 255u
 
 /** Logical streams. One stream_id per LSL stream so the host can subscribe to
  *  exactly the channels it needs and stay inside the BLE/energy budget.
@@ -98,7 +109,7 @@ typedef struct {
     uint8_t flags;
     uint8_t sample_count;
     uint8_t sample_format;
-    uint8_t reserved;
+    uint8_t dropped; /**< samples lost since the previous transmitted frame */
 } synapse_raw_header_t;
 
 /** Bytes per sample for a given format. Returns 0 for an invalid format. */
@@ -114,10 +125,17 @@ uint16_t synapse_raw_max_samples(uint8_t format);
  * @brief Encode a frame of raw samples.
  *
  * @param stream_id       One of synapse_raw_stream_t.
- * @param sequence        Wrapping 16-bit sequence number.
+ * @param sequence        Wrapping 16-bit sequence number. The caller
+ *                        increments it when the frame is BUILT, so a frame the
+ *                        BLE stack refuses still leaves a hole in the sequence.
  * @param timestamp_us_lo Low 32 bits of the device microsecond timestamp of
  *                        the *first* sample in the frame.
  * @param flags           OR of SYNAPSE_RAW_FLAG_* bits.
+ * @param dropped         Samples lost for this stream since the previous
+ *                        transmitted frame. The value is saturated at
+ *                        SYNAPSE_RAW_DROPPED_MAX by the encoder, so a long
+ *                        outage cannot wrap around to "no loss"; 0 means
+ *                        "nothing was lost".
  * @param format          One of synapse_raw_format_t.
  * @param samples         Interleaved samples (channel-minor).
  * @param sample_count    Number of samples.
@@ -130,6 +148,7 @@ int synapse_raw_frame_encode(uint8_t stream_id,
                              uint16_t sequence,
                              uint32_t timestamp_us_lo,
                              uint8_t flags,
+                             uint16_t dropped,
                              uint8_t format,
                              const void *samples,
                              uint8_t sample_count,

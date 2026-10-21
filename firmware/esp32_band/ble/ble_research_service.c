@@ -285,6 +285,22 @@ static int32_t quantise_s16(float value, float scale)
     return (int32_t)lroundf(scaled);
 }
 
+/**
+ * @brief Account @p samples lost for @p stream.
+ *
+ * The loss is carried by the next frame's `dropped` header byte (the byte
+ * that used to be a reserved field), so the host learns the magnitude of the
+ * hole its sequence-gap detection found. The counter saturates at the header
+ * limit: a byte cannot express more than 255 lost samples.
+ */
+static void research_note_drop(synapse_research_stream_t *stream, uint16_t samples)
+{
+    uint32_t total = (uint32_t)stream->dropped_pending + (uint32_t)samples;
+    stream->dropped_pending = (uint16_t)(total > SYNAPSE_RAW_DROPPED_MAX
+                                             ? (uint32_t)SYNAPSE_RAW_DROPPED_MAX
+                                             : total);
+}
+
 /** Emit one frame for @p stream, draining up to its flush threshold. */
 static void flush_stream(synapse_research_t *r, synapse_research_stream_t *stream)
 {
@@ -329,11 +345,25 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
     stream->last_flushed_ts_low = ts_low;
     stream->has_flushed = true;
 
+    /* Loss since the previous transmitted frame travels in this frame's
+     * `dropped` byte (the byte that used to be reserved): the host learns
+     * how much data it will never see, not only that something is missing. */
+    uint8_t dropped = (stream->dropped_pending > SYNAPSE_RAW_DROPPED_MAX)
+                          ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
+                          : (uint8_t)stream->dropped_pending;
+
+    /* The sequence number is consumed when the frame is BUILT, not when the
+     * notification is accepted: a frame the BLE stack refuses must leave a
+     * hole in the sequence, otherwise the host sees an uninterrupted stream
+     * and cannot detect the loss at all. */
+    uint16_t sequence = stream->sequence++;
+
     int rc = synapse_raw_frame_encode(
         stream->stream_id,
-        stream->sequence,
+        sequence,
         (uint32_t)((uint64_t)stream->first_ts_us & 0xFFFFFFFFu),
         flags,
+        dropped,
         stream->format,
         staging,
         (uint8_t)count,
@@ -342,6 +372,7 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
 
     if (rc != SYNAPSE_RAW_OK) {
         r->dropped_frames++;
+        research_note_drop(stream, count);
         ESP_LOGW(TAG, "encode failed for stream 0x%02x: %s", stream->stream_id,
                  synapse_raw_status_str(rc));
     } else {
@@ -349,11 +380,14 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_notify_buf, (uint16_t)frame_len);
         if (om == NULL) {
             r->dropped_frames++;
+            research_note_drop(stream, count);
         } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
             r->dropped_frames++;
+            research_note_drop(stream, count);
             os_mbuf_free_chain(om);
         } else {
-            stream->sequence++;
+            /* Transmitted: the loss counter has reached the host, reset it. */
+            stream->dropped_pending = 0;
         }
     }
 
@@ -429,8 +463,10 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         } else {
             // Ring full: a notification could not be emitted (BLE budget).
             // The host's sequence-gap check will NOT see this, so count it
-            // for the bench diagnostics instead of losing it silently.
+            // for the bench diagnostics instead of losing it silently, and
+            // report its magnitude in the next frame's `dropped` byte.
             s_research.ring_overflow++;
+            research_note_drop(s, 1u);
         }
         break;
     }
@@ -445,6 +481,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             s->pending++;
         } else {
             s_research.ring_overflow++;
+            research_note_drop(s, 1u);
         }
         break;
     }
@@ -454,6 +491,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         synapse_research_stream_t *mag = &s_research.streams[STREAM_MAG];
         if (acc->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
             s_research.ring_overflow++;
+            research_note_drop(acc, 1u);
+            research_note_drop(gyr, 1u);
+            research_note_drop(mag, 1u);
             return;
         }
         if (acc->pending == 0) {
@@ -544,6 +584,7 @@ void synapse_research_service_on_connect(uint16_t conn_handle)
     for (size_t i = 0; i < s_research.stream_count; i++) {
         s_research.streams[i].sequence = 0;
         s_research.streams[i].pending = 0;
+        s_research.streams[i].dropped_pending = 0;
     }
     ESP_LOGI(TAG, "connected (handle %u)", conn_handle);
 }
@@ -557,6 +598,10 @@ void synapse_research_service_on_disconnect(void)
         // host must re-subscribe before anything streams again.
         s_research.streams[i].enabled = false;
         s_research.streams[i].pending = 0;
+        // The sequence restarts at 0 on the next connect, so the loss
+        // counter must restart with it: a stale count would be reported as
+        // a loss the new host never suffered.
+        s_research.streams[i].dropped_pending = 0;
     }
     ESP_LOGI(TAG, "disconnected");
 }

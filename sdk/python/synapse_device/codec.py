@@ -7,17 +7,21 @@ Python implementation of the Synapse Band wire format. The frame carries raw
 samples only — no derived features — so the recorded dataset is complete and
 the firmware stays small and energy-cheap.
 
-Frame layout (little-endian):
+This is the SDK-side mirror of ``firmware/common/ble/synapse_raw_frame.c``:
+the byte layout below is the one the pod actually transmits.
+
+Frame layout (little-endian)::
 
     offset  size  field
     0       1     version (==1)
     1       1     stream id  (0x01 ECG … 0x10 SYNC)
-    2       1     format   (0x01 S8 … 0x03 S32)
-    3       1     flags    (bit0: timestamp wrapped)
+    2       2     sequence number (wraps at 65535)
     4       4     timestamp_us (low 32 bits, pod clock)
-    8       2     sequence number
-    10      2     sample_count
-    12   N..     payload  (sample_count × channels × format_size bytes)
+    8       1     flags    (bit0: timestamp wrapped)
+    9       1     sample_count (values, channel-minor)
+    10      1     format   (0x01 S8 … 0x03 S32)
+    11      1     dropped  (samples lost since the previous frame, 0-255)
+    12   N..     payload  (sample_count × format_size bytes)
 
 N ≤ 244 so a notification fits a 247-byte BLE MTU.
 """
@@ -69,6 +73,9 @@ _FORMAT_DTYPE: Final[dict[RawFormat, str]] = {
 
 FLAG_TS_EPOCH_WRAPPED = 0x01
 
+#: Saturation limit of the header loss counter (byte 11).
+MAX_DROPPED: Final[int] = 255
+
 # Channel count per stream, used to reshape the decoded sample block.
 STREAM_CHANNELS: Final[dict[RawStream, int]] = {
     RawStream.ECG: 1,
@@ -91,6 +98,7 @@ class RawHeader:
     timestamp_us: int
     sequence: int
     sample_count: int
+    dropped: int = 0
 
 
 def format_size(fmt: RawFormat) -> int:
@@ -109,12 +117,23 @@ def max_samples(fmt: RawFormat, channels: int) -> int:
 
 def encode_frame(
     stream: RawStream,
-    fmt: RawFormat,
-    timestamp_us: int,
     sequence: int,
+    timestamp_us: int,
+    flags: int,
+    fmt: RawFormat,
     samples: np.ndarray,
+    dropped: int = 0,
 ) -> bytes:
-    """Encode one frame. ``samples`` is shape (sample_count, channels)."""
+    """Encode one frame. ``samples`` is shape (sample_count, channels).
+
+    The argument order is the one of the host codec
+    (:func:`synapse24.hardware.raw_codec.encode_frame`): the two encoders
+    produce the same bytes for the same frame, and a caller that mixes them
+    gets a frame nobody can decode.
+
+    ``dropped`` is the number of samples lost for this stream since the
+    previous transmitted frame (saturated at 255, 0 = nothing lost).
+    """
     samples = np.asarray(samples)
     if samples.ndim != 2:
         raise RawCodecError("samples must be 2-D (sample_count, channels)")
@@ -126,6 +145,11 @@ def encode_frame(
     fs = format_size(fmt)
     if count * channels * fs > MAX_PAYLOAD:
         raise RawCodecError("frame payload exceeds BLE MTU budget")
+    # The wire header carries the number of VALUES (channel-minor) in a single
+    # byte, exactly like the firmware codec.
+    values = count * channels
+    if values > 255:
+        raise RawCodecError("frame carries more than 255 values: too big for the header")
 
     flags = 0
     if timestamp_us >= (1 << 32):
@@ -135,11 +159,12 @@ def encode_frame(
     header = bytearray(HEADER_SIZE)
     header[0] = FRAME_VERSION
     header[1] = int(stream)
-    header[2] = int(fmt)
-    header[3] = flags
+    header[2:4] = (sequence & 0xFFFF).to_bytes(2, "little")
     header[4:8] = (timestamp_us & 0xFFFFFFFF).to_bytes(4, "little")
-    header[8:10] = (sequence & 0xFFFF).to_bytes(2, "little")
-    header[10:12] = (count & 0xFFFF).to_bytes(2, "little")
+    header[8] = flags
+    header[9] = values & 0xFF
+    header[10] = int(fmt)
+    header[11] = min(int(dropped), MAX_DROPPED) & 0xFF
 
     dt = _FORMAT_DTYPE[fmt]
     payload = samples.astype(dt).tobytes()
@@ -159,11 +184,23 @@ def decode_frame(frame: bytes) -> tuple[RawHeader, np.ndarray]:
         raise RawCodecError(f"unsupported frame version {version}")
 
     stream = RawStream(frame[1])
-    fmt = RawFormat(frame[2])
-    flags = frame[3]
+    sequence = int.from_bytes(frame[2:4], "little")
     ts_low = int.from_bytes(frame[4:8], "little")
-    sequence = int.from_bytes(frame[8:10], "little")
-    count = int.from_bytes(frame[10:12], "little")
+    flags = frame[8]
+    values = frame[9]
+    fmt = RawFormat(frame[10])
+    dropped = frame[11]
+
+    channels = STREAM_CHANNELS[stream]
+    fs = format_size(fmt)
+    if values % channels:
+        raise RawCodecError(
+            f"frame declares {values} values, not a multiple of {channels} channels"
+        )
+    count = values // channels
+    expected = HEADER_SIZE + values * fs
+    if len(frame) < expected:
+        raise RawCodecError(f"frame truncated: have {len(frame)} bytes, need {expected}")
 
     header = RawHeader(
         version=version,
@@ -173,13 +210,8 @@ def decode_frame(frame: bytes) -> tuple[RawHeader, np.ndarray]:
         timestamp_us=ts_low,
         sequence=sequence,
         sample_count=count,
+        dropped=dropped,
     )
-
-    channels = STREAM_CHANNELS[stream]
-    fs = format_size(fmt)
-    expected = HEADER_SIZE + count * channels * fs
-    if len(frame) < expected:
-        raise RawCodecError(f"frame truncated: have {len(frame)} bytes, need {expected}")
 
     dt = _FORMAT_DTYPE[fmt]
     samples = np.frombuffer(frame[HEADER_SIZE:expected], dtype=dt).reshape(count, channels)
