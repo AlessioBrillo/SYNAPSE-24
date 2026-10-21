@@ -38,6 +38,9 @@ jobs:
       - name: Run MyPy type check
         run: uv run mypy --package synapse24 --config-file pyproject.toml
 
+      - name: Run MyPy type check (device layer)
+        run: uv run mypy sdk/python/synapse_device --config-file pyproject.toml
+
   contract-check:
     name: Hardware Contract Check
     runs-on: ubuntu-latest
@@ -58,6 +61,15 @@ jobs:
 
       - name: Check hardware contract (rates, pins, UUIDs, codec)
         run: uv run python tools/check_contract.py --verbose
+
+      # The interface contract (FIT developer fields, GATT UUIDs, worker
+      # payloads) and the generated contract artifacts: a stale artifact is
+      # a silent drift between the manifest and the firmware.
+      - name: Check interface contract (FIT fields, GATT UUIDs, worker payloads)
+        run: uv run python tools/check_interfaces.py
+
+      - name: Check the generated contract artifacts are in sync
+        run: uv run python tools/generate_contracts.py --check
 
       - name: Toolchain report (informational, does not gate)
         continue-on-error: true
@@ -112,8 +124,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev --frozen
 
+      # The SDK suite is collected here too: measuring the device layer
+      # without running its tests would count it as untested.
       - name: Run tests with coverage
-        run: uv run pytest --cov=src --cov-fail-under=80 --cov-report=xml --cov-report=term-missing
+        run: uv run pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests sdk/python/tests
+
+      # Third-party conformance: fitdecode must read the FIT files, pyxdf the
+      # XDF ones. A format that only this project can read is not a product
+      # format.
+      - name: Format conformance (fitdecode, pyxdf)
+        run: uv run pytest tests/test_format_conformance.py -v --no-cov
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -149,6 +169,9 @@ jobs:
                        tests/test_firmware_host_loadgate.py \
                        tests/test_triage_feature_parity.py \
                        tests/test_firmware_ppg_imu_host.py \
+                       tests/test_firmware_ppg_sqi_host.py \
+                       tests/test_firmware_ble_contract.py \
+                       tests/test_firmware_fit_writer_host.py \
                        -v --no-cov -p no:cacheprovider
 
       - name: Platform note
