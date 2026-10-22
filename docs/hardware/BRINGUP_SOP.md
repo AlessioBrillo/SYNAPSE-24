@@ -226,6 +226,34 @@ Two rules that keep the bar honest:
   ran. Use the 1000+ mAh cell from the kit for the 6-hour soak, or log the
   battery percentage at start and end (`measured_battery_pct`) and say so.
 
+### 5a. What the bench must show about the loss counters
+
+The pod reports the loss in two independent ways, and the bench has to look
+at both (they answer different questions):
+
+| Where | What it means | What to do when it is not zero |
+|---|---|---|
+| **Sequence gap** in the host log (`dropped_frames` of the gate report) | whole frames the BLE stack refused: the host sees a hole in the 16-bit sequence | a hole in the sequence is a radio/bandwidth problem: shorten the connection interval, subscribe to fewer streams, re-run |
+| **`dropped` byte** in the frame header (byte 11) | samples lost for that stream since the previous frame, saturated at 255 | the pod's ring overflowed (or a frame was refused): the flush threshold does not fit the radio budget — reduce the number of subscribed streams |
+
+The two counters are not independent: a refused frame leaves a hole in the
+sequence *and* is counted in the `dropped` byte of the next frame. A
+`dropped` byte **without** a hole means the pod lost samples before framing
+them (the ring overflowed). Both must be zero for the run to count, and the
+`dropped` byte is in *samples*, not in values: a refused frame of a
+3-channel stream loses 4 samples, not 12.
+
+### 5b. How to read the advertisement on the bench
+
+The pod advertises **21 bytes** (flags + the 128-bit consumer service UUID)
+and answers the scan request with **18 bytes** (the complete name
+`SYNAPSE-BAND` + the 16-bit Heart Rate UUID). If a scanner shows a name
+without the service UUID, or a payload longer than 31 bytes, the build is
+not the one this SOP describes: check that the firmware was flashed from
+`firmware/esp32_band` with the `band-core` variant, and that the UUIDs came
+from the generated contract header
+(`uv run python tools/generate_contracts.py --check` must pass).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -28,7 +28,11 @@ from typing import Any
 import numpy as np
 
 from synapse24.hardware.raw_codec import RawStream, decode_frame
-from synapse24.hardware.research_client import UNIT_DIVISOR, ResearchStreamDecoder
+from synapse24.hardware.research_client import (
+    UNIT_DIVISOR,
+    ResearchStreamDecoder,
+    normative_stream_rates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,20 +63,7 @@ def _default_lsl_clock() -> float:
 
 def _normative_stream_rates() -> dict[RawStream, float]:
     """Nominal rate per raw stream, from config/hardware.yaml (single source)."""
-    try:
-        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
-
-        rates = forearm_hub_normative_rates()
-    except Exception:  # noqa: BLE001 - rates only affect intra-frame spacing
-        return {}
-    return {
-        RawStream.ECG: float(rates["ecg_hz"]),
-        RawStream.PPG: float(rates["ppg_hz"]),
-        RawStream.ACC: float(rates["imu_hz"]),
-        RawStream.GYRO: float(rates["imu_hz"]),
-        RawStream.MAG: float(rates["imu_hz"]),
-        RawStream.POWER: 1.0,  # one telemetry frame per second
-    }
+    return normative_stream_rates()
 
 
 @dataclass
@@ -96,10 +87,17 @@ class RawFrameIngestor:
     clock_model: Any = None
     lsl_clock_fn: Callable[[], float] | None = None
     stream_rates_hz: dict[RawStream, float] = field(default_factory=dict)
+    # Maximum number of values kept per stream by the decoder (0 = every
+    # sample of the session). The live path sets it: the recording is
+    # written by the spool (on disk), so the decoder only keeps the window
+    # the quality metrics work on.
+    history_limit: int = 0
 
     def __post_init__(self) -> None:
         if not self.stream_rates_hz:
             self.stream_rates_hz = _normative_stream_rates()
+        if self.history_limit and not self.decoder.history_limit:
+            self.decoder.history_limit = int(self.history_limit)
 
     def reset_session(self) -> None:
         """Start a clean session: zero the decoder and this ingestor's counts.

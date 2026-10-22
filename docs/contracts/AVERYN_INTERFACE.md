@@ -22,6 +22,32 @@ Corpo di `POST /api/v1/jobs/run`:
 { "computation_type": "hrv_trends\|stress_daily\|sqi_report\|sleep_staging", "file_path": "/percorso/sessione.fit" }
 ```
 
+## Sicurezza del Data Plane (locale)
+
+Il Data Plane è **local-only**: nel compose è agganciato a `127.0.0.1:8000`.
+
+### Bearer token (opzionale)
+
+Se `SYNAPSE_API_TOKEN` è impostata, **ogni** route `/api/v1/*` — e le route legacy `/api/*` — richiede l'header `Authorization: Bearer <token>`: un token mancante o errato riceve HTTP 401. Il token è letto dall'ambiente a ogni richiesta, quindi si può ruotare senza riavviare il processo. `/api/health` è l'unica eccezione: è la probe di liveness usata da supervisor e orchestratori, non restituisce dati di sessione e resta aperta. Se `SYNAPSE_API_TOKEN` **non** è impostata l'API resta aperta per lo sviluppo locale (con un WARNING in avvio).
+
+Il frontend deve quindi inviare il token su ogni chiamata:
+
+```http
+GET /api/v1/sessions HTTP/1.1
+Host: localhost:8000
+Authorization: Bearer <SYNAPSE_API_TOKEN>
+```
+
+Lo stesso vale per il WebSocket `/ws/live`, che accetta il token nell'header `Authorization` oppure nel query parameter `?token=` e chiude la connessione con codice 1008 se manca o è errato.
+
+### CORS
+
+Le origini consentite sono esplicite, mai il wildcard: di default il dev server Vite (`http://localhost:5173`, `http://127.0.0.1:5173`), estese con `SYNAPSE_CORS_ORIGINS` (lista separata da virgole). Il wildcard `*` viene ignorato: è invalido insieme ad `allow_credentials=True` e esporrebbe l'API a qualunque sito.
+
+### Confini dei path (`POST /api/v1/jobs/run`)
+
+Ogni `file_path` fornito dal client viene risolto (`Path.resolve()`: collassa `..` e segue i symlink) e deve cadere dentro una *root consentita*: la directory delle sessioni (`SYNAPSE_SESSIONS_DIR`) più le root extra elencate in `SYNAPSE_DATA_ROOTS` (separate dal separatore di path del sistema). Un path esterno viene **rifiutato senza mai essere aperto**, con `ok=false` ed `error="path outside allowed roots"`.
+
 ## Contratti machine-readable (`contracts/`)
 
 | File | Contenuto |
@@ -69,6 +95,8 @@ I dati grezzi (waveform complete) **non sono embeddati** nel report; restano nei
 3. `GET /api/v1/sessions` espone il catalogo; Averyn importa la sessione come dato con `source: "synapse-data-plane"`.
 4. `GET /api/v1/sessions/{id}/report` fornisce Readiness/Sleep/Stress/HRV già calcolati (o Averyn lancia `POST /api/v1/jobs/run` per calcolarli al volo).
 5. Averyn mostra le metriche nelle sue pagine (`/synapse/readiness`, `/synapse/sleep`, `/synapse/stress`, `/synapse/hrv`) senza conoscere il firmware.
+
+> **Quale tool produce cosa.** L'SDK `synapse` è il layer device (`discover`, `info`, `record`, `inspect`): non esporta in FIT e non indicizza le sessioni. L'indicizzazione del catalogo, il SessionReport v1 e l'esportazione XDF → FIT con HRV stanno nel pipeline host (`synapse-sessions index`, `synapse-report`, `synapse-export`; `scripts/export_session_fit.py` è un wrapper sottile di `synapse-export`).
 
 ## Consenso e privacy
 

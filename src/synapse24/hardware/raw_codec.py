@@ -8,6 +8,21 @@ through ``tests/firmware_host``. If the two ever diverge, that test fails.
 The frame carries **raw samples only** — no derived features. Signal quality,
 HRV and sensor fusion stay on the host, so the recorded dataset is complete
 and the firmware stays small and cheap in energy (Architecture.md §55-62).
+
+Header layout (12 bytes, little-endian), mirrored from the C codec:
+
+=========  ======  ==========================================================
+offset     size    field
+=========  ======  ==========================================================
+0          1       version
+1          1       stream id
+2          2       sequence (wraps at 65535)
+4          4       timestamp_us (low 32 bits of the pod clock)
+8          1       flags (bit0: the 32-bit timestamp counter wrapped)
+9          1       sample_count (values, channel-minor)
+10         1       sample format
+11         1       dropped (samples lost since the previous frame, 0-255)
+=========  ======  ==========================================================
 """
 
 from __future__ import annotations
@@ -20,6 +35,7 @@ import numpy as np
 __all__ = [
     "FRAME_VERSION",
     "HEADER_SIZE",
+    "MAX_DROPPED",
     "MAX_PAYLOAD",
     "RawCodecError",
     "RawFormat",
@@ -35,6 +51,7 @@ __all__ = [
 FRAME_VERSION = 1
 MAX_PAYLOAD = 244  # BLE notification payload with a 247-byte negotiated MTU
 HEADER_SIZE = 12
+MAX_DROPPED = 255  # saturation limit of the header loss counter
 
 
 class RawCodecError(ValueError):
@@ -104,12 +121,22 @@ class RawHeader:
     flags: int
     sample_count: int
     sample_format: RawFormat
-    reserved: int
+    dropped: int
 
     @property
     def ts_epoch_wrapped(self) -> bool:
         """True when the 32-bit device microsecond counter wrapped."""
         return bool(self.flags & FLAG_TS_EPOCH_WRAPPED)
+
+    @property
+    def reserved(self) -> int:
+        """Compatibility alias: the byte used to be a reserved field.
+
+        Byte 11 of the header now carries the loss counter (``dropped``).
+        The old name is kept so callers that still read ``header.reserved``
+        keep working.
+        """
+        return self.dropped
 
 
 def encode_frame(
@@ -119,6 +146,7 @@ def encode_frame(
     flags: int,
     fmt: RawFormat | int,
     samples: np.ndarray | list[int],
+    dropped: int = 0,
 ) -> bytes:
     """Encode one frame.
 
@@ -129,6 +157,8 @@ def encode_frame(
         flags: OR of ``FLAG_*`` bits.
         fmt: Sample encoding.
         samples: Interleaved samples (channel-minor).
+        dropped: Samples lost for this stream since the previous transmitted
+            frame (saturated at 255). 0 means "nothing was lost".
 
     Returns:
         The frame bytes.
@@ -163,7 +193,7 @@ def encode_frame(
             flags & 0xFF,
             count,
             int(sample_format),
-            0,
+            min(int(dropped), MAX_DROPPED) & 0xFF,
         ]
     )
     return header + arr.astype(_FORMAT_DTYPE[sample_format], copy=False).tobytes()
@@ -198,7 +228,7 @@ def decode_frame(frame: bytes | bytearray | np.ndarray) -> tuple[RawHeader, np.n
         flags,
         count,
         fmt_id,
-        reserved,
+        dropped,
     ) = np.frombuffer(buf[:HEADER_SIZE], dtype=np.uint8)
 
     if int(version) != FRAME_VERSION:
@@ -234,6 +264,6 @@ def decode_frame(frame: bytes | bytearray | np.ndarray) -> tuple[RawHeader, np.n
         flags=int(flags),
         sample_count=int(count),
         sample_format=sample_format,
-        reserved=int(reserved),
+        dropped=int(dropped),
     )
     return header, samples

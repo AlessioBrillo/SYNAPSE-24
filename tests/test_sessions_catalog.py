@@ -49,10 +49,17 @@ def _make_xdf(
 
 
 def _make_fit(path: Path) -> None:
-    """Minimal structurally-valid FIT: 14-byte header with .FIT magic + 2 CRC bytes."""
-    header = bytearray(14)
-    header[8:12] = b".FIT"
-    path.write_bytes(bytes(header) + b"\x00\x00")
+    """Write a real FIT file with the canonical writer."""
+    from synapse_device.fit import DEV_FIELDS, FitRecord, FitWriter
+
+    writer = FitWriter()
+    writer.write_file_header()
+    writer.write_file_id(serial_number=1)
+    writer.write_developer_data_id()
+    writer.write_field_descriptions()
+    dev = {field.name: field.invalid for field in DEV_FIELDS}
+    writer.write_record(FitRecord(timestamp=1000, heart_rate=72, dev=dev))
+    writer.finalize(path)
 
 
 def test_index_xdf_records_stream_metadata(tmp_path: Path) -> None:
@@ -85,6 +92,23 @@ def test_index_fit_is_indexed_lightly(tmp_path: Path) -> None:
     assert rec.xdf_valid is None
     assert rec.n_samples_total == 0
     assert rec.session_id.startswith("syn-")
+
+
+def test_index_fit_rejects_a_file_that_only_looks_like_fit(tmp_path: Path) -> None:
+    """A file with the magic but a broken CRC is not a usable session.
+
+    The catalog used to accept any file that started with the FIT magic, so
+    the files the project used to write (which no standard parser could read)
+    were catalogued as valid sessions.
+    """
+    fake = tmp_path / "fake.fit"
+    header = bytearray(14)
+    header[8:12] = b".FIT"
+    fake.write_bytes(bytes(header) + b"\x00\x00")
+
+    rec = index_fit(fake)
+    assert rec.format == "fit"
+    assert rec.fit_valid is False
 
 
 def test_index_directory_idempotent_and_mixed(tmp_path: Path) -> None:

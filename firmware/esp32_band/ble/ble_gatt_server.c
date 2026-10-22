@@ -20,7 +20,10 @@
 #include "ble_gatt_server.h"
 #include "ble_gatt_server_priv.h"
 #include "ble_research_service.h"
+#include "synapse_contract_generated.h"
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
 #include "synapse_provisioning.h"
+#endif
 #include "synapse_config.h"
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -37,6 +40,7 @@ static uint8_t s_body_location = 1; // wrist
 static uint8_t s_batt_level = 100;
 static bool s_batt_notify_pending = false;
 static uint16_t s_last_hr_bpm = 0xFFFF;
+static uint16_t s_last_rr_ms = 0xFFFF;
 static char s_mfr_name[32] = "Synapse";
 static char s_model_num[32] = "Band v1";
 static char s_serial_num[32] = "SYN-000000";
@@ -45,23 +49,21 @@ static char s_hw_rev[32] = "1.0";
 static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
 static uint16_t s_cfg_len = 0;
 
-// 128-bit UUIDs (little-endian byte order, GATT v1 frozen)
+// 128-bit UUIDs (little-endian byte order, GATT v1 frozen) — generated from
+// config/hardware.yaml, so the firmware cannot carry a second copy of the
+// contract. Regenerate with: uv run python tools/generate_contracts.py
 // Service: f9e08ffd-3d34-441f-97a6-1bf0958123f1
 static const ble_uuid128_t SYN_SVC_UUID =
-    BLE_UUID128_INIT(0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
-                     0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_INIT;
 // Feature stream: db4307e5-6cb3-4152-a0e2-81c3921168e9
 static const ble_uuid128_t FEAT_UUID =
-    BLE_UUID128_INIT(0xE9, 0x68, 0x11, 0x92, 0xC3, 0x81, 0xE2, 0xA0,
-                     0x52, 0x41, 0xB3, 0x6C, 0xE5, 0x07, 0x43, 0xDB);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_FEATURE_INIT;
 // Device config: bf68d647-0d02-479a-8d75-7964a51f332f
 static const ble_uuid128_t CFG_UUID =
-    BLE_UUID128_INIT(0x2F, 0x33, 0x1F, 0xA5, 0x64, 0x79, 0x75, 0x8D,
-                     0x9A, 0x47, 0x02, 0x0D, 0x47, 0xD6, 0x68, 0xBF);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_DEVICE_CONFIG_INIT;
 // Provisioning: 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
 static const ble_uuid128_t PROV_UUID =
-    BLE_UUID128_INIT(0x4A, 0xB1, 0x3B, 0x5D, 0x3E, 0xA0, 0x61, 0xA1,
-                     0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E);
+    SYNAPSE_CONTRACT_UUID_CONSUMER_PROVISIONING_INIT;
 
 // --- characteristic access callbacks -----------------------------------------
 
@@ -72,18 +74,35 @@ static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
 }
 
 // Heart Rate Measurement (0x2A37): readable (last value) + notify.
-// Flags: bit0 = HR 16-bit (value in bytes 1-2 as uint16 LE), bit4 = RR present.
-// When RR present: bytes after HR are uint16 LE RR intervals, each followed by
-// nothing (packed back-to-back). Averyn reads this flag-gated field.
+//
+// BLE Heart Rate Service (0x180D) / Heart Rate Measurement (0x2A37) flag
+// semantics (Bluetooth SIG, Heart Rate Service):
+//   bit0 (0x01) -> the Heart Rate Measurement Value is a 16-bit uint16
+//                  (little-endian) instead of an 8-bit uint8;
+//   bit4 (0x10) -> the project-specific "RR interval present" bit: the RR
+//                  bytes follow the HR value only when this bit is set.
+//
+// The read path and the notify path MUST agree: a flag that announces a
+// field the payload does not carry makes every client mis-parse the value
+// (and an uninitialised byte reaches the client), so the flags are computed
+// from the data that is actually sent.
 static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        uint8_t val[2 + 2]; // flags + hr16 (+ optional RR not included on read)
-        uint8_t flags = 0x10; // 16-bit HR value
+        uint8_t val[1 + 2 + 2]; // flags + HR16 (+ RR16 when present)
+        uint8_t flags = 0x01;   // bit0: 16-bit Heart Rate Measurement Value
+        uint16_t rr = s_last_rr_ms;
+        if (rr != 0xFFFF) flags |= 0x10; // RR interval present
         val[0] = flags;
         val[1] = (uint8_t)(s_last_hr_bpm & 0xFF);
         val[2] = (uint8_t)((s_last_hr_bpm >> 8) & 0xFF);
-        int rc = os_mbuf_append(ctxt->om, val, sizeof(val));
+        uint8_t n = 3;
+        if (rr != 0xFFFF) {
+            val[3] = (uint8_t)(rr & 0xFF);
+            val[4] = (uint8_t)((rr >> 8) & 0xFF);
+            n = 5;
+        }
+        int rc = os_mbuf_append(ctxt->om, val, n);
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -108,18 +127,23 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 
 /**
  * @brief Notify Heart Rate Measurement with optional RR interval.
- * Builds a standard 0x2A37 value: flags(0x10 = 16-bit HR) + HR16 + [RR16...].
+ * Builds a standard 0x2A37 value: flags(0x01 = 16-bit HR, 0x10 = RR present)
+ * + HR16 + [RR16...].
  * Call whenever a new HR sample is available; subscribers get the push.
  */
 esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    // Keep the last value so a client that READS 0x2A37 (instead of waiting
+    // for a notification) sees the same measurement the notify path sends.
+    s_last_hr_bpm = hr_bpm;
+    s_last_rr_ms = rr_interval_ms;
     uint16_t chr_handle = ble_gatts_find_chr(BLE_UUID16_DECLARE(0x180D),
                                              BLE_UUID16_DECLARE(0x2A37), NULL, NULL);
     if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
     // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
     uint8_t flags = 0x01; // 16-bit HR value
     if (rr_interval_ms != 0xFFFF) flags |= 0x10; // RR interval present
-    uint8_t val[2 + 2]; // flags + HR16 [+ RR16]
+    uint8_t val[1 + 2 + 2]; // flags + HR16 [+ RR16]
     uint8_t n = 0;
     val[n++] = flags;
     val[n++] = (uint8_t)(hr_bpm & 0xFF);
@@ -180,7 +204,15 @@ static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         uint8_t payload[240];
         if (data_len > sizeof(payload)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         if (data_len) os_mbuf_copydata(ctxt->om, 4, data_len, payload);
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         synapse_provisioning_process_cmd(hdr[0], payload, data_len);
+#else
+        // band-core: no provisioning. The write is refused, not silently
+        // swallowed: a client that tries to provision must know it failed.
+        (void)payload;
+        ESP_LOGW(BLE_TAG, "provisioning is disabled in this build");
+        return BLE_ATT_ERR_UNLIKELY;
+#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -317,8 +349,14 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         g_feat_subscribed = false;
         g_prov_subscribed = false;
         synapse_research_service_on_disconnect();
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
         else synapse_ble_gatt_start_advertising_normal();
+#else
+        // band-core: provisioning is not part of the build, so the pod is
+        // always in normal mode.
+        synapse_ble_gatt_start_advertising_normal();
+#endif
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(BLE_TAG, "Subscribe attr=%d notify=%d",
@@ -345,42 +383,120 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
     }
 }
 
+/* Device name broadcast by the band. The complete name goes into the scan
+ * response: a legacy advertising packet is limited to 31 bytes and the
+ * flags + 128-bit UUID already use 21 of them. */
+#define SYNAPSE_BLE_DEVICE_NAME "SYNAPSE-BAND"
+
+/**
+ * @brief Byte size of the advertising packet.
+ *
+ * flags (3 B) + the 128-bit Synapse consumer service UUID (18 B).
+ */
+uint8_t synapse_ble_gatt_adv_payload_size(void) {
+    return (uint8_t)(SYNAPSE_BLE_ADV_FLAGS_BYTES + SYNAPSE_BLE_ADV_UUID128_BYTES);
+}
+
+/**
+ * @brief Byte size of the scan response.
+ *
+ * Complete local name (2 B + name) + the 16-bit Heart Rate service UUID
+ * (4 B), so a standard HR client still discovers the device by UUID.
+ */
+uint8_t synapse_ble_gatt_scan_response_size(void) {
+    return (uint8_t)(SYNAPSE_BLE_ADV_NAME_BYTES(strlen(SYNAPSE_BLE_DEVICE_NAME))
+                     + SYNAPSE_BLE_ADV_UUID16_BYTES);
+}
+
+/* The advertising packet and the scan response must both fit the 31-byte
+ * legacy limit; a silent overflow would leave the device invisible. */
+_Static_assert(SYNAPSE_BLE_ADV_FLAGS_BYTES + SYNAPSE_BLE_ADV_UUID128_BYTES
+                   <= SYNAPSE_BLE_ADV_PAYLOAD_MAX,
+               "advertising packet exceeds the 31-byte legacy limit");
+_Static_assert(SYNAPSE_BLE_ADV_NAME_BYTES(sizeof(SYNAPSE_BLE_DEVICE_NAME) - 1)
+                   + SYNAPSE_BLE_ADV_UUID16_BYTES <= SYNAPSE_BLE_ADV_PAYLOAD_MAX,
+               "scan response exceeds the 31-byte legacy limit");
+
 static void start_advertising_impl(const char *name) {
     struct ble_hs_adv_fields fields = {0};
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t *)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
-    static const ble_uuid16_t svc_uuid16 = BLE_UUID16_INIT(0x180D);
-    fields.uuids16 = (ble_uuid16_t[]){svc_uuid16};
-    fields.num_uuids16 = 1;
-    fields.uuids16_is_complete = 1;
     // Advertise the Synapse consumer service so Averyn can find the device by
     // UUID without connecting first (phase 0 contract).
-    static const ble_uuid128_t svc_uuid128 = BLE_UUID128_INIT(
-        0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97,
-        0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9);
+    static const ble_uuid128_t svc_uuid128 =
+        SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_INIT;
     fields.uuids128 = (ble_uuid128_t[]){svc_uuid128};
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
-    ble_gap_adv_set_fields(&fields);
+
+    uint8_t adv_bytes = synapse_ble_gatt_adv_payload_size();
+    if (adv_bytes > SYNAPSE_BLE_ADV_PAYLOAD_MAX) {
+        ESP_LOGE(BLE_TAG, "advertising payload too big: %u > %u bytes",
+                 (unsigned)adv_bytes, (unsigned)SYNAPSE_BLE_ADV_PAYLOAD_MAX);
+        return;
+    }
+    int rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGE(BLE_TAG, "ble_gap_adv_set_fields failed: %d", rc);
+        return;
+    }
+
+    // The complete name and the 16-bit Heart Rate UUID go into the scan
+    // response: the advertising packet has no room left for them.
+    struct ble_hs_adv_fields rsp = {0};
+    rsp.name = (uint8_t *)name;
+    rsp.name_len = strlen(name);
+    rsp.name_is_complete = 1;
+    static const ble_uuid16_t svc_uuid16 = BLE_UUID16_INIT(0x180D);
+    rsp.uuids16 = (ble_uuid16_t[]){svc_uuid16};
+    rsp.num_uuids16 = 1;
+    rsp.uuids16_is_complete = 1;
+
+    uint8_t rsp_bytes = synapse_ble_gatt_scan_response_size();
+    if (rsp_bytes > SYNAPSE_BLE_ADV_PAYLOAD_MAX) {
+        ESP_LOGE(BLE_TAG, "scan response too big: %u > %u bytes",
+                 (unsigned)rsp_bytes, (unsigned)SYNAPSE_BLE_ADV_PAYLOAD_MAX);
+        return;
+    }
+    rc = ble_gap_adv_rsp_set_fields(&rsp);
+    if (rc != 0) {
+        ESP_LOGE(BLE_TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+        return;
+    }
 
     struct ble_gap_adv_params adv_params = {0};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(32);
     adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(64);
-    ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
-                      &adv_params, gap_event_cb, NULL);
-    ESP_LOGI(BLE_TAG, "Advertising started (%s)", name);
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
+                            &adv_params, gap_event_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGE(BLE_TAG, "ble_gap_adv_start failed: %d", rc);
+        return;
+    }
+    ESP_LOGI(BLE_TAG, "Advertising started (%s): adv=%u B rsp=%u B",
+             name, (unsigned)adv_bytes, (unsigned)rsp_bytes);
 }
 
 static void on_sync(void) {
-    int rc = ble_svc_gap_device_name_set("SYNAPSE-BAND");
+    int rc = ble_svc_gap_device_name_set(SYNAPSE_BLE_DEVICE_NAME);
     assert(rc == 0);
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
-    if (!synapse_provisioning_is_complete()) start_advertising_impl("SYNAPSE-BAND");
-    else start_advertising_impl("SYNAPSE-BAND");
+    // Provisioning and normal mode advertise the same identity: the device
+    // name and the consumer service UUID. The difference is in what the
+    // provisioning characteristic accepts, not in the advertisement, so the
+    // two branches are kept explicit instead of duplicating the call.
+#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
+    if (!synapse_provisioning_is_complete()) {
+        ESP_LOGI(BLE_TAG, "advertising (provisioning mode)");
+    } else {
+        ESP_LOGI(BLE_TAG, "advertising (normal mode)");
+    }
+#else
+    // band-core: no provisioning in this build, so the pod is always normal.
+    ESP_LOGI(BLE_TAG, "advertising (normal mode: provisioning not in this build)");
+#endif
+    start_advertising_impl(SYNAPSE_BLE_DEVICE_NAME);
 }
 
 static void on_reset(int reason) {
@@ -419,16 +535,28 @@ esp_err_t synapse_ble_gatt_init(void) {
     s_prov_handle = ble_gatts_find_chr(&SYN_SVC_UUID.u, &PROV_UUID.u, NULL, NULL);
     ESP_LOGI(BLE_TAG, "BLE GATT init OK (NimBLE) feat=%d prov=%d", s_feat_handle, s_prov_handle);
 
+    // The Synapse Research Service MUST be registered before the host task
+    // starts: NimBLE calls ble_gatts_start() automatically when the host
+    // starts, and from that moment ble_gatts_add_svcs() fails with
+    // BLE_HS_EBUSY. Registering it later (as app_main used to do) either
+    // aborts the boot or silently loses the dataset path.
+    rc = synapse_research_service_init();
+    if (rc != ESP_OK) {
+        ESP_LOGE(BLE_TAG, "research service registration failed: %s",
+                 esp_err_to_name(rc));
+        return ESP_FAIL;
+    }
+
     nimble_port_freertos_init(host_task_fn);
     return ESP_OK;
 }
 
 void synapse_ble_gatt_start_advertising_provisioning(void) {
-    if (ble_hs_synced()) start_advertising_impl("SYNAPSE-BAND");
+    if (ble_hs_synced()) start_advertising_impl(SYNAPSE_BLE_DEVICE_NAME);
 }
 
 void synapse_ble_gatt_start_advertising_normal(void) {
-    if (ble_hs_synced()) start_advertising_impl("SYNAPSE-BAND");
+    if (ble_hs_synced()) start_advertising_impl(SYNAPSE_BLE_DEVICE_NAME);
 }
 
 void synapse_ble_gatt_process_events(void) {

@@ -14,6 +14,10 @@ from typing import Any, BinaryIO
 import numpy as np
 import numpy.typing as npt
 
+# The chunk encoder is the SDK's: one implementation of the XDF format.
+from synapse_device.xdf_writer import write_varlen_int
+from synapse_device.xdf_writer import write_xdf_chunk as _write_xdf_chunk
+
 from synapse24.acquisition.clock_sync import DriftEstimate
 from synapse24.utils.xdf import (
     XDF_BOUNDARY_SIGNATURE,
@@ -21,7 +25,6 @@ from synapse24.utils.xdf import (
     XDF_FILEHEADER_XML,
     XDF_MAGIC,
     StreamConfig,
-    _write_xdf_chunk,
     create_stream_info,
     validate_xdf,
 )
@@ -233,18 +236,8 @@ def _varlen_size(value: int) -> int:
 
 
 def _write_varlen_int_to_bytes(buf: bytearray, value: int) -> None:
-    """Write varlen int to bytearray."""
-    if value < 0:
-        raise ValueError(f"Varlen int must be non-negative, got {value}")
-    if value < 256:
-        buf.extend(b"\x01")
-        buf.extend(struct.pack("B", value))
-    elif value < 2**32:
-        buf.extend(b"\x04")
-        buf.extend(struct.pack("<I", value))
-    else:
-        buf.extend(b"\x08")
-        buf.extend(struct.pack("<Q", value))
+    """Write a varlen int into a bytearray (the SDK's encoder)."""
+    write_varlen_int(buf, value)
 
 
 def _collect_chunks_and_configs(

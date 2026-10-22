@@ -25,39 +25,34 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "ble_research_service.h"
+#include "synapse_contract_generated.h"
 #include "synapse_raw_frame.h"
 #include "host/ble_hs_mbuf.h"
 
 static const char *TAG = "SYNAPSE_RESEARCH";
 
-// UUIDs (little-endian) — must match config/hardware.yaml
-// `metadata.research_characteristics` for the forearm_hub pod.
+// UUIDs (little-endian) — generated from config/hardware.yaml
+// (`metadata.research_service_uuid` and `metadata.research_characteristics`
+// for the forearm_hub pod), so the firmware cannot carry a second copy of the
+// contract. Regenerate with: uv run python tools/generate_contracts.py
 static const ble_uuid128_t RESEARCH_SVC_UUID =
-    BLE_UUID128_INIT(0x70, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_SERVICE_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_ECG_UUID =
-    BLE_UUID128_INIT(0x71, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_ECG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_PPG_UUID =
-    BLE_UUID128_INIT(0x72, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_PPG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_ACC_UUID =
-    BLE_UUID128_INIT(0x73, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_ACC_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_GYRO_UUID =
-    BLE_UUID128_INIT(0x74, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_GYRO_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_MAG_UUID =
-    BLE_UUID128_INIT(0x75, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_MAG_INIT;
 static const ble_uuid128_t RESEARCH_CHAR_SYNC_UUID =
-    BLE_UUID128_INIT(0x78, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_SYNC_INIT;
 // Power telemetry (INA219): voltage_mv, current_ma, power_mw, battery_pct at 1 Hz.
 // Declared in config/hardware.yaml `research_characteristics.power`.
 static const ble_uuid128_t RESEARCH_CHAR_POWER_UUID =
-    BLE_UUID128_INIT(0x79, 0x4C, 0x3B, 0x2A, 0x1F, 0x0E, 0x9D, 0x8C,
-                     0x7B, 0x4A, 0xF6, 0xE5, 0xD4, 0xC3, 0xB2, 0xA1);
+    SYNAPSE_CONTRACT_UUID_RESEARCH_CHAR_POWER_INIT;
 
 // Value handles, filled in by ble_gatts_count_cfg/add_svcs at registration.
 static uint16_t s_hdl_ecg;
@@ -285,6 +280,22 @@ static int32_t quantise_s16(float value, float scale)
     return (int32_t)lroundf(scaled);
 }
 
+/**
+ * @brief Account @p samples lost for @p stream.
+ *
+ * The loss is carried by the next frame's `dropped` header byte (the byte
+ * that used to be a reserved field), so the host learns the magnitude of the
+ * hole its sequence-gap detection found. The counter saturates at the header
+ * limit: a byte cannot express more than 255 lost samples.
+ */
+static void research_note_drop(synapse_research_stream_t *stream, uint16_t samples)
+{
+    uint32_t total = (uint32_t)stream->dropped_pending + (uint32_t)samples;
+    stream->dropped_pending = (uint16_t)(total > SYNAPSE_RAW_DROPPED_MAX
+                                             ? (uint32_t)SYNAPSE_RAW_DROPPED_MAX
+                                             : total);
+}
+
 /** Emit one frame for @p stream, draining up to its flush threshold. */
 static void flush_stream(synapse_research_t *r, synapse_research_stream_t *stream)
 {
@@ -329,11 +340,25 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
     stream->last_flushed_ts_low = ts_low;
     stream->has_flushed = true;
 
+    /* Loss since the previous transmitted frame travels in this frame's
+     * `dropped` byte (the byte that used to be reserved): the host learns
+     * how much data it will never see, not only that something is missing. */
+    uint8_t dropped = (stream->dropped_pending > SYNAPSE_RAW_DROPPED_MAX)
+                          ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
+                          : (uint8_t)stream->dropped_pending;
+
+    /* The sequence number is consumed when the frame is BUILT, not when the
+     * notification is accepted: a frame the BLE stack refuses must leave a
+     * hole in the sequence, otherwise the host sees an uninterrupted stream
+     * and cannot detect the loss at all. */
+    uint16_t sequence = stream->sequence++;
+
     int rc = synapse_raw_frame_encode(
         stream->stream_id,
-        stream->sequence,
+        sequence,
         (uint32_t)((uint64_t)stream->first_ts_us & 0xFFFFFFFFu),
         flags,
+        dropped,
         stream->format,
         staging,
         (uint8_t)count,
@@ -342,18 +367,30 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
 
     if (rc != SYNAPSE_RAW_OK) {
         r->dropped_frames++;
+        // The counter is in SAMPLES (the unit of the header byte), not in
+        // values: a refused frame loses `samples` physical samples, and a
+        // ring overflow loses one.
+        research_note_drop(stream, samples);
         ESP_LOGW(TAG, "encode failed for stream 0x%02x: %s", stream->stream_id,
                  synapse_raw_status_str(rc));
     } else {
-        size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * channels * size;
+        /* The frame carries `count` VALUES, so its length is the header plus
+         * count * size bytes. Multiplying by the channel count again (the
+         * old code did) doubled or quadrupled the length of every
+         * multi-channel frame: the notification carried stale bytes of the
+         * static buffer and, when the ring backed up, read past it. */
+        size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * size;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_notify_buf, (uint16_t)frame_len);
         if (om == NULL) {
             r->dropped_frames++;
+            research_note_drop(stream, samples);
         } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
             r->dropped_frames++;
+            research_note_drop(stream, samples);
             os_mbuf_free_chain(om);
         } else {
-            stream->sequence++;
+            /* Transmitted: the loss counter has reached the host, reset it. */
+            stream->dropped_pending = 0;
         }
     }
 
@@ -429,8 +466,10 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         } else {
             // Ring full: a notification could not be emitted (BLE budget).
             // The host's sequence-gap check will NOT see this, so count it
-            // for the bench diagnostics instead of losing it silently.
+            // for the bench diagnostics instead of losing it silently, and
+            // report its magnitude in the next frame's `dropped` byte.
             s_research.ring_overflow++;
+            research_note_drop(s, 1u);
         }
         break;
     }
@@ -445,6 +484,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             s->pending++;
         } else {
             s_research.ring_overflow++;
+            research_note_drop(s, 1u);
         }
         break;
     }
@@ -454,6 +494,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         synapse_research_stream_t *mag = &s_research.streams[STREAM_MAG];
         if (acc->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
             s_research.ring_overflow++;
+            research_note_drop(acc, 1u);
+            research_note_drop(gyr, 1u);
+            research_note_drop(mag, 1u);
             return;
         }
         if (acc->pending == 0) {
@@ -544,6 +587,7 @@ void synapse_research_service_on_connect(uint16_t conn_handle)
     for (size_t i = 0; i < s_research.stream_count; i++) {
         s_research.streams[i].sequence = 0;
         s_research.streams[i].pending = 0;
+        s_research.streams[i].dropped_pending = 0;
     }
     ESP_LOGI(TAG, "connected (handle %u)", conn_handle);
 }
@@ -557,6 +601,10 @@ void synapse_research_service_on_disconnect(void)
         // host must re-subscribe before anything streams again.
         s_research.streams[i].enabled = false;
         s_research.streams[i].pending = 0;
+        // The sequence restarts at 0 on the next connect, so the loss
+        // counter must restart with it: a stale count would be reported as
+        // a loss the new host never suffered.
+        s_research.streams[i].dropped_pending = 0;
     }
     ESP_LOGI(TAG, "disconnected");
 }

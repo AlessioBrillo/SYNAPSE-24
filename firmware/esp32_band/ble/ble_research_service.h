@@ -20,6 +20,11 @@
  *   - firmware/common/ble/synapse_raw_frame.[ch]  (wire format, host-parity tested)
  *   - src/synapse24/hardware/raw_codec.py          (host decoder)
  * tools/check_contract.py rejects any UUID or stream-id drift between them.
+ *
+ * Loss reporting: the per-stream sequence number is consumed when a frame is
+ * BUILT, not when the notification is accepted, so a frame the BLE stack
+ * refuses leaves a hole the host's gap detection can see. The magnitude of
+ * the loss travels in the frame header's `dropped` byte.
  */
 
 #ifndef SYNAPSE_BLE_RESEARCH_SERVICE_H
@@ -83,6 +88,9 @@ typedef struct {
     uint16_t sequence;      /**< wrapping 16-bit frame sequence             */
     uint16_t pending;       /**< buffered samples not yet framed            */
     uint16_t flush_at;      /**< emit a frame once pending reaches this     */
+    uint16_t dropped_pending; /**< samples lost since the last transmitted   *
+                               *  frame; travels in the frame header's        *
+                               *  `dropped` byte (saturated at 255)          */
     int32_t ring[SYNAPSE_RESEARCH_RING_DEPTH * SYNAPSE_RESEARCH_MAX_CHANNELS];
     int64_t first_ts_us;    /**< device timestamp of the oldest buffered sample */
     uint32_t last_flushed_ts_low; /**< low 32 bits of the previous frame's    *

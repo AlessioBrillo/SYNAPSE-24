@@ -989,3 +989,208 @@ class TestValidateXDF:
 
         with pytest.raises(FileNotFoundError):
             validate_xdf(tmp_path / "nonexistent.xdf")
+
+
+# ---------------------------------------------------------------------------
+# Correctness regressions (audit: SQI / MAP / LF-HF methodological errors)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_pulse_train(n_samples: int, fs: int, hr_hz: float = 1.2) -> np.ndarray:
+    """Build a PPG-like pulse train (systolic peak + dicrotic notch) on a DC baseline."""
+    t = np.arange(n_samples, dtype=np.float64) / fs
+    phase = (t % (1.0 / hr_hz)) * hr_hz
+    systolic = np.exp(-((phase - 0.25) ** 2) / (2 * 0.05**2))
+    dicrotic = 0.35 * np.exp(-((phase - 0.45) ** 2) / (2 * 0.06**2))
+    return 100.0 + 10.0 * (systolic + dicrotic)
+
+
+def _motion_excursion(n_samples: int, fs: int, freq_hz: float = 2.0) -> np.ndarray:
+    """Build a large motion excursion inside the cardiac band (2 Hz)."""
+    t = np.arange(n_samples, dtype=np.float64) / fs
+    return 5.0 * np.sin(2 * np.pi * freq_hz * t)
+
+
+class TestPPGSQIFeatureCorrectness:
+    """The SQI must score a clean pulse train above white noise (no kurtosis)."""
+
+    def test_white_noise_does_not_get_a_high_sqi(self):
+        """Gaussian noise must score clearly below a clean synthetic pulse train."""
+        fs = 100
+        n = 30 * fs
+        clean = _synthetic_pulse_train(n, fs)
+        rng = np.random.default_rng(42)
+        noise = rng.normal(0.0, 50.0, size=n)
+
+        clean_sqi = compute_ppg_sqi(clean, fs)
+        noise_sqi = compute_ppg_sqi(noise, fs)
+
+        assert noise_sqi < 0.6, f"white noise scored too high: {noise_sqi:.3f}"
+        assert clean_sqi > noise_sqi, f"clean {clean_sqi:.3f} !> noise {noise_sqi:.3f}"
+        assert clean_sqi > 0.6, f"clean pulse train scored too low: {clean_sqi:.3f}"
+        # "Clearly below": the noise-only trace must be separated from the
+        # signal-bearing trace by a wide margin, not by a rounding error.
+        assert clean_sqi - noise_sqi > 0.3, (
+            f"noise not clearly separated from signal: {clean_sqi:.3f} vs {noise_sqi:.3f}"
+        )
+
+    def test_spectral_snr_feature_separates_signal_from_noise(self):
+        """The spectral SNR feature (cardiac-band power fraction) discriminates."""
+        from synapse24.signal_quality.ppg import _compute_spectral_snr_score
+
+        fs = 100
+        n = 30 * fs
+        clean = _synthetic_pulse_train(n, fs)
+        rng = np.random.default_rng(7)
+        noise = rng.normal(0.0, 1.0, size=n)
+
+        clean_snr = _compute_spectral_snr_score(clean, fs)
+        noise_snr = _compute_spectral_snr_score(noise, fs)
+
+        assert 0.0 <= noise_snr <= 1.0
+        assert 0.0 <= clean_snr <= 1.0
+        assert clean_snr > 0.8, f"clean spectral SNR too low: {clean_snr:.3f}"
+        assert noise_snr < 0.35, f"noise spectral SNR too high: {noise_snr:.3f}"
+
+    def test_sqi_does_not_use_a_kurtosis_feature(self):
+        """The SQI must not use kurtosis - it rewarded Gaussian (noise) traces.
+
+        Guard rail for the removal: the kurtosis feature scored 1.0 at the
+        Gaussian value (k = 3), so pure noise was rewarded while physiological
+        pulse trains were penalised. Nobody may re-add it.
+        """
+        import inspect
+
+        from synapse24.signal_quality import ppg as ppg_module
+
+        source = inspect.getsource(ppg_module)
+        assert "from scipy.stats import kurtosis" not in source
+        assert "kurtosis(" not in source
+
+    def test_sqi_is_not_maximised_by_a_gaussian_trace(self):
+        """A noise-only trace must never out-score a signal-bearing trace.
+
+        This is the direct regression for the removed kurtosis feature, whose
+        score peaked at the Gaussian value (k = 3) and therefore rewarded the
+        absence of a signal.
+        """
+        fs = 100
+        n = 30 * fs
+        clean = _synthetic_pulse_train(n, fs)
+        rng = np.random.default_rng(11)
+        noise = rng.normal(0.0, 50.0, size=n)
+
+        assert compute_ppg_sqi(noise, fs) < compute_ppg_sqi(clean, fs)
+        # A trace that is *only* noise never reaches the "good quality" band.
+        assert compute_ppg_sqi(noise, fs) < 0.6
+        assert compute_ppg_sqi(clean, fs) - compute_ppg_sqi(noise, fs) > 0.3
+
+
+class TestMotionArtifactAccelerometerUse:
+    """MAP must actually use the accelerometer, even at a different length."""
+
+    def test_accelerometer_excursion_raises_map(self):
+        """A motion-contaminated PPG with a matching accelerometer scores higher MAP."""
+        fs = 100
+        n = 30 * fs
+        # The motion excursion dominates the pulse, as it does during a real
+        # hand/ wrist movement.
+        ppg = _synthetic_pulse_train(n, fs) + 50.0 * _motion_excursion(n, fs)
+
+        # Accelerometer buffer with a different length than the PPG buffer
+        # (same nominal rate, different window edges / trimming).
+        n_acc = 33 * fs
+        accel = _motion_excursion(n_acc, fs)
+        flat_accel = np.zeros(n_acc, dtype=np.float64)
+
+        map_excursion = ppg_motion_artifact_probability(ppg, accel, fs)
+        map_flat = ppg_motion_artifact_probability(ppg, flat_accel, fs)
+
+        assert 0.0 <= map_excursion <= 1.0
+        assert map_excursion > map_flat + 0.1, (
+            f"accelerometer excursion ignored: {map_excursion:.3f} vs flat {map_flat:.3f}"
+        )
+
+    def test_mismatched_accelerometer_is_resampled_not_discarded(self):
+        """A differently sized accelerometer must be resampled onto the PPG grid."""
+        fs = 100
+        n = 30 * fs
+        ppg = _synthetic_pulse_train(n, fs) + 50.0 * _motion_excursion(n, fs)
+
+        n_acc = 33 * fs
+        accel = _motion_excursion(n_acc, fs)
+
+        # Reference: the same accelerometer resampled explicitly by the caller
+        # (common sample rate assumption, as documented by the function).
+        accel_time = np.arange(n_acc, dtype=np.float64) / fs
+        ppg_time = np.arange(n, dtype=np.float64) / fs
+        resampled = np.interp(ppg_time, accel_time, accel)
+
+        map_mismatched = ppg_motion_artifact_probability(ppg, accel, fs)
+        map_resampled = ppg_motion_artifact_probability(ppg, resampled, fs)
+        map_none = ppg_motion_artifact_probability(ppg, None, fs)
+
+        assert map_mismatched > 0.0
+        assert map_mismatched == pytest.approx(map_resampled, abs=1e-9)
+        assert map_mismatched > map_none
+
+    def test_degenerate_accelerometer_is_ignored(self):
+        """A constant / single-sample accelerometer carries no motion information."""
+        fs = 100
+        n = 30 * fs
+        ppg = _synthetic_pulse_train(n, fs) + 50.0 * _motion_excursion(n, fs)
+
+        map_constant = ppg_motion_artifact_probability(ppg, np.ones(n), fs)
+        map_single = ppg_motion_artifact_probability(ppg, np.ones(1), fs)
+        map_absent = ppg_motion_artifact_probability(ppg, None, fs)
+
+        assert map_constant == pytest.approx(map_absent, abs=1e-9)
+        assert map_single == pytest.approx(map_absent, abs=1e-9)
+
+
+class TestHrvLfHfWindowGating:
+    """LF/HF is only reported when the analysed window is long enough."""
+
+    @staticmethod
+    def _r_peaks(n_beats: int, rr_samples: int = 100) -> np.ndarray:
+        return (np.arange(1, n_beats + 1) * rr_samples).astype(np.int64)
+
+    def test_short_window_omits_lf_hf_ratio(self):
+        """A 30 s window must not report an LF/HF ratio."""
+        hrv = compute_hrv_metrics(self._r_peaks(30), 100, window_duration_s=30.0)
+
+        assert "lf_hf_ratio" not in hrv
+        assert hrv["lf_hf_status"] == "window_too_short"
+        assert hrv["window_duration_s"] == 30.0
+
+    def test_long_window_reports_lf_hf_ratio(self):
+        """A 300 s window must report the LF/HF ratio."""
+        hrv = compute_hrv_metrics(self._r_peaks(300), 100, window_duration_s=300.0)
+
+        assert "lf_hf_ratio" in hrv
+        assert hrv["lf_hf_status"] == "ok"
+        assert hrv["window_duration_s"] == 300.0
+
+    def test_unknown_window_keeps_legacy_behaviour(self):
+        """Without a known duration the ratio is still computed (legacy callers)."""
+        hrv = compute_hrv_metrics(self._r_peaks(300), 100)
+
+        assert "lf_hf_ratio" in hrv
+        assert hrv["lf_hf_status"] == "unknown_window"
+        assert "window_duration_s" not in hrv
+
+    def test_time_domain_metrics_are_unchanged_by_the_gate(self):
+        """RMSSD / SDNN / mean HR must not depend on the LF/HF gating."""
+        peaks = self._r_peaks(300)
+        gated = compute_hrv_metrics(peaks, 100, window_duration_s=30.0)
+        ungated = compute_hrv_metrics(peaks, 100)
+
+        for key in ("mean_rr_ms", "sdnn_ms", "rmssd_ms", "nn50", "pnn50", "hr_mean_bpm"):
+            assert gated[key] == ungated[key]
+
+    def test_missing_key_is_safe_for_downstream_get_patterns(self):
+        """Downstream code uses ``hrv.get("lf_hf_ratio", 0)`` - omitting the key is safe."""
+        hrv = compute_hrv_metrics(self._r_peaks(30), 100, window_duration_s=30.0)
+
+        assert float(hrv.get("lf_hf_ratio", 0)) == 0.0
+        assert hrv.get("lf_hf_ratio") is None

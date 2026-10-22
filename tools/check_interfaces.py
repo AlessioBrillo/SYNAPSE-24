@@ -27,6 +27,8 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 FIT_DESCRIPTOR = DEFAULT_ROOT / "contracts" / "fit_developer_fields.json"
 FIRMWARE_FIT_HEADER = DEFAULT_ROOT / "firmware" / "esp32_band" / "fit" / "fit_writer.h"
 EXPORT_SCRIPT = DEFAULT_ROOT / "scripts" / "export_session_fit.py"
+EXPORT_MODULE = DEFAULT_ROOT / "src" / "synapse24" / "export" / "__init__.py"
+SDK_FIT_MODULE = DEFAULT_ROOT / "sdk" / "python" / "synapse_device" / "fit.py"
 WORKER_SCRIPT = DEFAULT_ROOT / "worker" / "hrv_worker.py"
 SCHEMAS_DIR = DEFAULT_ROOT / "contracts" / "schemas"
 
@@ -36,6 +38,8 @@ FIRMWARE_RESEARCH_SERVICE = (
     DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "ble_research_service.c"
 )
 TRANSPORT_PY = DEFAULT_ROOT / "sdk" / "python" / "synapse_device" / "transport.py"
+CONTRACTS_PY = DEFAULT_ROOT / "src" / "synapse24" / "contracts_generated.py"
+CONTRACT_H = DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "synapse_contract_generated.h"
 
 # UUID v1 pattern (lowercase, with hyphens).
 _UUID_RE = re.compile(
@@ -44,6 +48,9 @@ _UUID_RE = re.compile(
 # NimBLE 128-bit UUIDs are stored little-endian: the first init byte is the
 # LAST byte of the canonical UUID string.
 _LEADING_BYTE_RE = re.compile(r"BLE_UUID128_INIT\s*\(\s*0x([0-9a-fA-F]{2})")
+# The generated contract header declares the same bytes as a macro list; its
+# first byte is the same little-endian leading byte.
+_GENERATED_LEADING_BYTE_RE = re.compile(r"_BYTES\s*\\?\s*0x([0-9a-fA-F]{2})")
 
 # C macro name -> expected descriptor field id.
 DEV_FIELD_MACROS = (
@@ -58,6 +65,16 @@ DEV_FIELD_MACROS = (
 )
 
 _DEV_FIELD_RE = re.compile(r"(?:#define\s+)?(" + "|".join(DEV_FIELD_MACROS) + r")\s*[= ]\s*(\d+)")
+
+# The canonical writer declares the fields as ``DevField(<id>, "<name>", ...)``.
+_SDK_DEV_FIELD_RE = re.compile(r'DevField\(\s*(\d+)\s*,\s*"([a-z0-9_]+)"')
+
+# Base type of a field in the descriptor -> the FIT base type of the SDK table.
+_BASE_TYPE_BY_DESCRIPTOR_TYPE = {
+    "uint8": "FIT_BASE_TYPE_UINT8",
+    "uint16": "FIT_BASE_TYPE_UINT16",
+    "uint32": "FIT_BASE_TYPE_UINT32",
+}
 
 
 class Report:
@@ -131,6 +148,90 @@ def check_worker_field_ids(report: Report, path: Path, descriptor: dict[str, Any
         )
 
 
+def check_sdk_field_table(report: Report, path: Path, descriptor: dict[str, Any]) -> None:
+    """The SDK's developer-field table must match the canonical descriptor.
+
+    The SDK is the single writer of the FIT format: its field table is the
+    one every other component uses, so a drift between it and the contract
+    would put a different value in the same field for every consumer.
+    """
+    source = path.read_text(encoding="utf-8")
+    found = {int(field_id): name for field_id, name in _SDK_DEV_FIELD_RE.findall(source)}
+    expected = {int(f["id"]): f["name"] for f in descriptor["fields"]}
+    if found != expected:
+        report.fail(
+            "sdk/python/synapse_device/fit.py developer fields diverge from the "
+            f"descriptor: found {found}, expected {expected}"
+        )
+    for field in descriptor["fields"]:
+        base_type = _BASE_TYPE_BY_DESCRIPTOR_TYPE.get(field["type"])
+        if base_type is None:
+            continue
+        if field.get("unit") == "enum" or "enum" in field:
+            # An enumerated field is a one-byte value: the writer may declare
+            # it with the enum base type (the FIT profile's choice) or with
+            # the plain uint8 one — the wire format is identical.
+            alternatives = [base_type, "FIT_BASE_TYPE_ENUM"]
+        else:
+            alternatives = [base_type]
+        if not any(
+            re.search(rf'DevField\(\s*{field["id"]}\s*,\s*"{field["name"]}"\s*,\s*{alt}\b', source)
+            for alt in alternatives
+        ):
+            report.fail(
+                f"SDK developer field {field['name']} (id {field['id']}) does not use "
+                f"{' or '.join(alternatives)} as declared by the descriptor"
+            )
+
+
+def check_export_uses_the_canonical_writer(
+    report: Report, script: Path, module: Path, descriptor: dict[str, Any]
+) -> None:
+    """The export path must not re-implement the FIT encoding.
+
+    The script is a thin wrapper and the module owns the analysis; both must
+    take the developer-field table from the SDK, so the field ids of the
+    contract cannot drift into a second definition.
+    """
+    script_source = script.read_text(encoding="utf-8")
+    if "synapse24.export" not in script_source:
+        report.fail(
+            "scripts/export_session_fit.py must delegate to synapse24.export "
+            "(one implementation of the export, not two)"
+        )
+    module_source = module.read_text(encoding="utf-8")
+    if "synapse_device.fit" not in module_source:
+        report.fail("src/synapse24/export must use the SDK FIT writer (synapse_device.fit)")
+    if "DEV_FIELD_BY_NAME" not in module_source:
+        report.fail(
+            "src/synapse24/export must take the developer-field table from the SDK "
+            "(DEV_FIELD_BY_NAME), not from local constants"
+        )
+    for field in descriptor["fields"]:
+        if field["name"] not in module_source:
+            report.fail(
+                f"src/synapse24/export does not mention the developer field "
+                f"{field['name']} of the contract"
+            )
+
+
+def check_worker_uses_the_canonical_reader(report: Report, path: Path) -> None:
+    """The worker must decode FIT with the SDK reader, not a private parser.
+
+    A second FIT parser is a second interpretation of the same bytes: it is
+    how the worker ended up reading empty windows out of real files.
+    """
+    source = path.read_text(encoding="utf-8")
+    if "synapse_device.fit" not in source:
+        report.fail("worker/hrv_worker.py must read FIT with the SDK reader (synapse_device.fit)")
+    for forbidden in ("_parse_dev_fields", "_parse_definition"):
+        if forbidden in source:
+            report.fail(
+                f"worker/hrv_worker.py still defines {forbidden}: the FIT decoding "
+                "must have a single implementation"
+            )
+
+
 def check_descriptor_valid(report: Report, path: Path) -> None:
     """The FIT descriptor must be well-formed and declare exactly num_fields."""
     try:
@@ -185,10 +286,12 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
         """First init byte of each BLE_UUID128_INIT, as two lowercase hex digits."""
         return {m.group(1).lower() for m in _LEADING_BYTE_RE.finditer(text)}
 
-    # Text sources: hardware manifest + host transport (both carry UUID strings).
+    # Text sources: hardware manifest + host transport + the generated contract
+    # artifacts (all carry the canonical UUID strings).
     for label, path in (
         ("config/hardware.yaml", HARDWARE_YAML),
         ("sdk/python/synapse_device/transport.py", TRANSPORT_PY),
+        ("src/synapse24/contracts_generated.py", CONTRACTS_PY),
     ):
         if not path.is_file():
             continue
@@ -200,16 +303,22 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
                 f"{sorted(missing)}"
             )
 
-    # Firmware source: UUIDs are little-endian byte arrays; compare the leading
-    # (least-significant) byte of each canonical UUID against the init bytes.
-    if FIRMWARE_RESEARCH_SERVICE.is_file():
-        fw_bytes = _firmware_leading_bytes(FIRMWARE_RESEARCH_SERVICE.read_text(encoding="utf-8"))
+    # Firmware source: the UUID bytes live in the generated header (the
+    # firmware carries no second copy); compare the leading (least-significant)
+    # byte of each canonical UUID against the init bytes of the header.
+    firmware_text = ""
+    for path in (FIRMWARE_RESEARCH_SERVICE, CONTRACT_H):
+        if path.is_file():
+            firmware_text += path.read_text(encoding="utf-8") + "\n"
+    if firmware_text:
+        fw_bytes = _firmware_leading_bytes(firmware_text)
+        fw_bytes |= {m.group(1).lower() for m in _GENERATED_LEADING_BYTE_RE.finditer(firmware_text)}
         missing = [u for u in sorted(reference) if u[-2:] not in fw_bytes]
         if missing:
             report.fail(
-                "GATT research-service UUID drift in "
-                "firmware/esp32_band/ble/ble_research_service.c: canonical UUIDs "
-                f"missing (by trailing byte): {missing}"
+                "GATT research-service UUID drift in the firmware BLE sources "
+                "(ble_research_service.c + synapse_contract_generated.h): canonical "
+                f"UUIDs missing (by trailing byte): {missing}"
             )
 
 
@@ -236,11 +345,23 @@ def check_field_ids_consistent(
     export_script: Path,
     worker_script: Path,
     descriptor: dict[str, Any],
+    export_module: Path | None = None,
+    sdk_fit_module: Path | None = None,
 ) -> None:
-    """Cross-check the three implementation locations against the descriptor."""
+    """Cross-check every implementation location against the descriptor.
+
+    The firmware declares the fields as C macros; the SDK declares them in
+    its writer (the single implementation); the export and the worker must
+    both take them from the SDK instead of keeping a private copy.
+    """
     check_firmware_field_ids(report, firmware_header, descriptor)
-    check_export_script_field_ids(report, export_script, descriptor)
-    check_worker_field_ids(report, worker_script, descriptor)
+    if sdk_fit_module is not None and sdk_fit_module.is_file():
+        check_sdk_field_table(report, sdk_fit_module, descriptor)
+    if export_module is not None and export_module.is_file():
+        check_export_uses_the_canonical_writer(report, export_script, export_module, descriptor)
+    else:
+        check_export_script_field_ids(report, export_script, descriptor)
+    check_worker_uses_the_canonical_reader(report, worker_script)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -270,6 +391,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=WORKER_SCRIPT,
         help="Path to worker/hrv_worker.py",
+    )
+    parser.add_argument(
+        "--export-module",
+        type=Path,
+        default=EXPORT_MODULE,
+        help="Path to src/synapse24/export/__init__.py",
+    )
+    parser.add_argument(
+        "--sdk-fit-module",
+        type=Path,
+        default=SDK_FIT_MODULE,
+        help="Path to sdk/python/synapse_device/fit.py",
     )
     parser.add_argument(
         "--schemas-dir",
@@ -306,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
             args.export_script,
             args.worker,
             descriptor,
+            args.export_module,
+            args.sdk_fit_module,
         )
 
     check_schemas_valid(report, args.schemas_dir)

@@ -140,7 +140,7 @@ class SyntheticTransport(Transport):
                     stream_id, 1
                 )
                 samples = np.zeros((1, channels), dtype=np.float64)
-                frame = encode_frame(stream, RawFormat.S16, ts, seq, samples)
+                frame = encode_frame(stream, seq, ts, 0, RawFormat.S16, samples)
                 handler = self._subscribed.get(uuid)
                 if handler is not None:
                     if asyncio.iscoroutinefunction(handler):
@@ -176,7 +176,7 @@ try:  # pragma: no cover - bleak optional at import time
             if self._client is None:
                 raise TransportError("not connected")
 
-            def _cb(_handle: int, data: bytearray) -> None:
+            def _cb(_characteristic: object, data: bytearray) -> None:
                 if asyncio.iscoroutinefunction(handler):
                     asyncio.create_task(handler(char_uuid, bytes(data)))
                 else:

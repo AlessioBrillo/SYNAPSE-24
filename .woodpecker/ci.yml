@@ -1,8 +1,20 @@
-# CI gate (was GitHub ci.yml): ruff, mypy, hardware contract, phase 1 dry-run, tests cov>=80,
-# firmware host gate and ESP-IDF band build. Not included: baseline-validation (downloads
-# datasets), triage-model, PyPI release, firmware-ci.yml matrix. Local: `ci-local`.
+# CI gate (was GitHub ci.yml): ruff, mypy, hardware contract, interface
+# contract, phase 1 dry-run, tests cov>=80, SDK tests, format conformance,
+# firmware host gate and ESP-IDF band build. Not included: baseline-validation
+# (downloads datasets), triage-model, PyPI release, firmware-ci.yml matrix.
+# Local: `ci-local`.
 when:
   - event: [push, manual]
+
+environment:
+  # The numerical stack must not spawn a process pool: on a 2-core runner the
+  # loky workers of scikit-learn can block forever, and the thread explosion
+  # turns a 12-minute suite into a 6-hour job.
+  - OMP_NUM_THREADS=1
+  - MKL_NUM_THREADS=1
+  - OPENBLAS_NUM_THREADS=1
+  - NUMEXPR_NUM_THREADS=1
+  - JOBLIB_START_METHOD=fork
 
 steps:
   - name: python
@@ -14,12 +26,29 @@ steps:
       - uv run ruff check .
       - uv run ruff format --check .
       - uv run mypy --package synapse24 --config-file pyproject.toml
+      - uv run mypy sdk/python/synapse_device --config-file pyproject.toml
       - uv run python tools/check_contract.py --verbose
+      # The generated contract artifacts (UUIDs, stream ids, rates) must be in
+      # sync with config/hardware.yaml: a stale artifact is a silent drift.
+      - uv run python tools/generate_contracts.py --check
+      # The interface contract (FIT developer fields, GATT UUIDs, worker
+      # payloads): it fails on drift between the firmware, the SDK writer,
+      # the export and the worker.
+      - uv run python tools/check_interfaces.py
       - uv run python tools/check_baseline_claim.py
       - uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --dry-run --verbose
-      - uv run pytest tests/test_phase1_dry_run.py -v --no-cov
-      - uv run pytest --cov=src --cov=worker --cov-fail-under=80 --cov-report=term-missing
-      - uv run pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py -v --no-cov -p no:cacheprovider
+      - uv run --no-sync pytest tests/test_phase1_dry_run.py -v --no-cov
+      # Third-party conformance: fitdecode must read the FIT files and pyxdf
+      # the XDF ones. A format that only this project can read is not a
+      # product format.
+      - uv run --no-sync pytest tests/test_format_conformance.py -v --no-cov
+      # The device layer has its own suite and its own coverage target: the
+      # SDK is a separate package (Apache-2.0) with its own tests.
+      # --no-sync: the environment is already synced, and a test step must not
+      # reach the network.
+      - uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
+      - uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
+      - uv run --no-sync pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py -v --no-cov -p no:cacheprovider
 
   - name: firmware-band
     image: espressif/idf:v5.5.5

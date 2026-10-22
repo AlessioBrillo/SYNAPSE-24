@@ -7,10 +7,23 @@ static const char* TAG = "ppg_sqi";
 
 static ppg_sqi_ctx_t s_ctx = {};
 
-#define PPG_SQI_PERFUSION_WEIGHT    0.3f
+#define PPG_SQI_PERFUSION_WEIGHT    0.25f
 #define PPG_SQI_ENTROPY_WEIGHT      0.25f
-#define PPG_SQI_KURTOSIS_WEIGHT     0.25f
-#define PPG_SQI_PEAK_REG_WEIGHT     0.2f
+#define PPG_SQI_SNR_WEIGHT          0.30f
+#define PPG_SQI_PEAK_REG_WEIGHT     0.20f
+
+// Sampling rate of the PPG stream the SQI is computed on (config/hardware.yaml:
+// the MAX30102 runs at 50 Hz). It sets the frequency resolution of the
+// periodogram, and therefore which bins belong to the cardiac band.
+#define PPG_SQI_INPUT_RATE_HZ       50.0f
+
+// Cardiac band used by the spectral SNR feature (Hz).
+#define PPG_SQI_BAND_LOW_HZ         0.5f
+#define PPG_SQI_BAND_HIGH_HZ        8.0f
+
+// Size of the periodogram (must be a power of two) and its number of bins.
+#define PPG_SQI_FFT_SIZE             64
+#define PPG_SQI_FFT_BINS             (PPG_SQI_FFT_SIZE / 2)
 
 #define PI_VALUE 3.14159265359f
 
@@ -20,6 +33,48 @@ static inline float fast_sqrtf(float x) {
 
 static inline float fast_log2f(float x) {
     return log2f(x);
+}
+
+static inline float clamp01f(float x) {
+    if (x < 0.0f) return 0.0f;
+    if (x > 1.0f) return 1.0f;
+    return x;
+}
+
+/**
+ * @brief Periodogram of the last @p n_fft samples (Hann window, simple DFT).
+ *
+ * @return false when there is not enough data (the caller then reports the
+ *         "not measurable" value of its feature).
+ */
+static bool compute_power_spectrum(const float* buffer,
+                                    size_t count,
+                                    float* power,
+                                    int n_fft) {
+    if (count < (size_t)n_fft) return false;
+
+    float real[PPG_SQI_FFT_SIZE];
+    float imag[PPG_SQI_FFT_SIZE];
+
+    // Apply Hann window and copy last n_fft samples
+    for (int i = 0; i < n_fft; i++) {
+        size_t idx = (count - n_fft + i) % count;
+        float window = 0.5f * (1.0f - cosf(2.0f * PI_VALUE * i / (n_fft - 1)));
+        real[i] = buffer[idx] * window;
+        imag[i] = 0.0f;
+    }
+
+    // Simple DFT (not FFT, but n_fft=64 is small enough)
+    for (int k = 0; k < n_fft / 2; k++) {
+        float re = 0.0f, im = 0.0f;
+        for (int n = 0; n < n_fft; n++) {
+            float angle = 2.0f * PI_VALUE * k * n / n_fft;
+            re += real[n] * cosf(angle) + imag[n] * sinf(angle);
+            im += -real[n] * sinf(angle) + imag[n] * cosf(angle);
+        }
+        power[k] = re * re + im * im;
+    }
+    return true;
 }
 
 static float compute_perfusion_index(const float* buffer, size_t count) {
@@ -46,35 +101,13 @@ static float compute_perfusion_index(const float* buffer, size_t count) {
 
 static float compute_spectral_entropy(const float* buffer, size_t count) {
     if (count < 32) return 1.0f;  // High entropy = poor quality
-    
-    // Simple periodogram using autocorrelation
-    // We'll use a simplified approach: compute power in bands
-    const int n_fft = 64;  // Must be power of 2, <= count
+
+    const int n_fft = PPG_SQI_FFT_SIZE;  // Must be power of 2, <= count
     if (count < n_fft) return 1.0f;
-    
-    float real[n_fft];
-    float imag[n_fft];
-    float power[n_fft / 2];
-    
-    // Apply Hann window and copy last n_fft samples
-    for (int i = 0; i < n_fft; i++) {
-        size_t idx = (count - n_fft + i) % count;
-        float window = 0.5f * (1.0f - cosf(2.0f * PI_VALUE * i / (n_fft - 1)));
-        real[i] = buffer[idx] * window;
-        imag[i] = 0.0f;
-    }
-    
-    // Simple DFT (not FFT, but n_fft=64 is small enough)
-    for (int k = 0; k < n_fft / 2; k++) {
-        float re = 0.0f, im = 0.0f;
-        for (int n = 0; n < n_fft; n++) {
-            float angle = 2.0f * PI_VALUE * k * n / n_fft;
-            re += real[n] * cosf(angle) + imag[n] * sinf(angle);
-            im += -real[n] * sinf(angle) + imag[n] * cosf(angle);
-        }
-        power[k] = re * re + im * im;
-    }
-    
+
+    float power[PPG_SQI_FFT_BINS];
+    if (!compute_power_spectrum(buffer, count, power, n_fft)) return 1.0f;
+
     // Compute spectral entropy
     float total_power = 0.0f;
     for (int k = 0; k < n_fft / 2; k++) {
@@ -98,31 +131,44 @@ static float compute_spectral_entropy(const float* buffer, size_t count) {
     return normalized_entropy;  // 0 = tonal (good), 1 = noise-like (bad)
 }
 
-static float compute_kurtosis(const float* buffer, size_t count) {
-    if (count < 10) return 0.0f;
-    
-    float sum = 0.0f, sum2 = 0.0f, sum4 = 0.0f;
-    for (size_t i = 0; i < count; i++) {
-        sum += buffer[i];
+/**
+ * @brief Spectral SNR: the fraction of the power that lives in the cardiac band.
+ *
+ * A clean pulse train concentrates its power in 0.5-8 Hz and scores near 1;
+ * a noise buffer spreads it over the whole spectrum and scores near 0.
+ *
+ * This feature replaces the kurtosis one, which scored a *Gaussian* noise
+ * buffer 1.0 (a Gaussian has zero excess kurtosis): it rewarded the absence
+ * of a signal.
+ *
+ * The host implementation (src/synapse24/signal_quality/ppg.py) uses the
+ * same *feature* (the fraction of power in the cardiac band) with a
+ * different estimator (a 64-point DFT here, Welch there) and a different
+ * normalisation of the perfusion index: the two sides are comparable, not
+ * bit-identical. Aligning them is a separate decision, with the thresholds
+ * it implies.
+ */
+static float compute_spectral_snr(const float* buffer, size_t count) {
+    if (count < 32) return 0.0f;
+
+    const int n_fft = PPG_SQI_FFT_SIZE;
+    if (count < n_fft) return 0.0f;
+
+    float power[PPG_SQI_FFT_BINS];
+    if (!compute_power_spectrum(buffer, count, power, n_fft)) return 0.0f;
+
+    float in_band = 0.0f;
+    float total = 0.0f;
+    for (int k = 0; k < n_fft / 2; k++) {
+        const float freq = (float)k * PPG_SQI_INPUT_RATE_HZ / (float)n_fft;
+        total += power[k];
+        if (freq >= PPG_SQI_BAND_LOW_HZ && freq <= PPG_SQI_BAND_HIGH_HZ) {
+            in_band += power[k];
+        }
     }
-    float mean = sum / count;
-    
-    for (size_t i = 0; i < count; i++) {
-        float diff = buffer[i] - mean;
-        float diff2 = diff * diff;
-        sum2 += diff2;
-        sum4 += diff2 * diff2;
-    }
-    
-    float variance = sum2 / count;
-    if (variance <= 0.0f) return 0.0f;
-    
-    float kurtosis = (sum4 / count) / (variance * variance) - 3.0f;  // Excess kurtosis
-    
-    // Normalize: Gaussian = 0, impulsive = high
-    // Map to [0, 1] where 1 = high quality (Gaussian-like)
-    float normalized = 1.0f / (1.0f + fabsf(kurtosis) * 0.5f);
-    return normalized;
+
+    if (total <= 0.0f) return 0.0f;
+    return clamp01f(in_band / total);
 }
 
 static float compute_peak_regularity(const float* buffer, size_t count) {
@@ -173,6 +219,9 @@ static float compute_peak_regularity(const float* buffer, size_t count) {
 esp_err_t ppg_sqi_init(void) {
     memset(&s_ctx, 0, sizeof(ppg_sqi_ctx_t));
     s_ctx.output_every = 1;  // Process every sample, output at 100Hz via decimation
+    // The flag was never set: every sample re-ran init and wiped the window,
+    // so the SQI never had enough data and the motion gate never saw a value.
+    s_ctx.initialized = true;
     ESP_LOGI(TAG, "PPG SQI initialized (window=%d samples, output_rate=%dHz)", 
              PPG_SQI_WINDOW_SIZE, PPG_SQI_OUTPUT_RATE_HZ);
     return ESP_OK;
@@ -202,14 +251,14 @@ esp_err_t ppg_sqi_process_sample(float red, float ir, int64_t timestamp_us, ppg_
             // Use IR channel for quality metrics (more stable)
             float pi = compute_perfusion_index(s_ctx.ir_buffer, s_ctx.count);
             float entropy = compute_spectral_entropy(s_ctx.ir_buffer, s_ctx.count);
-            float kurtosis = compute_kurtosis(s_ctx.ir_buffer, s_ctx.count);
+            float snr = compute_spectral_snr(s_ctx.ir_buffer, s_ctx.count);
             float peak_reg = compute_peak_regularity(s_ctx.ir_buffer, s_ctx.count);
             
             // Weighted combination (Karlen 2013 inspired)
             // Higher is better for all components
-            float sqi = PPG_SQI_PERFUSION_WEIGHT * (pi / 10.0f) +  // Normalize PI: 10% = 1.0
-                        PPG_SQI_ENTROPY_WEIGHT * (1.0f - entropy) +   // Lower entropy = better
-                        PPG_SQI_KURTOSIS_WEIGHT * kurtosis +
+            float sqi = PPG_SQI_PERFUSION_WEIGHT * clamp01f(pi / 10.0f) +  // Normalize PI: 10% = 1.0
+                        PPG_SQI_ENTROPY_WEIGHT * (1.0f - entropy) +        // Lower entropy = better
+                        PPG_SQI_SNR_WEIGHT * snr +                        // Power in the cardiac band
                         PPG_SQI_PEAK_REG_WEIGHT * peak_reg;
             
             // Clamp to [0, 1]
@@ -218,9 +267,9 @@ esp_err_t ppg_sqi_process_sample(float red, float ir, int64_t timestamp_us, ppg_
             
             // Motion artifact probability: inverse of quality components
             float map = 1.0f - (PPG_SQI_ENTROPY_WEIGHT * (1.0f - entropy) + 
+                                PPG_SQI_SNR_WEIGHT * snr +
                                 PPG_SQI_PEAK_REG_WEIGHT * peak_reg);
-            if (map < 0.0f) map = 0.0f;
-            if (map > 1.0f) map = 1.0f;
+            map = clamp01f(map);
             
             s_ctx.last_result.sqi = sqi;
             s_ctx.last_result.perfusion_index = pi;

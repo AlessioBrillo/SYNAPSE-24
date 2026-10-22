@@ -54,24 +54,42 @@ extern "C" {
 
 // ============================================================================
 // Custom Synapse Service UUID (128-bit)
-// Generated with: uuidgen  (Fase 0 - freeze GATT v1, 27 Settembre 2026)
+// Generated from config/hardware.yaml (tools/generate_contracts.py): the
+// contract has a single source of truth, the firmware only includes it.
 // ============================================================================
+#include "synapse_contract_generated.h"
+
 #define SYNAPSE_CUSTOM_SERVICE_UUID128 \
-    {0xF1, 0x23, 0x81, 0x95, 0xF0, 0x1B, 0xA6, 0x97, \
-     0x1F, 0x44, 0x34, 0x3D, 0xFD, 0x8F, 0xE0, 0xF9}  // f9e08ffd-3d34-441f-97a6-1bf0958123f1
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_BYTES}  // f9e08ffd-...
 
 // Custom Characteristic UUIDs (128-bit, derived from service UUID)
 #define SYNAPSE_CHAR_FEATURE_STREAM_UUID128 \
-    {0xE9, 0x68, 0x11, 0x92, 0xC3, 0x81, 0xE2, 0xA0, \
-     0x52, 0x41, 0xB3, 0x6C, 0xE5, 0x07, 0x43, 0xDB}  // db4307e5-6cb3-4152-a0e2-81c3921168e9
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_FEATURE_BYTES}  // db4307e5-...
 
 #define SYNAPSE_CHAR_DEVICE_CONFIG_UUID128 \
-    {0x2F, 0x33, 0x1F, 0xA5, 0x64, 0x79, 0x75, 0x8D, \
-     0x9A, 0x47, 0x02, 0x0D, 0x47, 0xD6, 0x68, 0xBF}  // bf68d647-0d02-479a-8d75-7964a51f332f
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_DEVICE_CONFIG_BYTES}  // bf68d647-...
 
 #define SYNAPSE_CHAR_PROVISIONING_UUID128 \
-    {0x4A, 0xB1, 0x3B, 0x5D, 0x3E, 0xA0, 0x61, 0xA1, \
-     0x63, 0x4D, 0xAC, 0x94, 0xF1, 0x0C, 0x20, 0x4E}  // 4e200cf1-94ac-4d63-a161-a03e5d3bb14a
+    {SYNAPSE_CONTRACT_UUID_CONSUMER_PROVISIONING_BYTES}  // 4e200cf1-...
+
+// ============================================================================
+// Advertising payload budget (legacy advertising, BLE 4.x)
+// ============================================================================
+// A legacy advertising packet (and a legacy scan response) carries at most
+// 31 bytes of AD structures. Every structure costs a length byte and a type
+// byte on top of its value, so the budget is computed from the structures
+// the band actually advertises instead of being guessed.
+#define SYNAPSE_BLE_ADV_PAYLOAD_MAX 31u
+/** flags: length byte + type byte + 2 value bytes. */
+#define SYNAPSE_BLE_ADV_FLAGS_BYTES 3u
+/** one 128-bit service UUID: length byte + type byte + 16 value bytes. */
+#define SYNAPSE_BLE_ADV_UUID128_BYTES 18u
+/** one 16-bit service UUID: length byte + type byte + 2 value bytes. */
+#define SYNAPSE_BLE_ADV_UUID16_BYTES 4u
+/** complete local name: length byte + type byte + the name itself. */
+#define SYNAPSE_BLE_ADV_NAME_OVERHEAD_BYTES 2u
+#define SYNAPSE_BLE_ADV_NAME_BYTES(name_len) \
+    (SYNAPSE_BLE_ADV_NAME_OVERHEAD_BYTES + (unsigned)(name_len))
 
 // ============================================================================
 // Feature Stream Payload Format (packed, fits in MTU-3 bytes)
@@ -85,11 +103,11 @@ typedef struct __attribute__((packed)) {
     uint16_t sequence;          // Incremented per notification for reassembly (u16)
     uint16_t heart_rate;        // bpm, 0xFFFF = invalid
     uint16_t rr_interval_ms;    // ms, 0xFFFF = no RR available
-    uint8_t  ppg_sqi;           // 0-255 (0.0-1.0 scaled)
-    uint8_t  ppg_map;           // 0-255 (0.0-1.0 scaled)
-    uint8_t  ecg_quality;       // 0-255 (0.0-1.0 scaled)
+    uint8_t  ppg_sqi;           // 0-255 (0.0-1.0 scaled), 0xFF = not available
+    uint8_t  ppg_map;           // 0-255 (0.0-1.0 scaled), 0xFF = not available
+    uint8_t  ecg_quality;       // 0-255 (0.0-1.0 scaled), 0xFF = not available
     uint8_t  stress_level;      // 0=baseline, 1=stress, 2=artifact, 3=unknown
-    uint8_t  motion_level;      // 0-255 (0.0-1.0 scaled)
+    uint8_t  motion_level;      // 0-255 (0.0-1.0 scaled), 0xFF = not available
     uint8_t  battery_level;     // 0-100%
     uint8_t  charging;          // 0=no, 1=yes
     uint8_t  sport_type;        // 0=generic, 1=running, 2=cycling, 3=swimming, 4=sleep
@@ -150,10 +168,48 @@ typedef struct __attribute__((packed)) {
 
 /**
  * @brief Initialize BLE GATT Server
- * Registers all standard services + custom Synapse service
+ * Registers all standard services + custom Synapse service.
+ *
+ * The Synapse Research Service is registered here too, BEFORE the NimBLE
+ * host task starts: NimBLE calls ble_gatts_start() automatically when the
+ * host starts, and after that ble_gatts_add_svcs() fails with
+ * BLE_HS_EBUSY, so a service registered later would silently lose the
+ * dataset path (and abort the boot).
+ *
  * @return ESP_OK on success
  */
 esp_err_t synapse_ble_gatt_init(void);
+
+/**
+ * @brief Byte size of the advertising packet the band broadcasts.
+ *
+ * Advertising packet: flags + the 128-bit Synapse consumer service UUID.
+ * Scan response: the complete device name + the 16-bit Heart Rate service
+ * UUID (so a standard HR client still finds the device by UUID).
+ *
+ * Both must stay within SYNAPSE_BLE_ADV_PAYLOAD_MAX (31 bytes); the values
+ * are exposed so the budget can be asserted by a test.
+ *
+ * @return Advertising packet size in bytes
+ */
+uint8_t synapse_ble_gatt_adv_payload_size(void);
+
+/**
+ * @brief Byte size of the scan response the band broadcasts.
+ * @return Scan response size in bytes
+ */
+uint8_t synapse_ble_gatt_scan_response_size(void);
+
+/**
+ * @brief Bind the device identity to the BLE device information service.
+ *
+ * The serial is derived from the public MAC, so a client can bind a device
+ * to its owner. Without this declaration the call in app_main.c is an
+ * implicit declaration (and the IDF build treats it as an error).
+ */
+void synapse_ble_gatt_set_device_info(const char *manufacturer, const char *model,
+                                      const char *serial, const char *fw_version,
+                                      const char *hw_version);
 
 /**
  * @brief Start advertising in provisioning mode

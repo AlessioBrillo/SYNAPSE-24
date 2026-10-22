@@ -8,7 +8,18 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
-  UV_VERSION: "0.4.0"
+  # Pinned: the test steps use `uv run --no-sync`, which the 0.4 line does
+  # not have (and a test step must not reach the network).
+  UV_VERSION: "0.12.19"
+  # The numerical stack must not spawn a process pool: on a 2-core runner
+  # the loky workers of scikit-learn can block forever, and the thread
+  # explosion turns a 12-minute suite into a 6-hour job. "fork" avoids the
+  # cost of re-importing the interpreter in every worker.
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  JOBLIB_START_METHOD: "fork"
 
 jobs:
   lint-and-typecheck:
@@ -38,6 +49,9 @@ jobs:
       - name: Run MyPy type check
         run: uv run mypy --package synapse24 --config-file pyproject.toml
 
+      - name: Run MyPy type check (device layer)
+        run: uv run mypy sdk/python/synapse_device --config-file pyproject.toml
+
   contract-check:
     name: Hardware Contract Check
     runs-on: ubuntu-latest
@@ -58,6 +72,15 @@ jobs:
 
       - name: Check hardware contract (rates, pins, UUIDs, codec)
         run: uv run python tools/check_contract.py --verbose
+
+      # The interface contract (FIT developer fields, GATT UUIDs, worker
+      # payloads) and the generated contract artifacts: a stale artifact is
+      # a silent drift between the manifest and the firmware.
+      - name: Check interface contract (FIT fields, GATT UUIDs, worker payloads)
+        run: uv run python tools/check_interfaces.py
+
+      - name: Check the generated contract artifacts are in sync
+        run: uv run python tools/generate_contracts.py --check
 
       - name: Toolchain report (informational, does not gate)
         continue-on-error: true
@@ -97,6 +120,10 @@ jobs:
     name: Unit & Integration Tests
     runs-on: ubuntu-latest
     needs: [lint-and-typecheck, phase1-dry-run]
+    # The suite takes ~13 minutes on a 16-core machine and ~35 on a 2-core
+    # runner: the timeout is generous enough not to be a flake, and short
+    # enough to fail instead of hanging for six hours.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -112,8 +139,22 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev --frozen
 
+      # The SDK suite runs in its own step: it is the device layer (a
+      # different package, its own coverage target), and a single invocation
+      # over both trees makes a failure much harder to read.
+      # --no-sync: the environment is already synced by the step above, and a
+      # test step must not reach the network (a slow index is an hour lost).
       - name: Run tests with coverage
-        run: uv run pytest --cov=src --cov-fail-under=80 --cov-report=xml --cov-report=term-missing
+        run: uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests
+
+      - name: Device layer tests (SDK)
+        run: uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
+
+      # Third-party conformance: fitdecode must read the FIT files, pyxdf the
+      # XDF ones. A format that only this project can read is not a product
+      # format.
+      - name: Format conformance (fitdecode, pyxdf)
+        run: uv run --no-sync pytest tests/test_format_conformance.py -v --no-cov
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -149,6 +190,9 @@ jobs:
                        tests/test_firmware_host_loadgate.py \
                        tests/test_triage_feature_parity.py \
                        tests/test_firmware_ppg_imu_host.py \
+                       tests/test_firmware_ppg_sqi_host.py \
+                       tests/test_firmware_ble_contract.py \
+                       tests/test_firmware_fit_writer_host.py \
                        -v --no-cov -p no:cacheprovider
 
       - name: Platform note

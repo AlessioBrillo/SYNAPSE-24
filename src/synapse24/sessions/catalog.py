@@ -27,6 +27,8 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from synapse_device.fit import FIT_CRC_SIZE, fit_crc16
+
 # project imports
 from synapse24.utils import validate_xdf
 
@@ -111,18 +113,31 @@ def _iso_from_timestamp(ts: float) -> str:
 
 
 def _validate_fit_light(path: Path) -> bool:
-    """Light structural check: FIT header magic + plausible size + CRC tail."""
+    """Validate a FIT file: header magic, header CRC and file CRC.
+
+    The check is real, not cosmetic: the CRC of the header and the CRC of the
+    file body are recomputed with the FIT algorithm, so a file that merely
+    *looks* like FIT (the ones the project used to write) is reported as
+    invalid instead of being catalogued as a usable session.
+
+    Consequence: the files written by the previous writer (a different CRC
+    algorithm and a per-message CRC) are listed with ``fit_valid = False``.
+    They are still catalogued, so nothing disappears silently, but they have
+    to be re-exported to be used.
+    """
     try:
         data = path.read_bytes()
     except OSError:
         return False
-    if len(data) < FIT_HEADER_SIZE + 2:
+    if len(data) < FIT_HEADER_SIZE + FIT_CRC_SIZE:
         return False
     if data[8:12] != FIT_HEADER_MAGIC:
         return False
-    # Header CRC (bytes 12-14) and a trailing CRC are expected; just require the
-    # file to be larger than the header and to end with 2 CRC bytes.
-    return len(data) >= FIT_HEADER_SIZE + 2
+    header_crc = int.from_bytes(data[12:14], "little")
+    if fit_crc16(data[:12]) != header_crc:
+        return False
+    file_crc = int.from_bytes(data[-2:], "little")
+    return fit_crc16(data[:-2]) == file_crc
 
 
 def _extract_device_serial_from_fit(path: Path) -> str:

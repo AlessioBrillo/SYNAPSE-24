@@ -27,6 +27,9 @@ dependencies = [
     "edfio>=0.3.0,<1.0",
     # Hardware abstraction
     "brainflow>=5.10.0,<6.0",
+    # Device layer (Apache-2.0 SDK): codec, transport, clock, XDF/FIT writers.
+    # synapse24 depends on the SDK, never the other way round.
+    "synapse-device",
     # Edge AI / TinyML
     # "edgeimpulse-python>=1.0.0,<2.0",  # Install from Edge Impulse CLI: edge-impulse-linux --setup
     # "tflite-runtime>=2.14.0,<3.0",  # No PyPI wheel for Python 3.12; install from Google or use TFLite from TensorFlow
@@ -65,6 +68,9 @@ dev = [
 "pre-commit>=3.7.0,<4.0",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
+    # Third-party FIT parser: proves that the files the project writes are
+    # standard FIT, not "FIT-looking" bytes.
+    "fitdecode>=0.11.0,<1.0",
 ]
 hardware = [
     "bleak>=0.22.0,<1.0",
@@ -79,6 +85,11 @@ docs = [
 ]
 
 [tool.uv]
+# The device layer (codec, transport, clock, XDF/FIT writers) lives in the
+# Apache-2.0 SDK and is consumed as a local path dependency: one
+# implementation, no duplicated codec.
+[tool.uv.sources]
+synapse-device = { path = "sdk/python", editable = true }
 
 [dependency-groups]
 dev = [
@@ -104,6 +115,7 @@ dev = [
     "bandit>=1.9.4",
     "pytest-json-report>=1.5.0",
     "ziglang>=0.16.0,<0.17",
+    "fitdecode>=0.11.0,<1.0",
 ]
 hardware = [
     "bleak>=0.22.0,<1.0",
@@ -316,6 +328,13 @@ precision = 2
 [build-system]
 requires = ["hatchling>=1.22.0,<2.0"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+# The host pipeline entry points. The device layer lives in the SDK
+# (`synapse` CLI, Apache-2.0) and never imports this package.
+synapse-sessions = "synapse24.sessions.catalog:main"
+synapse-report = "synapse24.report.__main__:main"
+synapse-export = "synapse24.export:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/synapse24"]
