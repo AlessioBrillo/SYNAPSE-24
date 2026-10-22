@@ -43,7 +43,7 @@ def main() -> int:
             "set -e; "
             "rm -rf build; "
             "idf.py set-target esp32s3; "
-            f'export IDF_BUILD_PARALLEL_LEVEL={args.jobs}; '
+            f"export IDF_BUILD_PARALLEL_LEVEL={args.jobs}; "
             'SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build'
         )
     else:

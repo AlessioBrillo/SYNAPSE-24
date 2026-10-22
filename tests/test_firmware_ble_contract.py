@@ -39,6 +39,9 @@ GATT_C = BLE_DIR / "ble_gatt_server.c"
 GATT_H = BLE_DIR / "ble_gatt_server.h"
 RESEARCH_C = BLE_DIR / "ble_research_service.c"
 BLE_CMAKE = BLE_DIR / "CMakeLists.txt"
+ACQUISITION_CMAKE = BAND / "acquisition" / "CMakeLists.txt"
+PROVISIONING_CMAKE = BAND / "provisioning" / "CMakeLists.txt"
+FIT_CMAKE = BAND / "fit" / "CMakeLists.txt"
 APP_MAIN = MAIN_DIR / "app_main.c"
 MAIN_CMAKE = MAIN_DIR / "CMakeLists.txt"
 FIT_C = FIT_DIR / "fit_writer.c"
@@ -316,40 +319,63 @@ def test_the_optional_subsystems_do_not_abort_the_boot() -> None:
     assert "ESP_LOGW" in block, "a FIT init failure must be logged as a warning"
 
 
-def test_the_main_component_requires_the_optional_components_conditionally() -> None:
-    """CMake must follow the same Kconfig flags as the code."""
-    source = _read(MAIN_CMAKE)
-    for flag, component in (
-        ("CONFIG_SYNAPSE_FEATURE_FIT_STORAGE", "fit"),
-        ("CONFIG_SYNAPSE_FEATURE_PROVISIONING", "provisioning"),
-        ("CONFIG_SYNAPSE_FEATURE_OTA", "ota"),
-    ):
-        assert f"if({flag})" in source, f"{component} is not required conditionally"
-        block = source.split(f"if({flag})", 1)[1].split("endif()", 1)[0]
-        assert component in block, f"the {component} component is not required when {flag} is on"
+def test_the_optional_components_are_always_in_the_graph() -> None:
+    """The optional components must always be reachable.
 
-
-def test_the_ble_component_requires_provisioning_conditionally() -> None:
-    """The BLE component must not pull the provisioning stack into band-core.
-
-    The BLE server calls the provisioning API (write handler, advertising
-    mode): with the flag off, the component is not linked and the calls are
-    compiled out.
+    Their API is a no-op when the matching Kconfig flag is off, so the
+    component graph and the compiler can never disagree: a graph that
+    disagrees is a build that includes the header of a component that is
+    not linked (which is what broke the build on one pinned IDF version).
     """
-    cmake = _read(BLE_CMAKE)
-    assert "if(CONFIG_SYNAPSE_FEATURE_PROVISIONING)" in cmake, (
-        "the BLE component must require provisioning conditionally"
-    )
-    block = cmake.split("if(CONFIG_SYNAPSE_FEATURE_PROVISIONING)", 1)[1].split("endif()", 1)[0]
-    assert "provisioning" in block
+    main_cmake = _read(MAIN_CMAKE)
+    for component in ("fit", "provisioning", "ota"):
+        assert component in main_cmake, f"the {component} component must be in the graph"
 
-    source = _read(GATT_C)
-    assert "#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)" in source
-    for call in ("synapse_provisioning_process_cmd", "synapse_provisioning_is_complete"):
-        index = source.index(call)
-        guard = source.rfind("#if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)", 0, index)
-        guard_end = source.rfind("#endif", 0, index)
-        assert guard > guard_end, f"{call} is not guarded by the Kconfig flag"
+    ble_cmake = _read(BLE_CMAKE)
+    assert "provisioning" in ble_cmake, (
+        "the BLE component must always reach the provisioning component"
+    )
+    acquisition_cmake = _read(ACQUISITION_CMAKE)
+    assert "fit" in acquisition_cmake, "the acquisition component must always reach the FIT writer"
+
+
+def test_the_heavy_dependencies_are_conditional() -> None:
+    """The Wi-Fi stack must stay out of the band-core build.
+
+    The provisioning code of the MVP does not call the Wi-Fi API (the
+    connect is deferred), so the component does not depend on it: the
+    band-core image carries no Wi-Fi stack.
+    """
+    provisioning_cmake = _read(PROVISIONING_CMAKE)
+    assert "esp_wifi" not in provisioning_cmake, (
+        "the Wi-Fi stack must not be a dependency of the provisioning component"
+    )
+    provisioning_source = _read(BAND / "provisioning" / "synapse_provisioning.c")
+    assert "esp_wifi.h" not in provisioning_source, (
+        "the provisioning component must not include the Wi-Fi stack"
+    )
+
+
+def test_the_component_graph_does_not_depend_on_the_kconfig_scope() -> None:
+    """The optional components must always be in the graph.
+
+    The project symbols are not always visible in the CMake scope of the
+    component that needs them (it depends on the ESP-IDF version and on
+    when the sdkconfig is regenerated), so a graph that decides the
+    requirements from the CMake scope can disagree with the compiler: the
+    build then includes the header of a component that is not linked. The
+    optional components are therefore always in the graph, and the flag
+    decides the behaviour.
+    """
+    for path, component in (
+        (MAIN_CMAKE, "fit"),
+        (MAIN_CMAKE, "provisioning"),
+        (MAIN_CMAKE, "ota"),
+        (BLE_CMAKE, "provisioning"),
+        (ACQUISITION_CMAKE, "fit"),
+    ):
+        source = _read(path)
+        assert component in source, f"{component} must always be in the graph of {path.name}"
 
 
 def test_the_kconfig_help_documents_the_gating() -> None:

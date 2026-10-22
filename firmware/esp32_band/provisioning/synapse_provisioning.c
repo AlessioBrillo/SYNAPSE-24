@@ -5,7 +5,9 @@
 
 #include <string.h>
 #include "esp_log.h"
-#include "esp_wifi.h"
+// The Wi-Fi stack is not part of this component: the provisioning code of
+// the MVP does not call it (the connect is deferred), so the band-core
+// build does not link it either.
 #include "esp_event.h"
 #include "nvs.h"
 #include "freertos/event_groups.h"
