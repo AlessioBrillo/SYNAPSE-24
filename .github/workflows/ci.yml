@@ -13,12 +13,13 @@ env:
   UV_VERSION: "0.12.19"
   # The numerical stack must not spawn a process pool: on a 2-core runner
   # the loky workers of scikit-learn can block forever, and the thread
-  # explosion turns a 12-minute suite into a 6-hour job.
+  # explosion turns a 12-minute suite into a 6-hour job. "fork" avoids the
+  # cost of re-importing the interpreter in every worker.
   OMP_NUM_THREADS: "1"
   MKL_NUM_THREADS: "1"
   OPENBLAS_NUM_THREADS: "1"
   NUMEXPR_NUM_THREADS: "1"
-  JOBLIB_START_METHOD: "threading"
+  JOBLIB_START_METHOD: "fork"
 
 jobs:
   lint-and-typecheck:

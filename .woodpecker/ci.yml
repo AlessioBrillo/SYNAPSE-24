@@ -14,7 +14,7 @@ environment:
   - MKL_NUM_THREADS=1
   - OPENBLAS_NUM_THREADS=1
   - NUMEXPR_NUM_THREADS=1
-  - JOBLIB_START_METHOD=threading
+  - JOBLIB_START_METHOD=fork
 
 steps:
   - name: python
