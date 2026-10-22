@@ -60,7 +60,14 @@ def write_dev_data_fit(path: Path, records: list[dict]) -> None:
 # ---- XDF test fixture writer ---------------------------------------------
 
 
-def write_eeg_xdf(path: Path, n_seconds: int = 300, fs: float = 250.0) -> None:
+def write_eeg_xdf(path: Path, n_seconds: int = 60, fs: float = 250.0) -> None:
+    """Write a synthetic EEG XDF.
+
+    Two 30-second epochs are enough to prove that the staging works: the
+    sleep staging is the most expensive test of the suite (a classifier over
+    every sample), and five minutes of EEG made the CI job unusable on a
+    2-core runner.
+    """
     n = int(n_seconds * fs)
     t = np.arange(n) / fs
     rng = np.random.default_rng(7)
