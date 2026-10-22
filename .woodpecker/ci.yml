@@ -38,7 +38,8 @@ steps:
       - uv run pytest tests/test_format_conformance.py -v --no-cov
       # The SDK suite runs in the coverage step as well: measuring the SDK
       # without collecting its tests would count the device layer as untested.
-      - uv run pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=term-missing tests sdk/python/tests
+      - uv run pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
+      - uv run pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
       - uv run pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py -v --no-cov -p no:cacheprovider
 
   - name: firmware-band

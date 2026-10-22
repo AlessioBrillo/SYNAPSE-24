@@ -124,10 +124,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev --frozen
 
-      # The SDK suite is collected here too: measuring the device layer
-      # without running its tests would count it as untested.
+      # The SDK suite runs in its own step: it is the device layer (a
+      # different package, its own coverage target), and a single invocation
+      # over both trees makes a failure much harder to read.
       - name: Run tests with coverage
-        run: uv run pytest --cov=src --cov=worker --cov=sdk/python --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests sdk/python/tests
+        run: uv run pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests
+
+      - name: Device layer tests (SDK)
+        run: uv run pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
 
       # Third-party conformance: fitdecode must read the FIT files, pyxdf the
       # XDF ones. A format that only this project can read is not a product
