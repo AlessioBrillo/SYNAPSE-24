@@ -127,17 +127,19 @@ jobs:
       # The SDK suite runs in its own step: it is the device layer (a
       # different package, its own coverage target), and a single invocation
       # over both trees makes a failure much harder to read.
+      # --no-sync: the environment is already synced by the step above, and a
+      # test step must not reach the network (a slow index is an hour lost).
       - name: Run tests with coverage
-        run: uv run pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests
+        run: uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=xml --cov-report=term-missing tests
 
       - name: Device layer tests (SDK)
-        run: uv run pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
+        run: uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
 
       # Third-party conformance: fitdecode must read the FIT files, pyxdf the
       # XDF ones. A format that only this project can read is not a product
       # format.
       - name: Format conformance (fitdecode, pyxdf)
-        run: uv run pytest tests/test_format_conformance.py -v --no-cov
+        run: uv run --no-sync pytest tests/test_format_conformance.py -v --no-cov
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

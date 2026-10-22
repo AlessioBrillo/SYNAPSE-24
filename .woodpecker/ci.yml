@@ -27,20 +27,18 @@ steps:
       - uv run python tools/check_interfaces.py
       - uv run python tools/check_baseline_claim.py
       - uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --dry-run --verbose
-      - uv run pytest tests/test_phase1_dry_run.py -v --no-cov
-      # The device layer (SDK) has its own suite: it was never part of the
-      # gate, which is how a second FIT writer and a diverging codec stayed
-      # in the tree.
-      - uv run pytest sdk/python/tests -v --no-cov
+      - uv run --no-sync pytest tests/test_phase1_dry_run.py -v --no-cov
       # Third-party conformance: fitdecode must read the FIT files and pyxdf
       # the XDF ones. A format that only this project can read is not a
       # product format.
-      - uv run pytest tests/test_format_conformance.py -v --no-cov
-      # The SDK suite runs in the coverage step as well: measuring the SDK
-      # without collecting its tests would count the device layer as untested.
-      - uv run pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
-      - uv run pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
-      - uv run pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py -v --no-cov -p no:cacheprovider
+      - uv run --no-sync pytest tests/test_format_conformance.py -v --no-cov
+      # The device layer has its own suite and its own coverage target: the
+      # SDK is a separate package (Apache-2.0) with its own tests.
+      # --no-sync: the environment is already synced, and a test step must not
+      # reach the network.
+      - uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
+      - uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
+      - uv run --no-sync pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py -v --no-cov -p no:cacheprovider
 
   - name: firmware-band
     image: espressif/idf:v5.5.5
