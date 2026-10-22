@@ -11,6 +11,14 @@ env:
   # Pinned: the test steps use `uv run --no-sync`, which the 0.4 line does
   # not have (and a test step must not reach the network).
   UV_VERSION: "0.12.19"
+  # The numerical stack must not spawn a process pool: on a 2-core runner
+  # the loky workers of scikit-learn can block forever, and the thread
+  # explosion turns a 12-minute suite into a 6-hour job.
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  JOBLIB_START_METHOD: "threading"
 
 jobs:
   lint-and-typecheck:
@@ -111,6 +119,7 @@ jobs:
     name: Unit & Integration Tests
     runs-on: ubuntu-latest
     needs: [lint-and-typecheck, phase1-dry-run]
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
