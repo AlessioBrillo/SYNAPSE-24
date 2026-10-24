@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import numpy as np
-import pytest
-
 from synapse_device.fit import read_fit
 from synapse_device.xdf_writer import write_xdf
+
+import numpy as np
+import pytest
 
 
 def _write_ecg_xdf(path, lsl_t0: float, duration_s: float = 60.0, fs: float = 100.0):

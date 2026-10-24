@@ -143,7 +143,7 @@ def _validate_fit_light(path: Path) -> bool:
     return fit_crc16(data[:-2]) == file_crc
 
 
-def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:
+def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: PLR0915 - complex FIT file_id walker
     """Best-effort read of the FIT file_id message (global mesg 0).
 
     Returns ``(serial_number, unix_time_created)`` or ``(None, None)`` when
@@ -186,9 +186,8 @@ def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:
             definitions[local_type] = (global_num, fields)
             if global_num == 0:  # file_id
                 file_id_local_type = local_type
-        else:
-            # Data message: only interesting if it matches the file_id def.
-            if file_id_local_type is not None and local_type == file_id_local_type:
+        # Data message: only interesting if it matches the file_id def.
+        elif file_id_local_type is not None and local_type == file_id_local_type:
                 global_num, fields = definitions[file_id_local_type]
                 if global_num != 0:
                     continue
