@@ -156,13 +156,13 @@ def select_primary_stream(streams: list[StreamView]) -> StreamView:
     )
 
 
-def export_session_fit(
+def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anchor, HRV, write)
     xdf_path: Path | str,
     out_path: Path | str,
     serial: str = "SYN-000000",
     window_s: float = 30.0,
     utc0_s: float | None = None,
-) -> ExportSummary:  # noqa: PLR0915 - complex export pipeline (decode, anchor, HRV, write)
+) -> ExportSummary:
     """Export an XDF session to a FIT file with Synapse developer data.
 
     XDF timestamps live in the LSL clock domain (``pylsl.local_clock``),
