@@ -212,6 +212,8 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     # time.time() and warn that dates are approximate.
     import time as _time
 
+    warnings: list[str] = []
+
     if utc0_s is None:
         utc0_s = _time.time()
         warnings.append(
@@ -223,7 +225,6 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
         """Map one LSL-domain timestamp to Unix epoch seconds."""
         return utc0_s + (lsl_ts - t0)
 
-    warnings: list[str] = []
     try:
         r_peaks = detect_r_peaks_neurokit(signal, int(round(fs)))
     except Exception as exc:  # pragma: no cover - depends on the signal
