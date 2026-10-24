@@ -20,6 +20,11 @@ services:
       - ./config:/app/config:ro
       - ./data:/app/data:ro
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - synapse-network
 
@@ -36,22 +41,6 @@ services:
       - ./worker:/app/worker:ro
       - ./config:/app/config:ro
       - ./data:/app/data:ro
-    networks:
-      - synapse-network
-
-  # Frontend Dev Server (Vite) — owned by the Averyn repo, kept here for local dev.
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - VITE_API_URL=http://localhost:8000
-    command: npm run dev -- --host 0.0.0.0
     networks:
       - synapse-network
 

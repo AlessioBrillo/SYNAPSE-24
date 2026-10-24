@@ -161,14 +161,24 @@ def export_session_fit(
     out_path: Path | str,
     serial: str = "SYN-000000",
     window_s: float = 30.0,
+    utc0_s: float | None = None,
 ) -> ExportSummary:
     """Export an XDF session to a FIT file with Synapse developer data.
+
+    XDF timestamps live in the LSL clock domain (``pylsl.local_clock``),
+    which is *not* Unix epoch. To write correct FIT wall-clock times we need
+    an anchor: the Unix epoch that corresponds to LSL time ``t0`` (the first
+    sample). Without it we fall back to ``time.time()`` at export time and
+    log a warning — the dates will be approximate, never 1970.
 
     Args:
         xdf_path: Input XDF file.
         out_path: Output FIT file.
         serial: Device serial written in the FIT file id.
         window_s: Analysis window length, in seconds.
+        utc0_s: Unix epoch seconds corresponding to LSL time ``t0`` (the
+            first sample timestamp). If omitted, ``time.time()`` is used as
+            an approximate anchor.
 
     Returns:
         An :class:`ExportSummary` describing what was written.
@@ -196,6 +206,23 @@ def export_session_fit(
     t1 = float(timestamps[-1])
     duration_s = t1 - t0
 
+    # Anchor LSL timestamps to Unix epoch. LSL local_clock() is NOT Unix
+    # epoch, so datetime.fromtimestamp(lsl_ts) would yield dates around 1970.
+    # utc0_s is the Unix epoch at LSL time t0; without it we fall back to
+    # time.time() and warn that dates are approximate.
+    import time as _time
+
+    if utc0_s is None:
+        utc0_s = _time.time()
+        warnings.append(
+            f"no UTC anchor for LSL t0={t0:.3f}; using export time {utc0_s:.3f} "
+            f"as approximate wall clock (dates may be off by session uptime)"
+        )
+
+    def _utc(lsl_ts: float) -> float:
+        """Map one LSL-domain timestamp to Unix epoch seconds."""
+        return utc0_s + (lsl_ts - t0)
+
     warnings: list[str] = []
     try:
         r_peaks = detect_r_peaks_neurokit(signal, int(round(fs)))
@@ -212,7 +239,7 @@ def export_session_fit(
     writer.write_file_header()
     writer.write_file_id(
         serial_number=_serial_to_int(serial),
-        time_created=fit_timestamp(datetime.fromtimestamp(t0, tz=UTC)),
+        time_created=fit_timestamp(datetime.fromtimestamp(_utc(t0), tz=UTC)),
     )
     writer.write_developer_data_id()
     writer.write_field_descriptions()
@@ -250,7 +277,7 @@ def export_session_fit(
 
         writer.write_record(
             FitRecord(
-                timestamp=fit_timestamp(datetime.fromtimestamp(win_t0, tz=UTC)),
+                timestamp=fit_timestamp(datetime.fromtimestamp(_utc(win_t0), tz=UTC)),
                 heart_rate=heart_rate if 0 < heart_rate <= 255 else 255,
                 dev=dev,
             )
@@ -288,13 +315,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("out", type=Path, help="Output FIT file")
     parser.add_argument("--device-id", default="SYN-000000", help="Device serial (SYN-XXXXXX)")
     parser.add_argument("--window-s", type=float, default=30.0, help="HRV window in seconds")
+    parser.add_argument(
+        "--utc0-s",
+        type=float,
+        default=None,
+        help="Unix epoch seconds at LSL time t0 (first sample). Without it, export time is used as approximate anchor.",
+    )
     args = parser.parse_args(argv)
 
     if not args.xdf.is_file():
         parser.error(f"XDF not found: {args.xdf}")
 
     try:
-        summary = export_session_fit(args.xdf, args.out, args.device_id, args.window_s)
+        summary = export_session_fit(args.xdf, args.out, args.device_id, args.window_s, args.utc0_s)
     except ExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

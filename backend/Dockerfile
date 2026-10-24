@@ -9,8 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the synapse24 package + its runtime stack from the root manifest.
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
+# src/, sdk/python/ and README.md are required for `pip install -e .` to work:
+# - src/synapse24 is the package itself,
+# - sdk/python provides the path dependency `synapse-device`,
+# - README.md is the declared `readme` of the hatchling build.
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY sdk/python ./sdk/python
+RUN pip install --no-cache-dir -e ./sdk/python && pip install --no-cache-dir -e .
 
 # Application code.
 COPY backend ./backend

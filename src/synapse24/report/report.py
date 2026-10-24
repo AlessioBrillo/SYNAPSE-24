@@ -19,13 +19,15 @@ from synapse24.sessions import SessionRecord, StreamInfo
 REPORT_VERSION = "session-report-v1"
 
 # Stream type -> physical unit (best effort; raw files are authoritative).
+# The firmware decoder divides raw counts by UNIT_DIVISOR: ACC comes out in
+# g, GYRO in rad/s, PPG in AU. These units describe the actual stream data.
 _TYPE_TO_UNIT: dict[str, str] = {
     "EEG": "µV",
     "ECG": "mV",
     "PPG": "AU",
     "EDA": "µS",
-    "ACC": "m/s²",
-    "GYRO": "°/s",
+    "ACC": "g",
+    "GYRO": "rad/s",
     "MAG": "µT",
     "TEMP": "°C",
     "MARKERS": "label",

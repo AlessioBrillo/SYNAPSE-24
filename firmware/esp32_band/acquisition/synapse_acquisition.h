@@ -76,7 +76,8 @@ typedef struct {
     acq_session_config_t config;
     char filepath[64];
     uint32_t record_count;
-    uint32_t start_time_utc;
+    uint32_t start_time_utc;       // Wall-clock UTC at session start (if available)
+    int64_t start_time_monotonic_us; // esp_timer value at session start (monotonic)
     uint32_t elapsed_sec;
     acq_tier_t current_tier;
 } acq_session_t;

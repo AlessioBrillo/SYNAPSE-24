@@ -138,9 +138,30 @@ esp_err_t synapse_acquisition_deinit(void) {
 }
 
 void synapse_acquisition_tick(void) {
-    // This is called from main loop (every 10ms)
-    // The actual FSM runs in its own task at 1Hz
-    // This function can be used for time-critical updates if needed
+    // Called from main loop every 10ms. Feeds the latest signal-quality
+    // readings into the motion gate and immobility detectors so the FSM
+    // (running at 1Hz in its own task) can promote/demote tiers.
+    //
+    // Signal quality is updated at ~1Hz by imu/ppg processors, so the same
+    // values are seen across several ticks — which is exactly what the
+    // consecutive-window gate needs.
+    if (!g_acq.running) {
+        return;
+    }
+
+    ppg_quality_t ppg = {0};
+    if (synapse_signal_quality_get_ppg(&ppg) == ESP_OK && ppg.valid) {
+        synapse_acquisition_update_motion_gate(ppg.sqi, ppg.motion_artifact_prob);
+    }
+
+    imu_quality_t imu = {0};
+    if (synapse_signal_quality_get_imu(&imu) == ESP_OK) {
+        // imu.is_stationary is computed inside imu_processor from dyn_acc_g
+        // (gravity removed), so it is safe to use directly as the immobility
+        // signal. motion_intensity still includes ~1 g at rest and is only
+        // logged here for diagnostics.
+        synapse_acquisition_update_immobility(imu.motion_intensity, imu.is_stationary);
+    }
 }
 
 // ============================================================================
@@ -176,7 +197,7 @@ esp_err_t synapse_acquisition_get_session_status(bool *active, acq_tier_t *tier,
     if (active) *active = g_acq.session_active;
     if (tier) *tier = g_acq.current_tier;
     if (elapsed_sec && g_acq.session_active) {
-        *elapsed_sec = (esp_timer_get_time() - g_acq.session.start_time_utc * 1000000LL) / 1000000;
+        *elapsed_sec = (uint32_t)((esp_timer_get_time() - g_acq.session.start_time_monotonic_us) / 1000000LL);
     }
     return ESP_OK;
 }
@@ -218,13 +239,19 @@ void synapse_acquisition_update_motion_gate(float sqi, float map) {
 }
 
 void synapse_acquisition_update_immobility(float motion_intensity, bool is_stationary) {
-    if (is_stationary && motion_intensity < g_acq.accel_threshold_g) {
+    // is_stationary is computed inside imu_processor from dyn_acc_g (gravity
+    // removed) and tilt variance, so it already excludes the ~1 g rest offset.
+    // Use it as the primary immobility signal. motion_intensity still includes
+    // gravity at rest (~1 g) and cannot be compared to the 0.02 g threshold
+    // directly; it is retained for diagnostics / future thresholding.
+    (void)motion_intensity;
+    if (is_stationary) {
         g_acq.immobility_counter++;
         g_acq.last_motion_time_us = esp_timer_get_time();
     } else {
         g_acq.immobility_counter = 0;
     }
-    
+
     // Signal immobility event if threshold reached
     if (g_acq.immobility_counter >= g_acq.required_immobility_windows) {
         if (g_acq.system_events) {
@@ -288,7 +315,7 @@ static void fsm_task_fn(void *arg) {
 
         // Update session elapsed time
         if (g_acq.session_active) {
-            g_acq.session.elapsed_sec = (esp_timer_get_time() - g_acq.session.start_time_utc * 1000000LL) / 1000000;
+            g_acq.session.elapsed_sec = (uint32_t)((esp_timer_get_time() - g_acq.session.start_time_monotonic_us) / 1000000LL);
             
             // Check session duration
             if (g_acq.session.config.duration_sec > 0 &&
@@ -472,6 +499,7 @@ static esp_err_t start_session_internal(const acq_session_config_t *config) {
     g_acq.session.current_tier = ACQ_TIER_2;
     g_acq.session.record_count = 0;
     g_acq.session.start_time_utc = get_utc_time();
+    g_acq.session.start_time_monotonic_us = esp_timer_get_time();
     g_acq.session.elapsed_sec = 0;
     
     // Generate FIT file path
@@ -514,9 +542,12 @@ static esp_err_t start_session_internal(const acq_session_config_t *config) {
 static esp_err_t stop_session_internal(void) {
     if (!g_acq.session_active) return ESP_OK;
     
-    // Stop FIT session
+    // Stop FIT session. A FIT failure must not abort the pod: log it and
+    // continue so the session can still stop cleanly.
 #if defined(CONFIG_SYNAPSE_FEATURE_FIT_STORAGE)
-    ESP_ERROR_CHECK(synapse_fit_stop_session(NULL));
+    if (synapse_fit_stop_session(NULL) != ESP_OK) {
+        ESP_LOGW(TAG, "FIT stop failed: session data may be incomplete");
+    }
 #endif
     
     // Call session callback
