@@ -270,6 +270,11 @@ class Phase1Validator:
         # this model rather than pushed raw.
         self.clock_model = PodClockModel(pod_id="forearm_hub")
         self._sync_sequence = 0
+        # Throttle downstream feeds: immobility and PPG quality work on
+        # 10-30 s windows, so recomputing them on every BLE notification
+        # (tens per second) is wasted work and fills the detector window
+        # faster than real time. One feed per second is ample.
+        self._last_downstream_feed: float = 0.0
         # Duration of the run actually being executed (set by run()); the
         # gates judge this, never the config's nominal window.
         self._duration_s = float(self.config["bringup"]["validation"]["duration_s"])
@@ -467,7 +472,10 @@ class Phase1Validator:
         if self.raw_ingestor is not None:
             pushed = self.raw_ingestor.handle_notification(uuid_str, bytes(data))
             if pushed:
-                self._feed_downstream_from_raw(timestamp)
+                now = time.monotonic()
+                if now - self._last_downstream_feed >= 1.0:
+                    self._feed_downstream_from_raw(timestamp)
+                    self._last_downstream_feed = now
                 return
 
         if not self.legacy_format:
@@ -537,7 +545,10 @@ class Phase1Validator:
             elapsed = now - self.start_time
 
             if elapsed - last_controller_tick >= 0.1:
-                self.controller.tick(elapsed)
+                # Night window needs wall-clock (Unix epoch) to evaluate
+                # the sleep window; session seconds (elapsed) would land in
+                # 1970 inside datetime.fromtimestamp.
+                self.controller.tick(time.time())
                 last_controller_tick = elapsed
 
             if elapsed - last_sync_update >= 0.5:
@@ -1182,6 +1193,11 @@ class Phase1Validator:
                         host_recv_us=lsl_recv_us,
                     )
                 )
+                # Anchor the per-stream DeviceClocks to the pod's full 64-bit
+                # time so frame timestamps stay in the right epoch after a
+                # 2^32 µs (~71.6 min) counter wrap.
+                if self.raw_ingestor is not None:
+                    self.raw_ingestor.decoder.seed_from_sync(int(pod_send_us))
         except Exception:
             self.logger.debug("Sync exchange failed (non-fatal)", exc_info=True)
 

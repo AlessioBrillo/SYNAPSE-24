@@ -27,13 +27,16 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from synapse_device.fit import FIT_CRC_SIZE, fit_crc16
+from synapse_device.fit import FIT_CRC_SIZE, FIT_EPOCH, FIT_HEADER_DEFINITION, fit_crc16, read_fit
 
 # project imports
 from synapse24.utils import validate_xdf
 
 FIT_HEADER_MAGIC = b".FIT"
 FIT_HEADER_SIZE = 14
+
+# Seconds from the Unix epoch (1970-01-01) to the FIT epoch (1989-12-31).
+_FIT_EPOCH_OFFSET_S = int((FIT_EPOCH - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds())
 
 
 @dataclass(frozen=True)
@@ -140,15 +143,90 @@ def _validate_fit_light(path: Path) -> bool:
     return fit_crc16(data[:-2]) == file_crc
 
 
-def _extract_device_serial_from_fit(path: Path) -> str:
-    """Best-effort device serial from FIT file_id / developer data; falls back to filename stem."""
+def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: PLR0915 - complex FIT file_id walker
+    """Best-effort read of the FIT file_id message (global mesg 0).
+
+    Returns ``(serial_number, unix_time_created)`` or ``(None, None)`` when
+    the file is not a FIT file or the file_id message cannot be found. The
+    reader walks definitions and data messages just enough to locate the
+    file_id definition and its first data record; it does not depend on the
+    SDK's reader, which skips non-record global messages.
+    """
     try:
         data = path.read_bytes()
     except OSError:
-        return path.stem
-    # The file_id message (global mesg num 0) carries a serial number field.
-    # A full FIT parse is out of scope here; use the filename stem as the
-    # stable device identifier when no serial is embedded.
+        return None, None
+    if len(data) < FIT_HEADER_SIZE + FIT_CRC_SIZE or data[8:12] != FIT_HEADER_MAGIC:
+        return None, None
+
+    pos = FIT_HEADER_SIZE
+    end = len(data) - FIT_CRC_SIZE
+    # local_type -> (global_num, [(field_num, size, base_type), ...])
+    definitions: dict[int, tuple[int, list[tuple[int, int, int]]]] = {}
+    file_id_local_type: int | None = None
+
+    while pos < end:
+        header = data[pos]
+        pos += 1
+        is_definition = bool(header & FIT_HEADER_DEFINITION)
+        local_type = header & 0x0F
+
+        if is_definition:
+            if pos + 5 > end:
+                break
+            _reserved, _arch, global_num, n_fields = struct.unpack_from("<BBHB", data, pos)
+            pos += 5
+            fields: list[tuple[int, int, int]] = []
+            for _ in range(n_fields):
+                if pos + 3 > end:
+                    break
+                field_num, size, base_type = struct.unpack_from("<BBB", data, pos)
+                pos += 3
+                fields.append((field_num, size, base_type))
+            definitions[local_type] = (global_num, fields)
+            if global_num == 0:  # file_id
+                file_id_local_type = local_type
+            continue  # una definizione non è anche un dato: passa al messaggio successivo
+
+        # Data message: only interesting if it matches the file_id def.
+        if file_id_local_type is not None and local_type == file_id_local_type:
+            global_num, fields = definitions[file_id_local_type]
+            if global_num != 0:
+                continue
+            serial: int | None = None
+            time_created_fit: int | None = None
+            for field_num, size, base_type in fields:
+                if pos + size > end:
+                    break
+                if base_type in (0x86, 0x8C):  # UINT32 / UINT32Z
+                    value = struct.unpack_from("<I", data, pos)[0]
+                else:
+                    pos += size
+                    continue
+                if field_num == 0:  # FIT_FIELD_FILE_ID_SERIAL
+                    serial = value
+                elif field_num == 1:  # FIT_FIELD_FILE_ID_TIME_CREATED
+                    time_created_fit = value
+                pos += size
+            if serial is not None:
+                unix_ts: float | None = None
+                if time_created_fit is not None:
+                    unix_ts = float(time_created_fit + _FIT_EPOCH_OFFSET_S)
+                return serial, unix_ts
+            break  # file_id data found but no serial
+    return None, None
+
+
+def _extract_device_serial_from_fit(path: Path) -> str:
+    """Device serial from FIT file_id message; falls back to filename stem."""
+    serial, _ = _parse_fit_file_id(path)
+    if serial is not None:
+        return f"SYN-{serial:06d}"
+    return path.stem.upper()
+
+
+def _extract_device_serial_from_xdf(path: Path) -> str:
+    """XDF has no embedded device serial; use the filename stem."""
     return path.stem.upper()
 
 
@@ -202,7 +280,7 @@ def index_xdf(path: Path) -> SessionRecord:
     duration_s = max((s.get("duration_s") or 0.0) for s in streams_raw) if streams_raw else 0.0
     return SessionRecord(
         session_id=_stable_session_id(path),
-        device_serial=_extract_device_serial_from_fit(path),
+        device_serial=_extract_device_serial_from_xdf(path),
         path=str(path.resolve()),
         format="xdf",
         size_bytes=path.stat().st_size,
@@ -218,18 +296,49 @@ def index_xdf(path: Path) -> SessionRecord:
 
 
 def index_fit(path: Path) -> SessionRecord:
-    """Index a single FIT file (light structural check only)."""
+    """Index a single FIT file: file_id serial/time_created plus record count."""
     valid = _validate_fit_light(path)
-    try:
-        data = path.read_bytes()
-    except OSError:
-        data = b""
-    # Timestamp of file_id message is at a fixed-ish offset; not parsed here.
+    serial, time_created_unix = _parse_fit_file_id(path)
+    device_serial = f"SYN-{serial:06d}" if serial is not None else path.stem.upper()
+
     started_at = ended_at = None
-    duration_s = 0.0
+    duration_s: float | None = None
+    streams: list[StreamInfo] = []
+    n_samples_total = 0
+
+    try:
+        fit_file = read_fit(path)
+        records = fit_file.records
+        n_samples_total = len(records)
+        if records:
+            ts_list = [int(r.get("timestamp", 0)) for r in records if r.get("timestamp")]
+            if ts_list:
+                first_fit = min(ts_list)
+                last_fit = max(ts_list)
+                first_unix = float(first_fit + _FIT_EPOCH_OFFSET_S)
+                last_unix = float(last_fit + _FIT_EPOCH_OFFSET_S)
+                started_at = datetime.fromtimestamp(first_unix, tz=UTC).isoformat()
+                ended_at = datetime.fromtimestamp(last_unix, tz=UTC).isoformat()
+                duration_s = round(last_unix - first_unix, 6)
+        streams = [
+            StreamInfo(
+                name="record",
+                type="FIT",
+                sampling_rate_hz=0.0,
+                n_samples=n_samples_total,
+            )
+        ]
+    except Exception:
+        # read_fit is strict: a structurally valid but semantically empty FIT
+        # still yields zero records rather than an error here.
+        pass
+
+    if time_created_unix is not None and started_at is None:
+        started_at = datetime.fromtimestamp(time_created_unix, tz=UTC).isoformat()
+
     return SessionRecord(
         session_id=_stable_session_id(path),
-        device_serial=_extract_device_serial_from_fit(path),
+        device_serial=device_serial,
         path=str(path.resolve()),
         format="fit",
         size_bytes=path.stat().st_size,
@@ -237,8 +346,8 @@ def index_fit(path: Path) -> SessionRecord:
         started_at=started_at,
         ended_at=ended_at,
         duration_s=duration_s,
-        streams=[],
-        n_samples_total=0,
+        streams=streams,
+        n_samples_total=n_samples_total,
         xdf_valid=None,
         fit_valid=bool(valid),
     )

@@ -24,11 +24,15 @@ class ImmobilityDetector:
         self,
         accel_sampling_rate: int = 100,
         window_duration_s: float = 30.0,
-        magnitude_threshold: float = 0.02,  # g-force
+        magnitude_threshold: float = 0.05,  # g-force, dynamic (gravity removed)
         min_immobility_min: float = 5.0,  # minutes of continuous immobility
     ) -> None:
         self.accel_sampling_rate = accel_sampling_rate
         self.window_duration_s = window_duration_s
+        # magnitude_threshold is now a threshold on the *dynamic* acceleration
+        # (std of the magnitude over the window), not on the raw magnitude.
+        # The raw magnitude includes ~1 g of gravity at rest, so comparing it
+        # directly to a small threshold can never trigger immobility.
         self.magnitude_threshold = magnitude_threshold
         self.min_immobility_min = min_immobility_min
 
@@ -42,6 +46,14 @@ class ImmobilityDetector:
         self._total_samples = 0
         # Track samples since last window completion
         self._samples_since_window = 0
+
+    def _dyn_acc_g(self) -> float:
+        """Dynamic acceleration in g: std of magnitude over the window.
+
+        Removes the static gravity component (~1 g at rest) so a still user
+        yields a small value even though the raw magnitude is ~1 g.
+        """
+        return float(np.std(np.asarray(self._window_buffer, dtype=np.float64)))
 
     def update(self, accel_magnitude: float, timestamp: float | None = None) -> bool:
         """Update detector with new accelerometer magnitude sample.
@@ -61,9 +73,10 @@ class ImmobilityDetector:
         if len(self._window_buffer) < self._window_samples:
             return False
 
-        # Check if current window is immobile
-        window_max = max(self._window_buffer)
-        is_immobile = window_max < self.magnitude_threshold
+        # Check if current window is immobile: dynamic acceleration below
+        # threshold. Uses std (gravity removed) instead of max (gravity included).
+        dyn_acc = self._dyn_acc_g()
+        is_immobile = dyn_acc < self.magnitude_threshold
 
         if is_immobile:
             # Only count a new window completion every _window_samples samples
@@ -91,7 +104,7 @@ class ImmobilityDetector:
         """Check if current window is immobile."""
         if len(self._window_buffer) < self._window_samples:
             return False
-        return max(self._window_buffer) < self.magnitude_threshold
+        return self._dyn_acc_g() < self.magnitude_threshold
 
     @property
     def progress_ratio(self) -> float:
@@ -107,6 +120,7 @@ class ImmobilityDetector:
             "current_window_immobile": self.current_window_immobile,
             "progress_ratio": self.progress_ratio,
             "threshold_g": self.magnitude_threshold,
+            "threshold_metric": "dyn_acc_g_std",
             "window_duration_s": self.window_duration_s,
             "min_immobility_min": self.min_immobility_min,
         }

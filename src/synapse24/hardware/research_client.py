@@ -136,6 +136,18 @@ class DeviceClock:
         self._last_us = candidate
         return candidate
 
+    def set_wrap_base(self, wraps: int, ref_low: int) -> None:
+        """Anchor the 64-bit reconstruction to a known full 64-bit pod time.
+
+        Called after a clock-sync exchange reveals the pod's true
+        ``esp_timer_get_time()`` value (64 bits, since boot). Without this,
+        ``wraps`` starts at 0 and every pod up longer than ~71 minutes gets
+        its timestamps shifted by a multiple of 2^32 µs (~71.6 min).
+        """
+        self.wraps = wraps
+        self._last_low = ref_low
+        self._last_us = (wraps << 32) | ref_low
+
 
 @dataclass
 class ResearchStreamDecoder:
@@ -367,6 +379,19 @@ class ResearchStreamDecoder:
         self.frames_rejected = 0
         self.bytes_seen = 0
         self.last_first_us = 0
+
+    def seed_from_sync(self, pod_full_us: int) -> None:
+        """Anchor all per-stream DeviceClocks to a sync exchange's full pod time.
+
+        ``pod_full_us`` is the pod's 64-bit ``esp_timer_get_time()`` from the
+        SYNC exchange. Its high 32 bits are the wrap count; the low 32 bits
+        are the reference low stamp. Every stream shares the same wrap base
+        because they all read the same ``esp_timer_get_time()`` counter.
+        """
+        wraps = pod_full_us >> 32
+        ref_low = pod_full_us & 0xFFFFFFFF
+        for clock in self.clocks.values():
+            clock.set_wrap_base(wraps, ref_low)
 
     def estimated_bytes(self) -> int:
         """Actual payload volume seen on the wire, for the §55-62 budget."""

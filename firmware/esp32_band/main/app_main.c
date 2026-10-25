@@ -172,6 +172,14 @@ void app_main(void)
         return;
     }
 
+    // 11b. Start acquisition FSM task (1Hz tier transitions T0/T1/T2).
+    // Without this the FSM stays inert and no tier change can ever occur.
+    ret = synapse_acquisition_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Acquisition start failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
     // 12. Initialize power management
     synapse_power_init();
 

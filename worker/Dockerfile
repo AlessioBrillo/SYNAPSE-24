@@ -10,13 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the synapse24 package + its runtime stack from the root manifest.
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY sdk/python ./sdk/python
+RUN pip install --no-cache-dir -e ./sdk/python && pip install --no-cache-dir -e .
 
 # Worker code + contract.
 COPY worker ./worker
 COPY config ./config
 
 # Entrypoint: orchestrator (Averyn) overrides --job/--file at runtime.
-# Defaults are a no-op sanity job; a missing file surfaces a clean ok=False.
-CMD ["python", "worker/hrv_worker.py", "--job", "hrv_trends", "--file", "/app/data/sessions/sample.fit"]
+# Default is a no-op import sanity check (exits 0 when the worker loads).
+CMD ["python", "-c", "import worker.hrv_worker; print('synapse-worker ok')"]
