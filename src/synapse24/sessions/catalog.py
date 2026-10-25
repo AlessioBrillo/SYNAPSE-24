@@ -186,32 +186,34 @@ def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: 
             definitions[local_type] = (global_num, fields)
             if global_num == 0:  # file_id
                 file_id_local_type = local_type
+            continue  # una definizione non è anche un dato: passa al messaggio successivo
+
         # Data message: only interesting if it matches the file_id def.
-        elif file_id_local_type is not None and local_type == file_id_local_type:
-                global_num, fields = definitions[file_id_local_type]
-                if global_num != 0:
-                    continue
-                serial: int | None = None
-                time_created_fit: int | None = None
-                for field_num, size, base_type in fields:
-                    if pos + size > end:
-                        break
-                    if base_type in (0x86, 0x8C):  # UINT32 / UINT32Z
-                        value = struct.unpack_from("<I", data, pos)[0]
-                    else:
-                        pos += size
-                        continue
-                    if field_num == 0:  # FIT_FIELD_FILE_ID_SERIAL
-                        serial = value
-                    elif field_num == 1:  # FIT_FIELD_FILE_ID_TIME_CREATED
-                        time_created_fit = value
+        if file_id_local_type is not None and local_type == file_id_local_type:
+            global_num, fields = definitions[file_id_local_type]
+            if global_num != 0:
+                continue
+            serial: int | None = None
+            time_created_fit: int | None = None
+            for field_num, size, base_type in fields:
+                if pos + size > end:
+                    break
+                if base_type in (0x86, 0x8C):  # UINT32 / UINT32Z
+                    value = struct.unpack_from("<I", data, pos)[0]
+                else:
                     pos += size
-                if serial is not None:
-                    unix_ts: float | None = None
-                    if time_created_fit is not None:
-                        unix_ts = float(time_created_fit + _FIT_EPOCH_OFFSET_S)
-                    return serial, unix_ts
-                break  # file_id data found but no serial
+                    continue
+                if field_num == 0:  # FIT_FIELD_FILE_ID_SERIAL
+                    serial = value
+                elif field_num == 1:  # FIT_FIELD_FILE_ID_TIME_CREATED
+                    time_created_fit = value
+                pos += size
+            if serial is not None:
+                unix_ts: float | None = None
+                if time_created_fit is not None:
+                    unix_ts = float(time_created_fit + _FIT_EPOCH_OFFSET_S)
+                return serial, unix_ts
+            break  # file_id data found but no serial
     return None, None
 
 
