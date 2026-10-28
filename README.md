@@ -1,6 +1,6 @@
 # SYNAPSE-24: 24/7 Multimodal Bio-Sensing Wearable Platform
 
-> **Phase 0: Software & Public Data Foundation — COMPLETE**
+> **Phase 0: Software & Public Data Foundation — code complete; baseline claims partial**
 >
 > Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
 
@@ -343,17 +343,23 @@ export SYNAPSE_HEAD_BLE="aa:bb:cc:dd:ee:ff"
 export SYNAPSE_HEAD_SERIAL="/dev/ttyUSB0"
 ```
 
-## Phase 0 Exit Criteria ✅
+## Phase 0 Exit Criteria (targets, not re-verified here)
 
-- [x] WESAD 3-class stress classification ≥80% accuracy (GroupKFold CV)
-- [x] MIT-BIH R-peak Sensitivity ≥99.6%, PPV ≥99.6%
-- [x] RMSSD MAE <5 ms
-- [x] Sleep-EDF sleep staging Cohen's κ per-subject floor
-- [x] Multi-pod LSL/XDF zero-drop round-trip verification
-- [x] Tier 0 sync ≤10ms residual drift, Tier 1 sync ≤1ms
-- [x] Edge AI triage model INT8 quantization with measured accuracy drop
-- [x] Power budget physics validated for 24h T0 + 10h T1
-- [x] Full test suite: lint, typecheck, 80%+ coverage, all tests pass
+These were written as acceptance targets. They are **not** a status report:
+the committed baseline artifact (`docs/baselines/phase0_results.json`) is
+still `partial`, so no row below counts as achieved on this tree. The
+software layer stays re-provable at any time via the CI gate
+(`bash scripts/run_gate_locally.sh`).
+
+- [ ] WESAD 3-class stress classification ≥80% accuracy (GroupKFold CV)
+- [ ] MIT-BIH R-peak Sensitivity ≥99.6%, PPV ≥99.6%
+- [ ] RMSSD MAE <5 ms
+- [ ] Sleep-EDF sleep staging Cohen's κ per-subject floor
+- [ ] Multi-pod LSL/XDF zero-drop round-trip verification
+- [ ] Tier 0 sync ≤10ms residual drift, Tier 1 sync ≤1ms
+- [ ] Edge AI triage model INT8 quantization with measured accuracy drop
+- [ ] Power budget physics validated for 24h T0 + 10h T1
+- [ ] Full test suite: lint, typecheck, 80%+ coverage, all tests pass
 
 > Note: the WESAD/Sleep-EDF baseline run is not reproducible on this host
 > (dataset integrity fails — see docs/hardware/READINESS_GATE.md "Known
@@ -381,7 +387,7 @@ system target) are `docs/hardware/POWER_BUDGET.md`.
 
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
-| **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | ✅ **COMPLETE** |
+| **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | code complete; baseline claims `partial` |
 | Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software closed pre-purchase; kit orderable** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget €140; G0 closed, every gate CI-provable without hardware — see `docs/hardware/READINESS_GATE.md` and `docs/hardware/POWER_BUDGET.md`) |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |

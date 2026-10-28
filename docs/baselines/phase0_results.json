@@ -1,9 +1,10 @@
 {
+  "claim_level": "partial",
   "seed": null,
   "timestamp": null,
   "host": "CI / local workstation",
   "verified_on_host": false,
-  "note": "Placeholder. The Phase 0 baseline run could not be completed on this host: WESAD and Sleep-EDF fail dataset integrity (see docs/hardware/READINESS_GATE.md Known failures), so the headline claim (WESAD >=80%, MIT-BIH Se/PPV >=99.6%, RMSSD MAE <5 ms, Sleep-EDF kappa floor) is NOT re-verified here. Populate this artifact with: scripts/validate_baseline.py --dataset both --output-dir docs/baselines",
+  "note": "partial: some Phase 0 items were re-checked on this tree (datasets fetched, MIT-BIH integrity ok), but the headline metrics (WESAD >=80%, MIT-BIH Se/PPV >=99.6%, RMSSD MAE <5 ms, Sleep-EDF kappa floor) were NOT re-measured here: WESAD and Sleep-EDF fail dataset integrity (see docs/hardware/READINESS_GATE.md Known failures). Nothing in the docs may present these numbers as achieved until a host run populates the fields and this file levels up to verified. Populate with: scripts/validate_baseline.py --dataset both --output-dir docs/baselines. The claim_level semantics are owned by tools/check_baseline_claim.py (schema 1.1).",
   "datasets": {
     "wesad": {
       "accuracy": null,
@@ -28,5 +29,5 @@
     }
   },
   "xdf_validation": null,
-  "schema_version": "1.0"
+  "schema_version": "1.1"
 }

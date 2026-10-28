@@ -394,12 +394,15 @@ def test_decoder_reset_survives_a_reconnect() -> None:
     for frame in frames:
         decoder.feed(frame)
 
-    # The pod drops off and comes back with the same frames: without a reset
-    # the decoder compares sequence 0 against the previous session's 3 and
-    # reports ~65533 lost frames per stream. That is the reconnect bug.
+    # The pod drops off and comes back with the same frames: the old decoder
+    # compared sequence 0 against the previous session's 3 and reported
+    # ~65533 lost frames per stream (defect N2). A restart is now a TYPED
+    # event: counted in `restarts`, and never a fabricated loss.
     for frame in frames:
         decoder.feed(frame)
-    assert not decoder.is_clean(), "a restart without reset must be visible as a loss"
+    assert decoder.restarts == {RawStream.ECG: 1}, "the restart must be visible"
+    assert decoder.drops == [], "a restart must not be counted as loss"
+    assert decoder.is_clean()
 
     decoder.reset()
     assert decoder.is_clean(), "reset must clear the previous session's expectations"

@@ -8,6 +8,7 @@ cannot fail is worse than no checker at all.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +41,12 @@ def _bringup_with_ppg(ppg_hz: int) -> dict:
     return data
 
 
+def _write_text(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 @pytest.fixture(scope="module")
 def hw() -> dict:
     with (ROOT / "config" / "hardware.yaml").open(encoding="utf-8") as handle:
@@ -60,6 +67,9 @@ def test_current_contract_is_clean(hw: dict, bringup: dict) -> None:
     cc.check_research_service_uuids(hw, report)
     cc.check_raw_frame_contract(hw, report)
     cc.check_canonical_firmware_paths(report)
+    cc.check_no_legacy_rate_literals(report)
+    cc.check_stale_uuid_gone_from_sources(ROOT, report)
+    cc.check_fit_developer_names(report)
     assert not report.failures, "; ".join(report.failures)
 
 
@@ -286,4 +296,143 @@ class TestNoLegacyRateLiterals:
         )
         report = cc.Report()
         cc.check_no_legacy_rate_literals(report)
+        assert not report.failures, "; ".join(report.failures)
+
+
+class TestFitDeveloperNames:
+    """FIT ``SYNAPSE_DEV_FIELD_*`` literals must come from the JSON contract.
+
+    check_interfaces.py pins the eight declared ids; this companion closes the
+    other hole: a NINTH literal written in code and never declared anywhere.
+    """
+
+    def _descriptor(self) -> dict:
+        return json.loads(
+            (ROOT / "contracts" / "fit_developer_fields.json").read_text(encoding="utf-8")
+        )
+
+    def _contract_copy(self, tmp_path: Path) -> Path:
+        contract = tmp_path / "fit_developer_fields.json"
+        contract.write_text(json.dumps(self._descriptor()), encoding="utf-8")
+        return contract
+
+    def _writer_with_canonical_defines(self, tmp_path: Path) -> Path:
+        canonical = [f["c_name"] for f in self._descriptor()["fields"]]
+        header = "\n".join(f"#define {name} 0" for name in canonical)
+        writer = tmp_path / "fit_writer.h"
+        writer.write_text(header + "\n", encoding="utf-8")
+        return writer
+
+    def test_current_tree_matches_the_contract(self) -> None:
+        report = cc.Report()
+        cc.check_fit_developer_names(report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_unknown_field_literal_fails(self, tmp_path: Path) -> None:
+        """A field name outside the contract is an undeclared field id."""
+        source = _write_text(tmp_path / "some_source.py", "FIELD = SYNAPSE_DEV_FIELD_TUNING_KNOT\n")
+        report = cc.Report()
+        cc.check_fit_developer_names(
+            report,
+            contract=cc.FIT_CONTRACT,
+            writer=tmp_path / "never_reached_header.h",
+            sources=[source],
+        )
+        assert any("SYNAPSE_DEV_FIELD_TUNING_KNOT" in f for f in report.failures)
+
+    def test_derived_mapping_macro_is_not_a_field(self, tmp_path: Path) -> None:
+        """The id -> definition-number mapping helper is not a third spelling."""
+        source = _write_text(
+            tmp_path / "helper.py",
+            "def num(cid: int) -> int:\n    return SYNAPSE_DEV_FIELD_DEFINITION_NUM(cid)\n",
+        )
+        report = cc.Report()
+        cc.check_fit_developer_names(
+            report,
+            contract=self._contract_copy(tmp_path),
+            writer=self._writer_with_canonical_defines(tmp_path),
+            sources=[source],
+        )
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_writer_missing_canonical_define_fails(self, tmp_path: Path) -> None:
+        """A c_name removed from fit_writer.h is a wire break, not a refactor."""
+        source = _write_text(tmp_path / "clean.py", "nothing here\n")
+        header = "#define SYNAPSE_DEV_FIELD_SQI 1\n"  # one define short
+        writer = _write_text(tmp_path / "fit_writer.h", header)
+        report = cc.Report()
+        cc.check_fit_developer_names(
+            report,
+            contract=self._contract_copy(tmp_path),
+            writer=writer,
+            sources=[source],
+        )
+        assert any(
+            "does not define" in f and "SYNAPSE_DEV_FIELD_STRESS" in f for f in report.failures
+        )
+
+    def test_corrupt_contract_json_fails(self, tmp_path: Path) -> None:
+        contract = _write_text(tmp_path / "fit_developer_fields.json", "{not json")
+        report = cc.Report()
+        cc.check_fit_developer_names(
+            report,
+            contract=contract,
+            writer=tmp_path / "writer.h",
+            sources=[],
+        )
+        assert any("cannot read" in f for f in report.failures)
+
+    def test_descriptor_count_mismatch_fails(self, tmp_path: Path) -> None:
+        """num_fields must equal the number of declared c_names."""
+        descriptor = self._descriptor()
+        descriptor["num_fields"] = 99
+        contract = _write_text(tmp_path / "fit_developer_fields.json", json.dumps(descriptor))
+        source = _write_text(tmp_path / "clean.py", "ok\n")
+        report = cc.Report()
+        cc.check_fit_developer_names(
+            report,
+            contract=contract,
+            writer=self._writer_with_canonical_defines(tmp_path),
+            sources=[source],
+        )
+        assert any("declares num_fields=99" in f for f in report.failures)
+
+
+class TestStaleUuidScan:
+    """The malformed 6-group UUID must not re-enter through any new source."""
+
+    # Built by concatenation so the test file itself never carries the
+    # dash-groups form (the scan reads everything, including these tests).
+    _STALE = "53594E41" + "-" + "5053" + "-" + "452D" + "-" + "4241" + "-" + "4E44" + "-" + "0"
+    # Application- version literal: "SYNA" as a uint32, no dash groups, never
+    # matched by the scan (fit_writer.h legitimately prints it).
+
+    def test_current_tree_is_clean(self) -> None:
+        report = cc.Report()
+        cc.check_stale_uuid_gone_from_sources(ROOT, report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_dash_grouped_reintroduction_fails(self, tmp_path: Path) -> None:
+        """A literal with the prefix + dash groups in any shipped file fails."""
+        src = tmp_path / "maker.py"
+        src.write_text(f'FILTER = "{self._STALE}"\n', encoding="utf-8")
+        report = cc.Report()
+        cc.check_stale_uuid_gone_from_sources(tmp_path, report)
+        assert any(str(src.name) in f for f in report.failures)
+
+    def test_application_version_uint_is_not_matched(self, tmp_path: Path) -> None:
+        """0x53594E41 is 'SYNA' without dashes; flagging it would be noise."""
+        src = tmp_path / "version.py"
+        src.write_text("APP_VERSION = 0x53594E41  # 'SYNA'\n", encoding="utf-8")
+        report = cc.Report()
+        cc.check_stale_uuid_gone_from_sources(tmp_path, report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_strategy_archive_is_exempt(self, tmp_path: Path) -> None:
+        """The archived strategy docs carry the original input; pure shipping."""
+        archive = tmp_path / "SYNAPSE-AVERYN-STRATEGY" / "integration.md"
+        archive.parent.mkdir()
+        archive.write_text(f'val X = UUID.fromString("{self._STALE}")\n', encoding="utf-8")
+        report = cc.Report()
+        cc.check_stale_uuid_gone_from_sources(tmp_path, report)
         assert not report.failures, "; ".join(report.failures)

@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: 2026 SYNAPSE-24 contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Codec round-trip and MTU budget tests."""
+"""Codec round-trip and MTU budget tests.
+
+The SDK codec is the CANONICAL one (decision Q7): the host pipeline imports
+it through the ``synapse24.hardware.raw_codec`` shim, so "SDK vs host" is one
+object identity — and the byte parity with the C encoder stays pinned in the
+repo's own ``tests/test_raw_frame_parity.py``.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +15,12 @@ import numpy as np
 import pytest
 
 from synapse_device.codec import (
+    FLAG_TS_EPOCH_WRAPPED,
     HEADER_SIZE,
     MAX_PAYLOAD,
     RawCodecError,
     RawFormat,
+    RawHeader,
     RawStream,
     decode_frame,
     encode_frame,
@@ -41,98 +49,115 @@ def test_roundtrip_all_streams():
     ts = 1_234_567_890
     seq = 42
     for stream, channels in _STREAM_CHANNELS.items():
-        samples = np.arange(channels * 7, dtype=np.float64).reshape(7, channels)
-        frame = encode_frame(stream, seq, ts, 0, RawFormat.S16, samples)
+        values = np.arange(channels * 7, dtype=np.int64)
+        frame = encode_frame(stream, seq, ts, 0, RawFormat.S16, values)
         header, out = decode_frame(frame)
         assert header.stream == stream
         assert header.timestamp_us == ts & 0xFFFFFFFF
         assert header.sequence == seq
-        assert header.sample_count == 7
-        assert out.shape == (7, channels)
-        np.testing.assert_array_equal(out, samples)
+        assert header.sample_count == channels * 7  # header counts VALUES
+        assert out.dtype == np.int32
+        assert out.shape == (channels * 7,)
+        # Channel-minor: a reshape to (-1, channels) recovers the samples.
+        np.testing.assert_array_equal(out.reshape(-1, channels), values.reshape(-1, channels))
 
 
 def test_mtu_budget():
-    # S32, 4 channels (POWER): 16 bytes/value. The budget is the
-    # notification payload (244) minus the 12-byte header: 232 // 16 = 14.
-    assert max_samples(RawFormat.S32, 4) == (MAX_PAYLOAD - HEADER_SIZE) // 16
-    # Too many samples -> error
-    samples = np.zeros((100, 4), dtype=np.float64)
+    # The budget counts VALUES: a POWER frame carries 4 per sample, so
+    # (244 - 12) // 4 = 58 values = 14 samples.
+    assert max_samples(RawFormat.S32) == (MAX_PAYLOAD - HEADER_SIZE) // 4
+    # Too many values -> error, never truncation.
     with pytest.raises(RawCodecError):
-        encode_frame(RawStream.POWER, 0, 0, 0, RawFormat.S32, samples)
+        encode_frame(RawStream.POWER, 0, 0, 0, RawFormat.S32, np.zeros(400, dtype=np.int64))
+
+
+def test_sample_range_is_enforced_not_wrapped():
+    """A value the format cannot represent must be refused, not truncated.
+
+    The silent cast is how real data corrupts quietly.
+    """
+    with pytest.raises(RawCodecError, match="out of range"):
+        encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [40_000])
+    with pytest.raises(RawCodecError, match="out of range"):
+        encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [-40_000])
+    # The positive boundary is fine.
+    encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [32_767])
 
 
 def test_wrapped_timestamp():
-    ts = (1 << 32) + 1234  # above 32-bit, flag must be set
-    samples = np.zeros((1, 1), dtype=np.float64)
-    frame = encode_frame(RawStream.ECG, 0, ts, 0, RawFormat.S16, samples)
+    """The encoder masks the stamp to 32 bits and keeps the caller's flags.
+
+    The wrap BIT is the caller's (or firmware's) business: the codec must not
+    invent one, it must only never lose the caller's.
+    """
+    ts = (1 << 32) + 1234  # above 32-bit: masked, NOT flagged by the codec
+    frame = encode_frame(RawStream.ECG, 0, ts, 0, RawFormat.S16, [0])
     header, _ = decode_frame(frame)
-    assert header.flags & 0x01
     assert header.timestamp_us == ts & 0xFFFFFFFF
+    assert header.ts_epoch_wrapped is False, "the codec must not invent a wrap flag"
+
+    # A caller-provided flag travels untouched.
+    framed = encode_frame(RawStream.ECG, 0, ts, FLAG_TS_EPOCH_WRAPPED, RawFormat.S16, [0])
+    flagged, _ = decode_frame(framed)
+    assert flagged.ts_epoch_wrapped is True
+    assert flagged.timestamp_us == ts & 0xFFFFFFFF
 
 
 def test_truncated_frame_rejected():
-    good = encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, np.zeros((1, 1)))
+    good = encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [0])
     with pytest.raises(RawCodecError):
         decode_frame(good[:10])  # intentional short slice
 
 
+def test_unknown_stream_and_format_rejected():
+    good = encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [0])
+    bad_stream = bytearray(good)
+    bad_stream[1] = 0x2A
+    with pytest.raises(RawCodecError, match="stream"):
+        decode_frame(bytes(bad_stream))
+    bad_fmt = bytearray(good)
+    bad_fmt[10] = 0x0A
+    with pytest.raises(RawCodecError, match="format"):
+        decode_frame(bytes(bad_fmt))
+
+
 def test_loss_counter_travels_in_the_header():
     """The header carries the samples lost since the previous frame."""
-    samples = np.zeros((1, 1), dtype=np.float64)
-    frame = encode_frame(RawStream.ECG, 3, 0, 0, RawFormat.S16, samples, dropped=7)
+    frame = encode_frame(RawStream.ECG, 3, 0, 0, RawFormat.S16, [0], dropped=7)
     header, _ = decode_frame(frame)
     assert header.dropped == 7
+    assert header.reserved == 7  # compatibility alias
 
 
-def test_sdk_and_host_codecs_agree():
-    """The SDK and the host must produce the same bytes for the same frame.
+def test_wrapped_property_reports_the_flag():
+    frame = encode_frame(RawStream.ECG, 0, 0, 0x01, RawFormat.S16, [0])
+    header, _ = decode_frame(frame)
+    assert header.ts_epoch_wrapped is True
+    plain, _ = decode_frame(encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S16, [0]))
+    assert plain.ts_epoch_wrapped is False
 
-    Two encoders of the same wire format are two chances to disagree; the
-    parity test in ``tests/test_raw_frame_parity.py`` pins the C encoder to
-    the host one, and this test pins the SDK to the host.
+
+def test_the_host_shim_is_the_same_object():
+    """One codec, one identity: the host module re-exports the SDK's."""
+    import synapse24.hardware.raw_codec as host
+
+    assert host.encode_frame is encode_frame
+    assert host.decode_frame is decode_frame
+    assert host.RawHeader is RawHeader
+    assert host.RawStream is RawStream
+    assert host.RawFormat is RawFormat
+    assert host.STREAM_CHANNELS == _STREAM_CHANNELS
+    assert host.HEADER_SIZE == HEADER_SIZE == 12
+    assert host.MAX_PAYLOAD == MAX_PAYLOAD == 244
+
+
+def test_no_channel_recount_regression():
+    """Regression: an encoder that multiplied by channel count again.
+
+    The frame length is header + values * format_size; the historical bug
+    (multi-channel frames carrying stale bytes / reading past the buffer)
+    must stay impossible.
     """
-    from synapse24.hardware.raw_codec import encode_frame as host_encode
-
-    samples = np.array([[1, 2], [3, 4]], dtype=np.int64)
-    sdk_frame = encode_frame(RawStream.PPG, 9, 1234, 0, RawFormat.S16, samples, dropped=2)
-    host_frame = host_encode(RawStream.PPG, 9, 1234, 0, RawFormat.S16, samples, dropped=2)
-    assert sdk_frame == host_frame
-
-
-def test_sdk_and_host_codecs_agree_with_flags():
-    """The flags of the caller must reach the wire on both sides."""
-    from synapse24.hardware.raw_codec import FLAG_TS_EPOCH_WRAPPED
-    from synapse24.hardware.raw_codec import encode_frame as host_encode
-
-    samples = np.array([[1.0]], dtype=np.int64)
-    sdk_frame = encode_frame(RawStream.ECG, 1, 10, FLAG_TS_EPOCH_WRAPPED, RawFormat.S16, samples)
-    host_frame = host_encode(RawStream.ECG, 1, 10, FLAG_TS_EPOCH_WRAPPED, RawFormat.S16, samples)
-    assert sdk_frame == host_frame
-    assert sdk_frame[8] & FLAG_TS_EPOCH_WRAPPED
-
-
-def test_the_sdk_respects_the_frame_budget():
-    """A frame must fit the notification payload, header included.
-
-    The host codec counts *values* per frame, the SDK counts *samples* per
-    channel: the two budgets must describe the same frame.
-    """
-    from synapse24.hardware.raw_codec import HEADER_SIZE as HOST_HEADER
-    from synapse24.hardware.raw_codec import MAX_PAYLOAD as HOST_MAX
-    from synapse24.hardware.raw_codec import max_samples as host_max_samples
-
-    assert HEADER_SIZE == HOST_HEADER
-    assert MAX_PAYLOAD == HOST_MAX
-    for fmt in RawFormat:
-        for channels in (1, 2, 3, 4):
-            # The SDK rounds the samples down, so it can be one value below
-            # the host's budget: never above it.
-            assert max_samples(fmt, channels) * channels <= host_max_samples(fmt)
-
-
-def test_an_oversized_frame_is_rejected():
-    """A frame that does not fit the MTU must be refused, not truncated."""
-    too_many = max_samples(RawFormat.S8, 1) + 1
-    with pytest.raises(RawCodecError):
-        encode_frame(RawStream.ECG, 0, 0, 0, RawFormat.S8, np.zeros((too_many, 1), dtype=np.int64))
+    values = [1, 2, 3, 4, 5, 6]  # 2 samples x 3 channels
+    frame = encode_frame(RawStream.ACC, 0, 0, 0, RawFormat.S16, values)
+    assert len(frame) == HEADER_SIZE + len(values) * 2

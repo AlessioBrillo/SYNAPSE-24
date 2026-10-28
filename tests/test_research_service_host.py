@@ -232,6 +232,26 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_ring_overflow.argtypes = []
     service.synapse_host_bench_power_dropped.restype = ctypes.c_uint32
     service.synapse_host_bench_power_dropped.argtypes = []
+    service.synapse_host_bench_set_mtu.restype = None
+    service.synapse_host_bench_set_mtu.argtypes = [ctypes.c_uint16]
+    service.synapse_host_bench_set_stack_mtu.restype = None
+    service.synapse_host_bench_set_stack_mtu.argtypes = [ctypes.c_uint16]
+    service.synapse_host_bench_set_notify_fail_every.restype = None
+    service.synapse_host_bench_set_notify_fail_every.argtypes = [ctypes.c_int]
+    service.synapse_host_bench_set_exhaust_mbuf.restype = None
+    service.synapse_host_bench_set_exhaust_mbuf.argtypes = [ctypes.c_int]
+    service.synapse_host_bench_double_free.restype = ctypes.c_uint32
+    service.synapse_host_bench_double_free.argtypes = []
+    service.synapse_host_bench_notify_rejected.restype = ctypes.c_uint32
+    service.synapse_host_bench_notify_rejected.argtypes = []
+
+
+def _stream_values(frames: list[tuple[RawHeader, np.ndarray]]) -> dict[int, int]:
+    """Delivered sample VALUES (channel-minor) per stream id."""
+    values: dict[int, int] = {}
+    for header, samples in frames:
+        values[header.stream] = values.get(header.stream, 0) + samples.size
+    return values
 
 
 def _decoded_frames(service: ctypes.CDLL) -> list[tuple[RawHeader, np.ndarray]]:
@@ -371,3 +391,175 @@ def test_ring_overflow_is_counted_when_the_link_stalls(service: ctypes.CDLL) -> 
     service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 200)
     overflow = service.synapse_host_bench_ring_overflow()
     assert overflow > 0, "ring overflow not counted: 200 samples were fed with no link"
+
+
+# ---------------------------------------------------------------------------
+# MTU negotiation: the frame size belongs to the link, not to the 244-byte
+# assumption, and every failure path must leave the data queued (or counted),
+# never silently gone and never double-freed.
+# ---------------------------------------------------------------------------
+
+_MODE_OPEN = _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED | _MODE_POWER_ENABLED
+
+
+def test_frames_adapt_to_the_negotiated_mtu(service: ctypes.CDLL) -> None:
+    """The negotiated MTU sizes every notification.
+
+    At MTU 23 an ECG frame carries 4 S16 values, at MTU 115 it carries 50, and
+    at MTU 247 it caps at the wire limit (116). Whatever the MTU: no
+    notification may exceed MTU-3 bytes, no data may be lost, and the total
+    delivered payload must not depend on the negotiated value.
+    """
+    _bind_bench(service)
+    totals: dict[int, dict[int, int]] = {}
+    for mtu in (23, 115, 247):
+        service.synapse_host_bench_reset()
+        service.synapse_host_bench_set_mtu(mtu)
+        sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+        frames = _decoded_frames(service)
+        assert len(frames) == sent
+        lengths = [service.synapse_host_bench_frame_len(i) for i in range(sent)]
+        assert max(lengths) <= mtu - 3, f"MTU {mtu}: a frame exceeded MTU-3 ({max(lengths)} B)"
+        assert service.synapse_host_bench_dropped_frames() == 0, f"MTU {mtu}: frames dropped"
+        assert service.synapse_host_bench_ring_overflow() == 0, f"MTU {mtu}: ring overflow"
+        assert service.synapse_host_bench_double_free() == 0, f"MTU {mtu}: double free"
+        assert service.synapse_host_bench_notify_rejected() == 0, f"MTU {mtu}: stack refused"
+        totals[mtu] = _stream_values(frames)
+
+    # Same payload flow at every MTU. POWER is the floor exception: its
+    # 4-channel int32 sample cannot fit below MTU 31, so at MTU 23 the samples
+    # are countered instead of framed
+    # (test_power_stream_is_refused_below_its_mtu_floor).
+    assert (
+        totals[115]
+        == totals[247]
+        == {
+            RawStream.ECG: 50,
+            RawStream.PPG: 32,
+            RawStream.ACC: 60,
+            RawStream.GYRO: 60,
+            RawStream.MAG: 60,
+            RawStream.POWER: 8,
+        }
+    )
+    assert {s: v for s, v in totals[23].items() if s != RawStream.POWER} == {
+        RawStream.ECG: 50,
+        RawStream.PPG: 32,
+        RawStream.ACC: 60,
+        RawStream.GYRO: 60,
+        RawStream.MAG: 60,
+    }
+    assert RawStream.POWER not in totals[23]
+
+    # A refused notification would leave a sequence hole; this happy path
+    # must stream every stream without holes.
+    sequences: dict[int, list[int]] = {}
+    for header, _ in _decoded_frames(service):
+        sequences.setdefault(header.stream, []).append(header.sequence)
+    for stream, numbers in sequences.items():
+        assert all(b == (a + 1) % 65536 for a, b in zip(numbers, numbers[1:])), (
+            f"stream {stream}: sequence hole on the happy path: {numbers}"
+        )
+
+
+def test_power_stream_is_refused_below_its_mtu_floor(service: ctypes.CDLL) -> None:
+    """POWER needs MTU 31 (12 header + 3 ATT + 16 for one 4-channel S32 sample).
+
+    Below the floor the stream cannot emit a frame: it must stay queued/countered
+    (visible in power_dropped), not crash, and not emit a frame sized for a
+    larger link.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_mtu(23)
+    sent = service.synapse_host_bench_run(
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 60
+    )
+    assert sent == 0, f"MTU 23 emitted {sent} frames that cannot physically fit"
+    assert service.synapse_host_bench_power_dropped() > 0, "blocked POWER samples not counted"
+    assert service.synapse_host_bench_double_free() == 0
+
+
+def test_frame_timestamps_travel_with_the_samples(service: ctypes.CDLL) -> None:
+    """Stamp the next frame with its own oldest sample, never a reconstruction.
+
+    A partial flush must carry the timestamp of its first sample from the
+    ts ring. Never multiply the sample period back: the pod clock is the only
+    source of truth for spacing across queueing jitter.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_mtu(23)  # 4 ECG values per frame: 13 frames
+    service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED, 60)
+    ecg = [h for h, _s in _decoded_frames(service) if h.stream == RawStream.ECG]
+    assert len(ecg) == 13, "expected 50 samples split over 4-value frames (12x4+2)"
+    prev = ecg[0]
+    assert prev.timestamp_us > 0
+    for header in ecg[1:]:
+        # The glue advances the mock clock 2000 us per submitted sample and
+        # ECG carries 1 sample value per channel, so the stamp moves by
+        # exactly frame_sample_count * 2000 µs.
+        expected = prev.timestamp_us + 2000 * prev.sample_count
+        assert header.timestamp_us == expected, (
+            f"frame stamp {header.timestamp_us} != previous stamp "
+            f"{prev.timestamp_us} + {prev.sample_count} samples x 2000 us"
+        )
+        prev = header
+
+
+def test_refused_notifications_stay_queued_and_never_double_free(
+    service: ctypes.CDLL,
+) -> None:
+    """The stack refuses every notification (saturated peer queue).
+
+    The service must score a dropped frame, keep the samples queued for the
+    next tick (nothing is truly lost), and above all never free the mbuf the
+    stack already consumed: that was a heap corruption on hardware.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_notify_fail_every(1)
+    sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+    assert sent == 0, f"captured {sent} frames while the stack refused everything"
+    assert service.synapse_host_bench_dropped_frames() > 0, "refusals not counted"
+    assert service.synapse_host_bench_ring_overflow() == 0, (
+        "samples should be queued in the ring, not overflowed"
+    )
+    assert service.synapse_host_bench_double_free() == 0, "the service freed a stack mbuf"
+
+
+def test_mbuf_exhaustion_counts_drops_and_never_double_frees(service: ctypes.CDLL) -> None:
+    """No mbuf available for a notification is the ENOMEM path.
+
+    Nothing may be transmitted, the attempt must be counted, the samples stay
+    queued, and the mbuf pool must not be freed twice.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_exhaust_mbuf(1)
+    service.synapse_host_bench_run(_MODE_OPEN, 60)
+    assert service.synapse_host_bench_frame_count() == 0, "frames left without an mbuf"
+    assert service.synapse_host_bench_dropped_frames() > 0, "ENOMEM not counted"
+    assert service.synapse_host_bench_ring_overflow() == 0
+    assert service.synapse_host_bench_double_free() == 0
+
+
+def test_the_stack_rejects_oversized_notifications(service: ctypes.CDLL) -> None:
+    """Belt and suspenders: an honest stack refuses oversized notifications.
+
+    If the service is told an MTU larger than the link's, every notification
+    that exceeds MTU-3 is refused; visibility stays truthful (rejected
+    counter, no crash, no double free).
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_mtu(247)  # what the service believes
+    service.synapse_host_bench_set_stack_mtu(50)  # what the link carries
+    sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+    assert sent > 0, "not even a within-budget frame got through"
+    for i in range(sent):
+        length = service.synapse_host_bench_frame_len(i)
+        assert length <= 50 - 3, f"the link carried a {length} B frame past MTU 50"
+    assert service.synapse_host_bench_notify_rejected() > 0, "oversized frames not counted"
+    assert service.synapse_host_bench_dropped_frames() > 0
+    assert service.synapse_host_bench_double_free() == 0

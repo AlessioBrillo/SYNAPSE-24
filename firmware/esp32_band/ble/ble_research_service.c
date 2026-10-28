@@ -296,7 +296,41 @@ static void research_note_drop(synapse_research_stream_t *stream, uint16_t sampl
                                              : total);
 }
 
-/** Emit one frame for @p stream, draining up to its flush threshold. */
+/**
+ * Values one notification may carry for @p stream at the NEGOTIATED MTU.
+ *
+ * The 244-byte payload belongs to a 247-byte MTU; sizing the frames from it
+ * regardless of the actual link meant that a host that negotiates the default
+ * 23 dropped or truncated every frame. The budget is what the link carries:
+ * usable payload = MTU - 3 (ATT header) - 12 (frame header), in *values*
+ * (channel-minor), rounded DOWN to whole samples of this stream and capped by
+ * the absolute wire limit of the format.
+ *
+ * 0 means this MTU cannot carry even one whole sample of the stream (POWER
+ * needs MTU 31: 12 header + 3 ATT + 16 for its 4-channel int32 sample). The
+ * stream then stays queued, the ring fills, and the overflow counter counts
+ * it rather than sending a frame nobody negotiated for.
+ */
+static uint16_t stream_mtu_values(const synapse_research_t *r,
+                                  const synapse_research_stream_t *stream)
+{
+    if (r->mtu < SYNAPSE_RAW_FRAME_HEADER_SIZE + 3u) {
+        return 0;
+    }
+    size_t channels = stream->channels ? stream->channels : 1;
+    size_t size = synapse_raw_format_size(stream->format);
+    uint16_t usable = (uint16_t)(r->mtu - 3u - SYNAPSE_RAW_FRAME_HEADER_SIZE);
+    uint16_t values = (uint16_t)(usable / size);
+    values = (uint16_t)(values - values % channels);  // whole samples only
+    uint16_t limit = synapse_raw_max_samples(stream->format);
+    if (limit != 0u && values > limit) {
+        values = limit;
+    }
+    return values;
+}
+
+/** Emit frames for @p stream until the ring is drained, the tick budget is
+ *  spent, or a notification the stack refuses frees us to stop. */
 static void flush_stream(synapse_research_t *r, synapse_research_stream_t *stream)
 {
     if (!r->transmitting || !stream->enabled || stream->pending == 0) {
@@ -307,100 +341,132 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
     }
 
     size_t channels = stream->channels ? stream->channels : 1;
+    size_t size = synapse_raw_format_size(stream->format);
+
     /* The wire codec's sample_count counts VALUES (channel-minor), not
      * physical samples: PPG red+IR is one sample but two values, the IMU
      * sub-streams one sample but three. Counting physical samples here made
      * the host decoder read only 1/channels of every multi-channel frame —
      * the C<->Python parity tests never caught it because they exercise the
      * codec directly, and only ECG (1 channel) was unaffected on the wire. */
-    uint16_t samples = stream->pending;
-    uint16_t limit_values = synapse_raw_max_samples(stream->format);
-    if (limit_values != 0u && (uint16_t)(samples * channels) > limit_values) {
-        samples = (uint16_t)(limit_values / channels);
+    uint16_t frame_values = stream_mtu_values(r, stream);
+    if (frame_values == 0u) {
+        return;  // the negotiated MTU cannot carry one whole sample
     }
-    uint16_t count = (uint16_t)(samples * channels);
+    uint16_t frame_samples = (uint16_t)(frame_values / channels);
 
     // Widen the int32 ring into the wire format's fixed-width samples.
     uint8_t staging[SYNAPSE_RAW_FRAME_MAX_PAYLOAD];
-    size_t size = synapse_raw_format_size(stream->format);
-    for (uint16_t i = 0; i < count; i++) {
-        int32_t value = stream->ring[i];
-        memcpy(staging + (size_t)i * size, &value, size);
-    }
 
-    uint8_t flags = 0;
-    // Wrap witness: the frame's low-32 timestamp stepping backwards against
-    // the previous frame of THIS stream. The old comparison against a 71.6
-    // minute-old buffer could never fire, which made the flag dead code and
-    // left the host relying on the numeric regression alone.
-    uint32_t ts_low = (uint32_t)((uint64_t)stream->first_ts_us & 0xFFFFFFFFu);
-    if (stream->has_flushed && ts_low < stream->last_flushed_ts_low) {
-        flags |= SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED;
-    }
-    stream->last_flushed_ts_low = ts_low;
-    stream->has_flushed = true;
+    /* Drain frame by frame instead of sizing each notification by the
+     * 244-byte assumption: flush_at is a LATENCY cap (how long a sample may
+     * wait), the negotiated MTU decides how many samples fit per frame. */
+    for (uint16_t frames_this_tick = 0;
+         stream->pending != 0u && frames_this_tick < SYNAPSE_RESEARCH_MAX_FRAMES_PER_TICK;
+         frames_this_tick++) {
 
-    /* Loss since the previous transmitted frame travels in this frame's
-     * `dropped` byte (the byte that used to be reserved): the host learns
-     * how much data it will never see, not only that something is missing. */
-    uint8_t dropped = (stream->dropped_pending > SYNAPSE_RAW_DROPPED_MAX)
-                          ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
-                          : (uint8_t)stream->dropped_pending;
-
-    /* The sequence number is consumed when the frame is BUILT, not when the
-     * notification is accepted: a frame the BLE stack refuses must leave a
-     * hole in the sequence, otherwise the host sees an uninterrupted stream
-     * and cannot detect the loss at all. */
-    uint16_t sequence = stream->sequence++;
-
-    int rc = synapse_raw_frame_encode(
-        stream->stream_id,
-        sequence,
-        (uint32_t)((uint64_t)stream->first_ts_us & 0xFFFFFFFFu),
-        flags,
-        dropped,
-        stream->format,
-        staging,
-        (uint8_t)count,
-        s_notify_buf,
-        sizeof(s_notify_buf));
-
-    if (rc != SYNAPSE_RAW_OK) {
-        r->dropped_frames++;
-        // The counter is in SAMPLES (the unit of the header byte), not in
-        // values: a refused frame loses `samples` physical samples, and a
-        // ring overflow loses one.
-        research_note_drop(stream, samples);
-        ESP_LOGW(TAG, "encode failed for stream 0x%02x: %s", stream->stream_id,
-                 synapse_raw_status_str(rc));
-    } else {
-        /* The frame carries `count` VALUES, so its length is the header plus
-         * count * size bytes. Multiplying by the channel count again (the
-         * old code did) doubled or quadrupled the length of every
-         * multi-channel frame: the notification carried stale bytes of the
-         * static buffer and, when the ring backed up, read past it. */
-        size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * size;
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(s_notify_buf, (uint16_t)frame_len);
-        if (om == NULL) {
-            r->dropped_frames++;
-            research_note_drop(stream, samples);
-        } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
-            r->dropped_frames++;
-            research_note_drop(stream, samples);
-            os_mbuf_free_chain(om);
-        } else {
-            /* Transmitted: the loss counter has reached the host, reset it. */
-            stream->dropped_pending = 0;
+        if (frame_samples == 0u) {
+            break;  // defensive: stream_mtu_values keeps this > 0
         }
-    }
+        uint16_t samples = (stream->pending < frame_samples) ? stream->pending : frame_samples;
+        uint16_t count = (uint16_t)(samples * channels);
 
-    uint16_t consumed = count;  /* ring values consumed by this frame */
-    uint16_t remaining = (uint16_t)(stream->pending * channels - consumed);
-    if (remaining > 0) {
-        memmove(stream->ring, &stream->ring[consumed], (size_t)remaining * sizeof(int32_t));
+        for (uint16_t i = 0; i < count; i++) {
+            int32_t value = stream->ring[i];
+            memcpy(staging + (size_t)i * size, &value, size);
+        }
+
+        uint32_t ts_low = stream->ts_ring[0];
+        uint8_t flags = 0;
+        // Wrap witness: the frame's low-32 timestamp stepping backwards against
+        // the previous frame of THIS stream that actually left the pod. The old
+        // comparison against a 71.6-minute-old last_sample_us buffer could
+        // never fire — dead flag. Moving it into the transmitted branch also
+        // keeps the witness aligned with the sequence every host can see.
+        if (stream->has_flushed && ts_low < stream->last_flushed_ts_low) {
+            flags |= SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED;
+        }
+
+        /* Loss since the previous transmitted frame travels in this frame's
+         * `dropped` byte (the byte that used to be reserved): the host learns
+         * how much data it will never see, not only that something is missing. */
+        uint8_t dropped = (stream->dropped_pending > SYNAPSE_RAW_DROPPED_MAX)
+                              ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
+                              : (uint8_t)stream->dropped_pending;
+
+        /* The sequence number is consumed when the frame is BUILT, not when the
+         * notification is accepted: a frame the BLE stack refuses must leave a
+         * hole in the sequence, otherwise the host sees an uninterrupted stream
+         * and cannot detect the loss at all. */
+        uint16_t sequence = stream->sequence++;
+
+        int rc = synapse_raw_frame_encode(
+            stream->stream_id,
+            sequence,
+            ts_low,
+            flags,
+            dropped,
+            stream->format,
+            staging,
+            (uint8_t)count,
+            s_notify_buf,
+            sizeof(s_notify_buf));
+
+        if (rc != SYNAPSE_RAW_OK) {
+            r->dropped_frames++;
+            // Deterministic failure (the payload does not depend on the link):
+            // report the samples as lost, then consume them so the ring keeps
+            // flowing instead of retrying a frame that can never encode.
+            research_note_drop(stream, samples);
+            ESP_LOGW(TAG, "encode failed for stream 0x%02x: %s", stream->stream_id,
+                     synapse_raw_status_str(rc));
+        } else {
+            /* The frame carries `count` VALUES, so its length is the header plus
+             * count * size bytes. Multiplying by the channel count again (the
+             * old code did) doubled or quadrupled the length of every
+             * multi-channel frame: the notification carried stale bytes of the
+             * static buffer and, when the ring backed up, read past it. */
+            size_t frame_len = SYNAPSE_RAW_FRAME_HEADER_SIZE + (size_t)count * size;
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(s_notify_buf, (uint16_t)frame_len);
+            if (om == NULL) {
+                r->dropped_frames++;
+                // Transient (no mbuf for the notification): the samples are NOT
+                // lost — they stay queued and a later tick retries, so they must
+                // NOT travel in the `dropped` byte of the next frame.
+                break;
+            } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
+                r->dropped_frames++;
+                /* No free here: ble_gatts_notify_custom CONSUMES the mbuf
+                 * regardless of outcome ("consumes the supplied mbuf
+                 * regardless of the outcome", host/ble_gatt.h). Freeing it
+                 * again double-freed the chain and corrupted the heap on
+                 * every refused notification; the host glue poisons the
+                 * mbuf to prove its absence. */
+                /* Also transient: a saturated queue mid-connection-event eats
+                 * the frame but not the data. The sequence hole above is the
+                 * evidence the host sees; the samples ride the next tick. */
+                break;
+            } else {
+                /* Actually transmitted: advance the wrap witness and clear the
+                 * loss byte — the loss it carried has reached the host. */
+                stream->last_flushed_ts_low = ts_low;
+                stream->has_flushed = true;
+                stream->dropped_pending = 0;
+            }
+        }
+
+        /* Consume exactly what the frame carried: values from `ring`, and the
+         * per-sample stamps from `ts_ring`, so the NEXT frame's stamp is the
+         * stamp of its own oldest sample. The old code replied with
+         * `first_ts_us = r->last_sample_us`, which disagreed with both. */
+        uint16_t remaining = (uint16_t)(stream->pending - samples);
+        if (remaining > 0u) {
+            memmove(stream->ring, &stream->ring[count], (size_t)remaining * channels * sizeof(int32_t));
+            memmove(stream->ts_ring, &stream->ts_ring[samples], (size_t)remaining * sizeof(uint32_t));
+            stream->first_ts_us = (int64_t)stream->ts_ring[0];
+        }
+        stream->pending = remaining;
     }
-    stream->pending = (uint16_t)(stream->pending - samples);
-    stream->first_ts_us = r->last_sample_us;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +527,11 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
             }
+            // The stamp travels with the sample: a partial flush frames the
+            // next block at ts_ring[n] instead of reconstructing a stamp from
+            // the stream period (the old `first_ts_us = last_sample_us` did,
+            // and it contradicted the header's own contract).
+            s->ts_ring[s->pending] = (uint32_t)now_us;
             s->ring[s->pending++] = quantise_s16(sample->data.ecg.voltage_mv,
                                                  (float)SYNAPSE_RESEARCH_UNIT_UV);
         } else {
@@ -479,6 +550,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
             }
+            s->ts_ring[s->pending] = (uint32_t)now_us;
             s->ring[s->pending * 2 + 0] = (int32_t)lroundf(sample->data.ppg.red);
             s->ring[s->pending * 2 + 1] = (int32_t)lroundf(sample->data.ppg.ir);
             s->pending++;
@@ -504,6 +576,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
             gyr->first_ts_us = now_us;
             mag->first_ts_us = now_us;
         }
+        acc->ts_ring[acc->pending] = (uint32_t)now_us;
+        gyr->ts_ring[gyr->pending] = (uint32_t)now_us;
+        mag->ts_ring[mag->pending] = (uint32_t)now_us;
         // ICM-20948 driver reports g / rad/s / uT (see imu_icm20948.cpp).
         acc->ring[acc->pending * 3 + 0] = quantise_s16(sample->data.imu.ax, (float)SYNAPSE_RESEARCH_UNIT_MG);
         acc->ring[acc->pending * 3 + 1] = quantise_s16(sample->data.imu.ay, (float)SYNAPSE_RESEARCH_UNIT_MG);
@@ -551,7 +626,9 @@ void synapse_research_service_submit_power(float voltage_mv, float current_ma, f
         s_research.power_dropped++;  // 1 Hz: previous frame still unflushed
         return;
     }
-    s->first_ts_us = esp_timer_get_time();
+    int64_t now_us = esp_timer_get_time();
+    s->first_ts_us = now_us;
+    s->ts_ring[0] = (uint32_t)now_us;
     // Four channels in one frame: voltage_mv, current_ma, power_mw,
     // battery_pct. Power is derived here rather than sent separately so the
     // host's energy accounting is one multiplication, not three fields to
@@ -662,6 +739,16 @@ void synapse_research_service_set_mtu(uint16_t mtu)
 {
     s_research.mtu = mtu;
     ESP_LOGI(TAG, "negotiated ATT MTU: %u bytes", mtu);
+    /* The negotiated value is now a first-class input of the framing: a host
+     * that negotiates the default 23 gets FRAME-SIZE adaptation, not silent
+     * truncation. Per-stream floors: ECG/IMU (S16) need MTU 17/21, PPG (S32,
+     * 2 ch) 23, POWER (S32, 4 ch) 31 — a stream below its floor cannot emit
+     * ONE sample, so the host sees a permanent hole rather than pretending. */
+    if (mtu < SYNAPSE_RESEARCH_MIN_MTU) {
+        ESP_LOGE(TAG, "ATT MTU %u below the research-service floor: PPG needs 23, "
+                      "POWER (4ch int32, 1 Hz) needs 31; the host gate refuses an "
+                      "MTU below 115 (500 Hz ECG budget)", mtu);
+    }
 }
 
 uint32_t synapse_research_service_ring_overflow(void)

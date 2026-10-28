@@ -58,15 +58,21 @@ int ble_gatts_add_svcs(const struct ble_gatt_svc_def *svcs) {
     return 0;
 }
 
-/* Fixed mbuf pool: flush_stream allocates one frame at a time. */
+/* Fixed mbuf pool: flush_stream allocates one frame at a time. The stub owns
+ * the mbufs the way NimBLE does: ble_gatts_notify_custom CONSUMES the chain
+ * (freeing it regardless of outcome, host/ble_gatt.h) — so the service must
+ * never free it too. The poison flag catches exactly that: freeing an mbuf
+ * the stack has already consumed increments g_double_free, and the service
+ * used to do it on every refused notification (heap corruption on hardware,
+ * invisible to CI while os_mbuf_free_chain was a no-op). */
 struct os_mbuf {
     uint8_t data[SYNAPSE_RAW_FRAME_MAX_PAYLOAD];
     uint16_t len;
+    uint8_t used;      /* allocated by ble_hs_mbuf_from_flat            */
+    uint8_t poisoned;  /* consumed by the stack (freeing again = bug)  */
 };
 
 static struct os_mbuf g_mbuf_pool[4];
-static size_t g_mbuf_next = 0;
-
 #define BENCH_MAX_FRAMES 512
 
 static struct {
@@ -75,6 +81,26 @@ static struct {
 } g_capture[BENCH_MAX_FRAMES];
 static int g_capture_count = 0;
 
+/* Bench knobs, reset by synapse_host_bench_reset(). */
+static uint16_t g_bench_mtu = 247;   /* MTU the service is told after connect */
+static uint16_t g_notify_mtu = 247;  /* MTU the stub enforces on every notify */
+static int g_fail_every = 0;         /* fail every n-th notification          */
+static int g_notify_seq = 0;
+static int g_exhaust_mbuf = 0;       /* from_flat always returns NULL         */
+static uint32_t g_double_free = 0;
+static uint32_t g_notify_rejected = 0;
+
+static void pool_free(struct os_mbuf *m)
+{
+    if (m == NULL || m->used == 0 || m->poisoned) {
+        g_double_free++;
+        return;
+    }
+    m->poisoned = 1;
+    m->used = 0;
+    m->len = 0xFFFF;  /* poison: any later use must fail loudly, not leak */
+}
+
 int ble_gatts_notify_custom(uint16_t c, uint16_t h, struct os_mbuf *om)
 {
     (void)c;
@@ -82,12 +108,27 @@ int ble_gatts_notify_custom(uint16_t c, uint16_t h, struct os_mbuf *om)
     if (om == NULL) {
         return 1;  /* BLE_HS_ENOMEM-ish: the service counts a drop */
     }
-    if (g_capture_count < BENCH_MAX_FRAMES && om->len <= sizeof(g_capture[0].data)) {
-        g_capture[g_capture_count].len = om->len;
-        memcpy(g_capture[g_capture_count].data, om->data, om->len);
-        g_capture_count++;
+    int rc = 0;
+    if (g_fail_every > 0 && ((++g_notify_seq) % g_fail_every) == 0) {
+        rc = 1;  /* the stack refused the notification */
+    } else if (om->len > (uint16_t)(g_notify_mtu - 3u)) {
+        rc = 1;  /* real NimBLE: a frame above MTU-3 cannot be a notification */
+        g_notify_rejected++;
     }
-    return 0;
+    if (rc == 0) {
+        if (g_capture_count < BENCH_MAX_FRAMES) {
+            if (om->len <= sizeof(g_capture[0].data)) {
+                g_capture[g_capture_count].len = om->len;
+                memcpy(g_capture[g_capture_count].data, om->data, om->len);
+                g_capture_count++;
+            }
+        } else {
+            g_notify_rejected++;  /* capture ring full: drop loudly */
+        }
+    }
+    /* NimBLE consumes the mbuf regardless of outcome (see ble_gattc.c). */
+    pool_free(om);
+    return rc;
 }
 
 int ble_hs_mbuf_to_flat(struct os_mbuf *om, void *dst, uint16_t max_len, uint16_t *out_len)
@@ -100,9 +141,23 @@ int ble_hs_mbuf_to_flat(struct os_mbuf *om, void *dst, uint16_t max_len, uint16_
     }
     return 0;
 }
-struct os_mbuf *ble_hs_mbuf_from_flat(const void *d, uint16_t l) {
-    struct os_mbuf *om = &g_mbuf_pool[g_mbuf_next];
-    g_mbuf_next = (g_mbuf_next + 1) % (sizeof(g_mbuf_pool) / sizeof(g_mbuf_pool[0]));
+struct os_mbuf *ble_hs_mbuf_from_flat(const void *d, uint16_t l)
+{
+    if (g_exhaust_mbuf) {
+        return NULL;
+    }
+    struct os_mbuf *om = NULL;
+    for (size_t i = 0; i < sizeof(g_mbuf_pool) / sizeof(g_mbuf_pool[0]); i++) {
+        if (g_mbuf_pool[i].used == 0) {
+            om = &g_mbuf_pool[i];
+            break;
+        }
+    }
+    if (om == NULL) {
+        return NULL;  /* real ENOMEM: no mbuf left */
+    }
+    om->used = 1;
+    om->poisoned = 0;
     if (l > sizeof(om->data)) {
         l = sizeof(om->data);
     }
@@ -110,7 +165,7 @@ struct os_mbuf *ble_hs_mbuf_from_flat(const void *d, uint16_t l) {
     om->len = l;
     return om;
 }
-void os_mbuf_free_chain(struct os_mbuf *m) { (void)m; }
+void os_mbuf_free_chain(struct os_mbuf *m) { pool_free(m); }
 int os_mbuf_append(struct os_mbuf *om, const void *d, uint16_t l) {
     if (om == NULL || (size_t)om->len + l > sizeof(om->data)) {
         return 1;
@@ -207,6 +262,15 @@ int synapse_host_bench_reset(void)
     synapse_research_service_set_transmitting(true);
     synapse_research_service_reset_counters();
     g_capture_count = 0;
+    /* Fault-injection knobs must not leak between tests: a knob left on here
+     * would make an unrelated test chase a phantom BLE failure. */
+    g_bench_mtu = 247;
+    g_notify_mtu = 247;
+    g_fail_every = 0;
+    g_notify_seq = 0;
+    g_exhaust_mbuf = 0;
+    g_double_free = 0;
+    g_notify_rejected = 0;
     return 0;
 }
 
@@ -222,6 +286,11 @@ int synapse_host_bench_run(int mode, int ecg_samples)
     }
     if (mode & BENCH_CONNECTED) {
         synapse_research_service_on_connect(7);
+        /* A BLE host negotiates the ATT MTU right after connecting; until the
+         * negotiation event the service conservatively assumes the default 23
+         * (on_connect hard-codes it). The bench replays that exchange with the
+         * knob, so the frame sizing can be exercised at every MTU. */
+        synapse_research_service_set_mtu(g_bench_mtu);
     }
     if (mode & BENCH_BIO_ENABLED) {
         if (mode & BENCH_SUBSCRIBE_PATH) {
@@ -257,6 +326,7 @@ int synapse_host_bench_run_subscribe_ecg(void)
 {
     g_capture_count = 0;
     synapse_research_service_on_connect(7);
+    synapse_research_service_set_mtu(g_bench_mtu);
     synapse_research_service_handle_subscribe(1, true);  /* ECG handle */
     bench_submit_ecg(60);
     bench_submit_ppg(4);    /* below threshold: no PPG frame expected */
@@ -304,3 +374,26 @@ uint32_t synapse_host_bench_power_dropped(void)
 {
     return synapse_research_service_power_dropped();
 }
+
+/* --- fault-injection knobs (tests/test_research_service_host.py) -------- */
+
+/** MTU the bench reports to the service as negotiated after connect. */
+void synapse_host_bench_set_mtu(uint16_t mtu) { g_bench_mtu = mtu; }
+
+/** MTU the stub stack enforces against every notification, independently of
+ *  what the service was told: an oversized frame must be rejected exactly
+ *  like real NimBLE rejects a notification longer than MTU-3. */
+void synapse_host_bench_set_stack_mtu(uint16_t mtu) { g_notify_mtu = mtu; }
+
+/** Fail every n-th notification (n=1: all of them), like a saturated peer
+ *  queue during a connection event. */
+void synapse_host_bench_set_notify_fail_every(int n) { g_fail_every = n; }
+
+/** Force ble_hs_mbuf_from_flat to always return NULL. */
+void synapse_host_bench_set_exhaust_mbuf(int on) { g_exhaust_mbuf = on; }
+
+/** Number of double frees the stub observed (must stay 0). */
+uint32_t synapse_host_bench_double_free(void) { return g_double_free; }
+
+/** Notifications the stub stack rejected for length (or capture-ring full). */
+uint32_t synapse_host_bench_notify_rejected(void) { return g_notify_rejected; }
