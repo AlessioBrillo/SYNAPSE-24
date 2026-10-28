@@ -96,6 +96,26 @@ LSL_STREAM_NAMES: dict[RawStream, str] = {
     RawStream.SYNC: "SYNAPSE_SYNC_T0",
 }
 
+# The largest pod-time step between two consecutive accepted frames that the
+# numeric wrap witness still covers (defect N5). A backward step spanning this
+# much of the counter can only be a roll. On a live link it cannot be a delayed
+# notification: the BLE supervision timeout kills a stalled connection in tens
+# of seconds, so silences beyond this arrive only in two shapes — the genuine
+# roll (with the firmware's flag), and the time-compressed gates whose frame
+# strides (240 s validator soak, 600 s codec compression) sit inside it on
+# purpose. A longer silence without the flag is a restart/reconnect, which the
+# sequence re-base (N2) handles, never a roll.
+_MAX_FRAME_GAP_US = 900_000_000
+# A backward step of the low stamp this large can only be a roll: the previous
+# stamp was within one frame gap of the counter top and the new one landed in
+# the fresh region. A delayed delivery regresses by its backlog; it cannot
+# span the whole counter.
+_ROLL_REGRESSION_FLOOR = (1 << 32) - _MAX_FRAME_GAP_US
+
+# The streams the pod puts on the wire (the SYNC stream is handled by the
+# clock model, not by the frame decoder), in the same order as the codec.
+WIRE_STREAMS: tuple[RawStream, ...] = tuple(s for s in RawStream if s != RawStream.SYNC)
+
 
 @dataclass
 class DropEvent:
@@ -120,16 +140,44 @@ class DeviceClock:
     wraps: int = 0
     _last_low: int | None = None
     _last_us: int = 0
+    # The pod's full 64-bit time as of the last sync anchor (set_wrap_base).
+    # A frame's capture cannot be in the future of the pod's own present-time
+    # read: a claimed region beyond the anchor's is the stale-delivery
+    # artefact, not a roll, and is dropped (defect N5).
+    _pod_now_us: int | None = None
 
     def extend(self, timestamp_low: int, flags: int = 0) -> int:
         """Convert a frame's low-32-bit stamp into a monotonic microsecond time."""
         if self._last_low is not None:
-            # The firmware sets the wrap flag on the first frame after a roll;
-            # the numeric regression is a second, independent witness.
-            if flags & 0x01 or timestamp_low < self._last_low:
-                if timestamp_low < self._last_low:
-                    self.wraps += 1
+            # Two independent witnesses for the 2^32-us roll (~71 minutes): the
+            # pod's wrap flag on the first frame after the edge, and the numeric
+            # regression of the low stamps. Either one must move the wrap
+            # counter exactly once. The old code required the regression, which
+            # made the flag pure decoration: when the link stalls across the
+            # edge, the next frame's stamp can already sit ABOVE the previous
+            # one while its flag still says "wrapped" — the regression never
+            # fires and 71 minutes of pod time went missing. (defect N3)
+            #
+            # The regression, though, only *witnesses* a roll when it is big
+            # enough that nothing else explains it (defect N5, found by the
+            # compressed-soak gate): a low stamp can also regress because a
+            # notification was DELAYED — BLE retries, a busy hub loop, or a
+            # periodic sync anchor whose pod stamp outruns the stale frames
+            # ahead of it. That step is bounded by the delivery backlog and is
+            # micro-seconds to seconds; treating it as a wrap added 2^32 us
+            # (~71.6 min) of phantom pod time. Only a backward step that spans
+            # the counter — previous stamp near the top, new stamp within one
+            # credible inter-frame gap of the bottom — is the roll.
+            if flags & 0x01 or self._last_low - timestamp_low >= _ROLL_REGRESSION_FLOOR:
+                self.wraps += 1
         candidate = (self.wraps << 32) | timestamp_low
+        if self._pod_now_us is not None and candidate > self._pod_now_us + _MAX_FRAME_GAP_US:
+            # The frame reaches beyond the anchor's present by more than any
+            # credible inter-frame gap: its true capture sits in the region
+            # BELOW the anchor's (a delivery that lagged across a region
+            # boundary), so one region down. The legitimate roll case claims
+            # only the anchor plus the elapsed silence — far below one region.
+            candidate -= 1 << 32
         if candidate <= self._last_us:
             candidate = self._last_us + 1
         self._last_low = timestamp_low
@@ -143,10 +191,18 @@ class DeviceClock:
         ``esp_timer_get_time()`` value (64 bits, since boot). Without this,
         ``wraps`` starts at 0 and every pod up longer than ~71 minutes gets
         its timestamps shifted by a multiple of 2^32 µs (~71.6 min).
+
+        The anchor sets the wrap region and the numeric foundation, and
+        records the pod's present-time value for the plausibility drop in
+        :meth:`extend`. It deliberately does NOT raise ``_last_us``: the
+        monotonic baseline stays frame-based, so a frame that was captured
+        just before the anchor keeps its own capture time instead of being
+        nudged up to the anchor's present (a sync exchange sits between
+        frames by construction; only a delayed delivery straddles it).
         """
         self.wraps = wraps
         self._last_low = ref_low
-        self._last_us = (wraps << 32) | ref_low
+        self._pod_now_us = (wraps << 32) | ref_low
 
 
 @dataclass
@@ -190,6 +246,12 @@ class ResearchStreamDecoder:
     # counter says *how much*: a hole of one frame and a hole of a hundred
     # samples are different failures.
     dropped_samples: dict[RawStream, int] = field(default_factory=dict)
+    # Per-stream count of detected firmware restarts (the pod reboots, or the
+    # link breaks and re-forms without the caller masking it with reset()):
+    # the sequence and the pod clock both count from zero again. That is
+    # expected and must never be read as a loss of ~65k frames — but it must
+    # not be swallowed either, so it is typed here for the session report.
+    restarts: dict[RawStream, int] = field(default_factory=dict)
     # Maximum number of values kept per stream (0 = unlimited). The live
     # path sets it: the session is written by the spool (on disk), so the
     # decoder only needs the recent window.
@@ -235,6 +297,23 @@ class ResearchStreamDecoder:
         # 16-bit sequence: detect a forward jump, tolerating the wrap itself.
         delta = (header.sequence - previous) & 0xFFFF
         if delta > 1:
+            clock = self.clocks.get(header.stream)
+            regressed = (
+                clock is not None
+                and clock._last_low is not None
+                and header.timestamp_us < clock._last_low
+            )
+            if delta > 0x8000 and regressed:
+                # Firmware restart, not loss: sequence counts from zero again
+                # while the stream's own clock stepped backwards — the pod
+                # rebooted (or the link re-formed without reset()). The old
+                # code read every reconnect as "~65533 frames lost", drowning
+                # the gate in phantom gaps (defect N2). Re-base the stream:
+                # a fresh sequence baseline and a fresh wrap count.
+                self.restarts[header.stream] = self.restarts.get(header.stream, 0) + 1
+                self.sequences[header.stream] = header.sequence
+                self.clocks.pop(header.stream, None)
+                return
             self.drops.append(
                 DropEvent(
                     stream=header.stream,
@@ -345,6 +424,10 @@ class ResearchStreamDecoder:
             counts[event.stream.name] = counts.get(event.stream.name, 0) + event.gap
         return counts
 
+    def restart_summary(self) -> dict[str, int]:
+        """Per-stream count of firmware restarts (typed; not a loss)."""
+        return {stream.name: count for stream, count in self.restarts.items()}
+
     def dropped_sample_summary(self) -> dict[str, int]:
         """Per-stream count of samples the pod reports as lost.
 
@@ -375,23 +458,27 @@ class ResearchStreamDecoder:
         self.clocks.clear()
         self.drops.clear()
         self.dropped_samples.clear()
+        self.restarts.clear()
         self.frames_seen = 0
         self.frames_rejected = 0
         self.bytes_seen = 0
         self.last_first_us = 0
 
     def seed_from_sync(self, pod_full_us: int) -> None:
-        """Anchor all per-stream DeviceClocks to a sync exchange's full pod time.
+        """Anchor every stream's DeviceClock to a sync exchange's full pod time.
 
         ``pod_full_us`` is the pod's 64-bit ``esp_timer_get_time()`` from the
         SYNC exchange. Its high 32 bits are the wrap count; the low 32 bits
         are the reference low stamp. Every stream shares the same wrap base
-        because they all read the same ``esp_timer_get_time()`` counter.
+        because they all read the same ``esp_timer_get_time()`` counter —
+        including streams whose first frame has not arrived yet: a clock
+        created by a later frame inherits the base instead of counting wraps
+        from zero on a pod that has been up for hours.
         """
         wraps = pod_full_us >> 32
         ref_low = pod_full_us & 0xFFFFFFFF
-        for clock in self.clocks.values():
-            clock.set_wrap_base(wraps, ref_low)
+        for stream in WIRE_STREAMS:
+            self.clocks.setdefault(stream, DeviceClock()).set_wrap_base(wraps, ref_low)
 
     def estimated_bytes(self) -> int:
         """Actual payload volume seen on the wire, for the §55-62 budget."""

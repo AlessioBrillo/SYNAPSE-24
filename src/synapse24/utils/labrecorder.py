@@ -18,9 +18,11 @@ never for *proving*.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,9 +33,11 @@ __all__ = [
     "CLI_ENV_VAR",
     "LabRecorderError",
     "LabRecorderNotFoundError",
+    "artifacts_of",
     "find_labrecorder_cli",
     "generate_config",
     "record_session",
+    "sha256_of",
     "write_session_metadata",
 ]
 
@@ -140,6 +144,22 @@ def write_session_metadata(path: Path, metadata: dict[str, Any]) -> None:
     path.write_text(json.dumps(metadata, indent=2, default=str), encoding="utf-8")
 
 
+def sha256_of(path: Path) -> str:
+    """Hex SHA-256 of a file, chunked (a 6-hour soak writes gigabytes)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifacts_of(record_dir: Path) -> list[Path]:
+    """XDF files a recording produced, newest first."""
+    if not record_dir.exists():
+        return []
+    return sorted(record_dir.rglob("*.xdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 @dataclass
 class RecordedSession:
     """Handle to a running recording."""
@@ -147,6 +167,38 @@ class RecordedSession:
     process: subprocess.Popen
     config_path: Path
     record_dir: Path
+
+    def wait_ready(self, timeout_s: float = 4.0) -> None:
+        """Prove the recorder is actually running before the session starts.
+
+        LabRecorderCLI has no handshake, so readiness is the one thing that
+        can be observed from outside: the process is still alive after the
+        startup window. A recorder that died already (bad config, missing
+        dependencies, wrong flags) would otherwise soak for hours over an
+        empty directory while every gate reads the recovery spool and
+        pretends the continuous recording existed.
+
+        Raises:
+            LabRecorderError: If the process exits during the window.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            code = self.process.poll()
+            if code is not None:
+                raise LabRecorderError(
+                    f"LabRecorderCLI exited during startup (code {code}); "
+                    "no continuous XDF will be written"
+                )
+            time.sleep(0.25)
+        if self.process.poll() is not None:
+            raise LabRecorderError(
+                f"LabRecorderCLI exited during startup (code {self.process.returncode}); "
+                "no continuous XDF will be written"
+            )
+
+    def artifacts(self) -> list[Path]:
+        """XDF files this recording has produced so far, newest first."""
+        return artifacts_of(self.record_dir)
 
 
 @contextmanager
@@ -180,8 +232,10 @@ def record_session(
         stderr=subprocess.DEVNULL,
     )
     session = RecordedSession(process=process, config_path=config_path, record_dir=record_dir)
+    completed_cleanly = False
     try:
         yield session
+        completed_cleanly = True
     finally:
         if process.poll() is None:
             process.terminate()
@@ -189,6 +243,8 @@ def record_session(
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait(timeout=10)
+        produced = artifacts_of(record_dir)
         write_session_metadata(
             record_dir / "session_meta.json",
             {
@@ -196,5 +252,16 @@ def record_session(
                 "record_dir": str(record_dir),
                 "recorder": str(cli),
                 "returncode": process.returncode,
+                "artifacts": [str(path) for path in produced],
             },
         )
+        # One writer is one truth: a session that ran to completion WITHOUT
+        # producing an XDF file must not quietly hand the gate over to the
+        # recovery spool. (Raising only when the body itself completed keeps
+        # a genuine in-session exception intact for the caller.)
+        if completed_cleanly and not produced:
+            raise LabRecorderError(
+                f"LabRecorderCLI produced no XDF file under {record_dir} "
+                f"(recorder exit code {process.returncode}); "
+                "the continuous recording does not exist"
+            )

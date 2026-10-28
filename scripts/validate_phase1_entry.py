@@ -54,17 +54,25 @@ from synapse24.signal_quality.ppg import compute_ppg_quality
 from synapse24.utils import verify_xdf_roundtrip
 
 try:
-    from bleak import BleakClient, BleakScanner
+    from bleak import BleakClient, BleakError, BleakScanner
     from bleak.backends.characteristic import BleakGATTCharacteristic
     from bleak.backends.device import BLEDevice
 except ImportError:
     BleakClient = None
     BleakScanner = None
+    BleakError = None
 
 try:
     import pylsl
 except ImportError:
     pylsl = None
+
+# Sync-exchange failures that are EXPECTED noise (malformed reply, radio
+# hiccup). Everything else inside an exchange must surface: a blanket except
+# could hide a firmware regression for a whole multi-hour session.
+_SYNC_EXCHANGE_ERRORS: tuple[type[BaseException], ...] = (struct.error, OSError)
+if BleakError is not None:
+    _SYNC_EXCHANGE_ERRORS += (BleakError,)
 
 
 @dataclass
@@ -289,6 +297,17 @@ class Phase1Validator:
             clock_model=self.clock_model,
             history_limit=self._decoder_history_limit(),
         )
+        # Provenance of the recording the report reads back from: WHO wrote
+        # the artifact and its SHA-256. The soak's single writer is
+        # LabRecorderCLI; everything else (the in-memory spool) is recovery
+        # memory, and the report must name the difference instead of letting
+        # a synthetic rehearsal masquerade as a 6-hour recording truth.
+        self.artifact: dict[str, Any] = {
+            "source": "unknown",
+            "path": None,
+            "sha256": None,
+        }
+        self.recorder_cli: str | None = None
 
     def _decoder_history_limit(self) -> int:
         """Values kept in memory per stream (30 s at the highest rate)."""
@@ -1198,7 +1217,7 @@ class Phase1Validator:
                 # 2^32 µs (~71.6 min) counter wrap.
                 if self.raw_ingestor is not None:
                     self.raw_ingestor.decoder.seed_from_sync(int(pod_send_us))
-        except Exception:
+        except _SYNC_EXCHANGE_ERRORS:
             self.logger.debug("Sync exchange failed (non-fatal)", exc_info=True)
 
     def _build_gate_report(self, report: Phase1ValidationReport) -> dict[str, Any]:
@@ -1216,7 +1235,9 @@ class Phase1Validator:
         dropped_samples = (
             self.raw_ingestor.decoder.dropped_sample_summary() if self.raw_ingestor else {}
         )
+        restarts = self.raw_ingestor.decoder.restart_summary() if self.raw_ingestor else {}
         throughput = int(self.raw_ingestor.decoder.estimated_bytes()) if self.raw_ingestor else 0
+        mtu_value = getattr(self.client, "mtu", None) if self.client is not None else None
 
         ecg = self._outlet_array("SYNAPSE_ECG_T0")
         ppg_red = self._outlet_array("SYNAPSE_PPG_T0", channel=0)
@@ -1255,6 +1276,39 @@ class Phase1Validator:
             "run_id": report.run_id,
             "timestamp": report.timestamp,
             "duration_s": duration,
+            # v2 truth rows (Q3/Q5): who wrote the artifact the report reads
+            # from, what the MTU actually negotiated to, and every drop broken
+            # out by reason. A rehearsal marks itself, so its numbers can
+            # never be presented as a real soak's G1 evidence.
+            "artifact": {
+                "source": self.artifact.get("source", "unknown"),
+                "path": self.artifact.get("path"),
+                "sha256": self.artifact.get("sha256"),
+                "exit_code": self.artifact.get("exit_code"),
+                "labrecorder_cli": self.recorder_cli,
+                "labrecorder_version": {
+                    "value": None,
+                    "source": "LabRecorderCLI offers no --version; the executable is recorded above",
+                },
+            },
+            "artifact_sha256": self.artifact.get("sha256"),
+            "rehearsal": bool(self.artifact.get("rehearsal")),
+            "mtu": {
+                "value": mtu_value if mtu_value is None or int(mtu_value) > 0 else None,
+                "source": "ResearchBleClient.mtu (the link's negotiated value; None = not negotiated)",
+            },
+            "conn_interval_ms": {
+                "value": None,
+                "source": "bleak does not expose the link interval; measured on the bench",
+            },
+            "samples_by_stream": counts,
+            "frames_rejected": rejected,
+            "drops_by_reason": {
+                "sequence_gap_frames": drops,
+                "pod_reported_samples": dropped_samples,
+                "decode_rejected": rejected,
+                "reconnect_restarts": restarts,
+            },
             "measurements": {
                 # 1: bench PSU / power meter, recorded by hand.
                 "idle_current_ma": {"value": None, "source": "bench"},
@@ -1432,6 +1486,7 @@ class Phase1Validator:
         legacy_format: bool | None = None,
         record: bool = False,
         lsl_clock_fn: Callable[[], float] | None = None,
+        rehearsal: bool = False,
     ) -> Phase1ValidationReport:
         if legacy_format is not None:
             self.legacy_format = legacy_format
@@ -1463,7 +1518,9 @@ class Phase1Validator:
             return self._dry_run_report(duration_s)
 
         if record:
-            return await self._run_with_recording(bringup_cfg, duration_s, flash=flash)
+            return await self._run_with_recording(
+                bringup_cfg, duration_s, flash=flash, rehearsal=rehearsal
+            )
 
         await self._connect_live_pod(bringup_cfg, flash=flash)
         loop_results = await self._run_validation_loop(duration_s)
@@ -1471,6 +1528,7 @@ class Phase1Validator:
 
         # Save XDF and verify, then collect results
         xdf_proof, xdf_path = self._save_xdf_and_verify()
+        self._record_artifact(xdf_path, source="spool")
         # The XDF is written: the spool files are not needed any more, but
         # the gate report still reads the samples back, so only the handles
         # are released here (the files go with the cleanup at the end of the
@@ -1481,8 +1539,29 @@ class Phase1Validator:
         self._log_gate_summary(report)
         return report
 
+    def _record_artifact(self, path: Path | None, source: str, **extra: Any) -> None:
+        """Fingerprint the file this session's report reads back from.
+
+        ``sha256`` is computed for whatever path exists: the report carries a
+        fingerprint of a REAL file, never a path that may vanish under
+        someone's feet (the rehearsal and the soak both need it, but the
+        recovery path needs it just as much).
+        """
+        from synapse24.utils.labrecorder import sha256_of
+
+        self.artifact = {
+            "source": source,
+            "path": str(path) if path else None,
+            "sha256": sha256_of(Path(path)) if path and Path(path).exists() else None,
+            **extra,
+        }
+
     async def _run_with_recording(
-        self, bringup_cfg: dict, duration_s: float, flash: bool = False
+        self,
+        bringup_cfg: dict,
+        duration_s: float,
+        flash: bool = False,
+        rehearsal: bool = False,
     ) -> Phase1ValidationReport:
         """Run the gate with LabRecorderCLI writing the continuous XDF.
 
@@ -1490,18 +1569,59 @@ class Phase1Validator:
         soak is not (10.8M ECG samples in Python lists, and nothing on disk
         if the process dies). The recorder is trusted to write, never to
         prove: integrity stays with validate_xdf on the file it produced.
-        """
-        from synapse24.utils.labrecorder import record_session
 
+        In rehearsal mode (``--soak-rehearsal``) the same code path runs
+        without the recorder: the artifact is the deterministic spool XDF and
+        the report marks itself as a rehearsal, so it can never be confused
+        with the G1 evidence the real soak produces.
+        """
         val_cfg = bringup_cfg["validation"]
         record_dir = Path(val_cfg["xdf_output_dir"]) / "recordings"
+
+        if rehearsal:
+            self.recorder_cli = None
+            await self._connect_live_pod(bringup_cfg, flash=flash)
+            loop_results = await self._run_validation_loop(duration_s)
+            await self._disconnect_live_pod(bringup_cfg)
+            xdf_proof, xdf_path = self._save_xdf_and_verify()
+            self._record_artifact(xdf_path, source="spool (synthetic rehearsal)", rehearsal=True)
+            self.lsl_manager.spool.close()
+            report = self._collect_results(loop_results, xdf_proof)
+            report.xdf_path = str(xdf_path) if xdf_path else None
+            self._log_gate_summary(report)
+            return report
+
+        from synapse24.utils.labrecorder import (
+            artifacts_of,
+            find_labrecorder_cli,
+            record_session,
+        )
+
+        cli = find_labrecorder_cli()
+        self.recorder_cli = str(cli) if cli else None
         # The exceptions carry their own recovery_hint (error contract);
         # logging here would only duplicate it. Raise, don't log-and-throw.
-        with record_session(record_dir, stream_specs=val_cfg.get("recorder_streams", [])):
+        with record_session(
+            record_dir, stream_specs=val_cfg.get("recorder_streams", [])
+        ) as session:
+            # Fail fast when the recorder cannot actually run: a CLI that
+            # dies during startup used to leave the gate reading the
+            # recovery spool for six hours while pretending to soak.
+            session.wait_ready()
             await self._connect_live_pod(bringup_cfg, flash=flash)
             loop_results = await self._run_validation_loop(duration_s)
             await self._disconnect_live_pod(bringup_cfg)
 
+        # Primary artifact: the continuous recording, fingerprinted AFTER the
+        # recorder stopped (a recorder that flushes on close must have its
+        # bytes counted too). A completed session with no file never gets
+        # here: record_session raises in that case.
+        recorded = artifacts_of(record_dir)
+        self._record_artifact(
+            recorded[0],
+            source="LabRecorderCLI",
+            exit_code=session.process.returncode,
+        )
         xdf_proof, xdf_path = self._save_xdf_and_verify()
         report = self._collect_results(loop_results, xdf_proof)
         report.xdf_path = str(xdf_path) if xdf_path else None
@@ -1672,10 +1792,19 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.error(f"Config file not found: {config_path}")
         return 2
 
+    mode_errors: list[str] = []
+    if args.soak and args.soak_rehearsal:
+        mode_errors.append(
+            "--soak and --soak-rehearsal are mutually exclusive: a rehearsal "
+            "is, by definition, not a soak"
+        )
     if args.soak and not args.live_hardware:
-        logger.error(
+        mode_errors.append(
             "--soak records continuously and is meant for live hardware; add --live-hardware"
         )
+    if mode_errors:
+        for message in mode_errors:
+            logger.error(message)
         return 2
 
     validator = Phase1Validator(config_path, logger)
@@ -1687,6 +1816,7 @@ async def main_async(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             legacy_format=args.legacy_format,
             record=args.soak,
+            rehearsal=args.soak_rehearsal,
         )
 
         # Save report
@@ -1764,6 +1894,16 @@ def main() -> int:
             "Soak mode: record continuously via LabRecorderCLI and write "
             "data/live_validation/gate_report.json at the end. Requires "
             "--live-hardware semantics; use with a multi-hour --duration."
+        ),
+    )
+    parser.add_argument(
+        "--soak-rehearsal",
+        action="store_true",
+        help=(
+            "Rehearse the soak path without the recorder: same validation "
+            "loop and v2 gate report, artifact = the deterministic spool XDF "
+            "marked as a synthetic rehearsal. Proves the machinery in CI; it "
+            "is never the G1 evidence (that requires --soak)."
         ),
     )
     parser.add_argument(

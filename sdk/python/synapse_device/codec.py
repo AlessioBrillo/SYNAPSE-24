@@ -8,7 +8,8 @@ samples only — no derived features — so the recorded dataset is complete and
 the firmware stays small and energy-cheap.
 
 This is the SDK-side mirror of ``firmware/common/ble/synapse_raw_frame.c``:
-the byte layout below is the one the pod actually transmits.
+the byte layout below is the one the pod actually transmits, verified
+byte-for-byte against the C encoder by the host parity gate.
 
 Frame layout (little-endian)::
 
@@ -24,19 +25,42 @@ Frame layout (little-endian)::
     12   N..     payload  (sample_count × format_size bytes)
 
 N ≤ 244 so a notification fits a 247-byte BLE MTU.
+
+This module is the CANONICAL Python codec (decision Q7): the host pipeline
+imports it through the ``synapse24.hardware.raw_codec`` shim, so the SDK and
+the pipeline cannot drift apart — there is exactly one implementation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Final
 
 import numpy as np
 
-FRAME_VERSION: Final[int] = 1
-MAX_PAYLOAD: Final[int] = 244
-HEADER_SIZE: Final[int] = 12
+__all__ = [
+    "FLAG_TS_EPOCH_WRAPPED",
+    "FRAME_VERSION",
+    "HEADER_SIZE",
+    "MAX_DROPPED",
+    "MAX_PAYLOAD",
+    "RawCodecError",
+    "RawFormat",
+    "RawHeader",
+    "RawStream",
+    "STREAM_CHANNELS",
+    "decode_frame",
+    "encode_frame",
+    "format_size",
+    "max_samples",
+]
+
+FRAME_VERSION = 1
+MAX_PAYLOAD = 244  # BLE notification payload with a 247-byte negotiated MTU
+HEADER_SIZE = 12
+MAX_DROPPED = 255  # saturation limit of the header loss counter
+
+FLAG_TS_EPOCH_WRAPPED = 0x01
 
 
 class RawCodecError(ValueError):
@@ -44,7 +68,7 @@ class RawCodecError(ValueError):
 
 
 class RawStream(IntEnum):
-    """Logical sample streams (one stream id per LSL stream)."""
+    """Logical sample streams. One stream id per LSL stream."""
 
     ECG = 0x01
     PPG = 0x02
@@ -64,20 +88,11 @@ class RawFormat(IntEnum):
     S32 = 0x03
 
 
-_FORMAT_SIZE: Final[dict[RawFormat, int]] = {RawFormat.S8: 1, RawFormat.S16: 2, RawFormat.S32: 4}
-_FORMAT_DTYPE: Final[dict[RawFormat, str]] = {
-    RawFormat.S8: "<i1",
-    RawFormat.S16: "<i2",
-    RawFormat.S32: "<i4",
-}
+_FORMAT_SIZE = {RawFormat.S8: 1, RawFormat.S16: 2, RawFormat.S32: 4}
+_FORMAT_DTYPE = {RawFormat.S8: "<i1", RawFormat.S16: "<i2", RawFormat.S32: "<i4"}
 
-FLAG_TS_EPOCH_WRAPPED = 0x01
-
-#: Saturation limit of the header loss counter (byte 11).
-MAX_DROPPED: Final[int] = 255
-
-# Channel count per stream, used to reshape the decoded sample block.
-STREAM_CHANNELS: Final[dict[RawStream, int]] = {
+# Channel count per stream, used to reshape the value block into samples.
+STREAM_CHANNELS: dict[RawStream, int] = {
     RawStream.ECG: 1,
     RawStream.PPG: 2,  # red + IR
     RawStream.ACC: 3,
@@ -89,137 +104,174 @@ STREAM_CHANNELS: Final[dict[RawStream, int]] = {
 }
 
 
+def format_size(fmt: RawFormat | int) -> int:
+    """Bytes per sample for a format. Raises for an unsupported format."""
+    try:
+        return _FORMAT_SIZE[RawFormat(fmt)]
+    except (KeyError, ValueError) as exc:
+        raise RawCodecError(f"unsupported sample format: {fmt!r}") from exc
+
+
+def max_samples(fmt: RawFormat | int) -> int:
+    """Count the values of @p fmt that fit in a single frame."""
+    return (MAX_PAYLOAD - HEADER_SIZE) // format_size(fmt)
+
+
 @dataclass(frozen=True)
 class RawHeader:
+    """Decoded frame header; the sample block stays encoded."""
+
     version: int
     stream: RawStream
-    fmt: RawFormat
-    flags: int
-    timestamp_us: int
     sequence: int
+    timestamp_us: int
+    flags: int
     sample_count: int
-    dropped: int = 0
+    sample_format: RawFormat
+    dropped: int
 
+    @property
+    def ts_epoch_wrapped(self) -> bool:
+        """True when the 32-bit device microsecond counter wrapped."""
+        return bool(self.flags & FLAG_TS_EPOCH_WRAPPED)
 
-def format_size(fmt: RawFormat) -> int:
-    """Bytes per sample for ``fmt``."""
-    try:
-        return _FORMAT_SIZE[fmt]
-    except KeyError as exc:
-        raise RawCodecError(f"unknown raw format {fmt}") from exc
+    @property
+    def reserved(self) -> int:
+        """Compatibility alias: the byte used to be a reserved field.
 
-
-def max_samples(fmt: RawFormat, channels: int) -> int:
-    """Max samples that fit in one frame, given format and channel count.
-
-    The budget is the *notification* payload (244 bytes) minus the 12-byte
-    header: a frame that counts only the payload produces a notification the
-    pod (and the host) rejects.
-    """
-    per = format_size(fmt) * channels
-    return (MAX_PAYLOAD - HEADER_SIZE) // per
+        Byte 11 of the header now carries the loss counter (``dropped``).
+        The old name is kept so callers that still read ``header.reserved``
+        keep working.
+        """
+        return self.dropped
 
 
 def encode_frame(
-    stream: RawStream,
+    stream: RawStream | int,
     sequence: int,
     timestamp_us: int,
     flags: int,
-    fmt: RawFormat,
-    samples: np.ndarray,
+    fmt: RawFormat | int,
+    samples: np.ndarray | list[int],
     dropped: int = 0,
 ) -> bytes:
-    """Encode one frame. ``samples`` is shape (sample_count, channels).
+    """Encode one frame.
 
-    The argument order is the one of the host codec
-    (:func:`synapse24.hardware.raw_codec.encode_frame`): the two encoders
-    produce the same bytes for the same frame, and a caller that mixes them
-    gets a frame nobody can decode.
+    Args:
+        stream: Logical stream id.
+        sequence: Wrapping 16-bit sequence number.
+        timestamp_us: Device microseconds of the first sample (low 32 bits used).
+        flags: OR of ``FLAG_*`` bits.
+        fmt: Sample encoding.
+        samples: Interleaved values (channel-minor, flattened).
+        dropped: Samples lost for this stream since the previous transmitted
+            frame (saturated at 255). 0 means "nothing was lost".
 
-    ``dropped`` is the number of samples lost for this stream since the
-    previous transmitted frame (saturated at 255, 0 = nothing lost).
+    Returns:
+        The frame bytes.
+
     """
-    samples = np.asarray(samples)
-    if samples.ndim != 2:
-        raise RawCodecError("samples must be 2-D (sample_count, channels)")
-    count, channels = samples.shape
-    if channels != STREAM_CHANNELS.get(stream, 1):
+    sample_format = RawFormat(fmt)
+    size = format_size(sample_format)
+
+    arr = np.asarray(samples, dtype=np.int64).reshape(-1)
+    count = int(arr.size)
+    if count == 0:
+        raise RawCodecError("frame must carry at least one sample")
+    if count > max_samples(sample_format):
         raise RawCodecError(
-            f"stream {stream.name} expects {STREAM_CHANNELS[stream]} channels, got {channels}"
+            f"{count} samples exceed the {max_samples(sample_format)}-sample frame limit"
         )
-    fs = format_size(fmt)
-    if count * channels * fs > MAX_PAYLOAD - HEADER_SIZE:
-        raise RawCodecError("frame payload exceeds BLE MTU budget")
-    # The wire header carries the number of VALUES (channel-minor) in a single
-    # byte, exactly like the firmware codec.
-    values = count * channels
-    if values > 255:
-        raise RawCodecError("frame carries more than 255 values: too big for the header")
 
-    # The caller's flags are kept: the wrap bit is added when the timestamp
-    # does not fit in 32 bits, the others are the caller's business.
-    flags = int(flags) & 0xFF
-    if timestamp_us >= (1 << 32):
-        flags |= FLAG_TS_EPOCH_WRAPPED
-        timestamp_us &= 0xFFFFFFFF
+    limit = np.int64(1) << np.int64(8 * size)
+    if np.any(arr >= limit // 2) or np.any(arr < -(limit // 2)):
+        raise RawCodecError(f"sample out of range for {sample_format.name}")
 
-    header = bytearray(HEADER_SIZE)
-    header[0] = FRAME_VERSION
-    header[1] = int(stream)
-    header[2:4] = (sequence & 0xFFFF).to_bytes(2, "little")
-    header[4:8] = (timestamp_us & 0xFFFFFFFF).to_bytes(4, "little")
-    header[8] = flags
-    header[9] = values & 0xFF
-    header[10] = int(fmt)
-    header[11] = min(int(dropped), MAX_DROPPED) & 0xFF
-
-    dt = _FORMAT_DTYPE[fmt]
-    payload = samples.astype(dt).tobytes()
-    return bytes(header) + payload
+    header = bytes(
+        [
+            FRAME_VERSION,
+            int(RawStream(stream)),
+            sequence & 0xFF,
+            (sequence >> 8) & 0xFF,
+            timestamp_us & 0xFF,
+            (timestamp_us >> 8) & 0xFF,
+            (timestamp_us >> 16) & 0xFF,
+            (timestamp_us >> 24) & 0xFF,
+            flags & 0xFF,
+            count,
+            int(sample_format),
+            min(int(dropped), MAX_DROPPED) & 0xFF,
+        ]
+    )
+    return header + arr.astype(_FORMAT_DTYPE[sample_format], copy=False).tobytes()
 
 
-def decode_frame(frame: bytes) -> tuple[RawHeader, np.ndarray]:
-    """Decode one frame into ``(header, samples)``.
+def decode_frame(frame: bytes | bytearray | np.ndarray) -> tuple[RawHeader, np.ndarray]:
+    """Decode one frame into its header and a 1-D value array.
 
-    ``samples`` has shape ``(sample_count, channels)`` and dtype matching the
-    frame format (upcast to float for convenience).
+    Args:
+        frame: The raw frame bytes.
+
+    Returns:
+        A ``(header, values)`` tuple. ``values`` is channel-minor and must be
+        reshaped with :data:`STREAM_CHANNELS` by the caller.
+
+    Raises:
+        RawCodecError: If the frame is malformed.
+
     """
-    if len(frame) < HEADER_SIZE:
-        raise RawCodecError(f"frame too short: {len(frame)} < {HEADER_SIZE}")
-    version = frame[0]
-    if version != FRAME_VERSION:
-        raise RawCodecError(f"unsupported frame version {version}")
+    buf = bytes(frame)
+    if len(buf) < HEADER_SIZE:
+        raise RawCodecError(f"frame is {len(buf)} bytes, need at least {HEADER_SIZE}")
 
-    stream = RawStream(frame[1])
-    sequence = int.from_bytes(frame[2:4], "little")
-    ts_low = int.from_bytes(frame[4:8], "little")
-    flags = frame[8]
-    values = frame[9]
-    fmt = RawFormat(frame[10])
-    dropped = frame[11]
+    (
+        version,
+        stream_id,
+        seq_lo,
+        seq_hi,
+        ts0,
+        ts1,
+        ts2,
+        ts3,
+        flags,
+        count,
+        fmt_id,
+        dropped,
+    ) = np.frombuffer(buf[:HEADER_SIZE], dtype=np.uint8)
 
-    channels = STREAM_CHANNELS[stream]
-    fs = format_size(fmt)
-    if values % channels:
-        raise RawCodecError(
-            f"frame declares {values} values, not a multiple of {channels} channels"
-        )
-    count = values // channels
-    expected = HEADER_SIZE + values * fs
-    if len(frame) < expected:
-        raise RawCodecError(f"frame truncated: have {len(frame)} bytes, need {expected}")
+    if int(version) != FRAME_VERSION:
+        raise RawCodecError(f"unsupported frame version {int(version)}")
 
-    header = RawHeader(
-        version=version,
-        stream=stream,
-        fmt=fmt,
-        flags=flags,
-        timestamp_us=ts_low,
-        sequence=sequence,
-        sample_count=count,
-        dropped=dropped,
+    try:
+        stream = RawStream(int(stream_id))
+    except ValueError as exc:
+        raise RawCodecError(f"unknown stream id {int(stream_id)}") from exc
+
+    try:
+        sample_format = RawFormat(int(fmt_id))
+    except ValueError as exc:
+        raise RawCodecError(f"unsupported sample format {int(fmt_id)}") from exc
+
+    size = format_size(sample_format)
+    if count == 0:
+        raise RawCodecError("frame declares zero samples")
+
+    needed = HEADER_SIZE + int(count) * size
+    if len(buf) < needed:
+        raise RawCodecError(f"frame is {len(buf)} bytes, declares {needed}")
+
+    values = np.frombuffer(buf[HEADER_SIZE:needed], dtype=_FORMAT_DTYPE[sample_format]).astype(
+        np.int32
     )
 
-    dt = _FORMAT_DTYPE[fmt]
-    samples = np.frombuffer(frame[HEADER_SIZE:expected], dtype=dt).reshape(count, channels)
-    return header, samples.astype(np.float64)
+    header = RawHeader(
+        version=int(version),
+        stream=stream,
+        sequence=int(seq_lo) | (int(seq_hi) << 8),
+        timestamp_us=int(ts0) | (int(ts1) << 8) | (int(ts2) << 16) | (int(ts3) << 24),
+        flags=int(flags),
+        sample_count=int(count),
+        sample_format=sample_format,
+        dropped=int(dropped),
+    )
+    return header, values

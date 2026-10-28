@@ -5,23 +5,31 @@
 - **A genuine minimum viable multi-signal rig costs ~€90–160.** Cheap breakouts (AD8232 ECG ~€3–7, MAX30102 PPG ~€2–6, MPU-9250/ICM-20948 IMU ~€6–8, ESP32 ~€8, Pi Pico ~€5, breadboard/wires/electrodes ~€30–40) get you ECG+PPG+IMU immediately. Research-grade EEG/fNIRS is the expensive jump: a real EEG channel means either the OpenBCI Ganglion ($624.99), a PiEEG shield (~$350) plus a Raspberry Pi, a Cerelog ESP-EEG ($349.99), or a DIY ADS1299 build.
 - **Be honest about the timeline.** For one person working part-time, expect ~1 month to a solid software foundation, ~2–5 months to individual working single-modality prototypes, ~5–12 months to synchronized multimodal capture, and ~12–24+ months before an edge-AI fusion prototype is meaningful. fNIRS and dry-electrode 24/7 EEG are the hardest parts and should be deferred to later phases.
 
-## Phase 0 Exit Gate Results ✅ COMPLETE
+## Phase 0 Exit Gate Results (targets, not re-verified here)
 
-| Gate | Target | Achieved | Status |
-|------|--------|----------|--------|
-| **WESAD 3-class stress (GroupKFold CV)** | ≥80% | ≥80% | ✅ PASS |
-| **MIT-BIH R-peak Sensitivity** | ≥99.6% | ≥99.6% | ✅ PASS |
-| **MIT-BIH R-peak PPV** | ≥99.6% | ≥99.6% | ✅ PASS |
-| **RMSSD MAE** | <5 ms | <5 ms | ✅ PASS |
-| **Sleep-EDF sleep staging (Cohen's κ)** | Per-subject floor | Cleared | ✅ PASS |
-| **Multi-pod LSL/XDF zero-drop** | 0 dropped samples | 0 dropped | ✅ PASS |
-| **Tier 0 sync residual drift** | ≤10 ms | ≤8 ms | ✅ PASS |
-| **Tier 1 sync residual drift** | ≤1 ms | ≤0.8 ms | ✅ PASS |
-| **Edge AI triage INT8 quantization** | Measured accuracy drop | Within budget | ✅ PASS |
-| **Power budget physics (24h T0 + 10h T1)** | Validated | Validated | ✅ PASS |
-| **Test suite** | Lint, typecheck, 80%+ coverage | All green | ✅ PASS |
+These were written as acceptance targets. They have **not** been re-verified on
+this tree: the committed baseline artifact
+(`docs/baselines/phase0_results.json`) is still `partial` — no headline metric
+has been re-measured on the current host — so none of the rows below counts as
+achieved.
 
-**Phase 0 Status**: **COMPLETE** — All exit criteria met. Ready to proceed to Phase 1 hardware procurement.
+| Gate | Target |
+|------|--------|
+| **WESAD 3-class stress (GroupKFold CV)** | ≥80% |
+| **MIT-BIH R-peak Sensitivity** | ≥99.6% |
+| **MIT-BIH R-peak PPV** | ≥99.6% |
+| **RMSSD MAE** | <5 ms |
+| **Sleep-EDF sleep staging (Cohen's κ)** | Per-subject floor |
+| **Multi-pod LSL/XDF zero-drop** | 0 dropped samples |
+| **Tier 0 sync residual drift** | ≤10 ms |
+| **Tier 1 sync residual drift** | ≤1 ms |
+| **Edge AI triage INT8 quantization** | Measured accuracy drop |
+| **Power budget physics (24h T0 + 10h T1)** | Validated |
+| **Test suite** | Lint, typecheck, 80%+ coverage |
+
+**Phase 0 Status**: **open** — run `scripts/validate_baseline.py` on a host with
+verified datasets, update the artifact, and let `claim_level: verified` (not
+this document) carry the results.
 
 ## Key Findings
 

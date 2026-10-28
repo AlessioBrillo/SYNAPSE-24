@@ -11,9 +11,16 @@ the loop.
 Usage::
 
     synapse discover                 # scan for pods (BLE adapter required)
-    synapse info                     # device info / battery / sensors
+    synapse info                     # static SDK facts, no pod, no guess
+    synapse info --address AA:BB     # live POWER telemetry probe on a pod
     synapse record --source synthetic --out session.xdf --duration 30
+    synapse record --source AA:BB    # real pod: wall-anchored pod stamps
     synapse inspect session.xdf      # streams of an XDF, records of a FIT
+
+``info`` without ``--address`` prints only what the SDK itself knows
+(streams, frame format, GATT surface) and NEVER invents a battery reading:
+battery/current/power numbers come from a real POWER probe on a pod, and a
+probe that gets no frame in time fails instead of printing a placeholder.
 
 The analysis side of the loop lives in the host pipeline and has its own
 entry points, so that the same job is never implemented twice:
@@ -31,13 +38,32 @@ command                      equivalent in the host pipeline
 from __future__ import annotations
 
 import argparse
+import asyncio
 import inspect as _inspect
 import sys
+import time
 from pathlib import Path
+from typing import cast
 
 from . import __version__
+from .codec import RawCodecError, RawStream, decode_frame
+from .transport import (
+    CHAR_POWER,
+    MTU_TARGET,
+    SERVICE_UUID,
+    TransportError,
+)
+from .transport import (
+    build_transport as _build_transport,  # seam: monkeypatched in tests
+)
 
 __all__ = ["main"]
+
+# Channel semantics of the POWER telemetry frame (INA219, 1 Hz, S32 values
+# at MILLI scale == mV / mA / mW / %). Owned by the firmware research
+# service contract; the probe prints these labels, nothing else.
+_POWER_PROBE_TIMEOUT_S = 3.0
+_POWER_LABELS = ("voltage_mv", "current_ma", "power_mw", "battery_pct")
 
 # Commands that moved to the host pipeline, with the replacement to run.
 MOVED_COMMANDS = {
@@ -60,7 +86,7 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--timeout", type=float, default=5.0, help="scan timeout, seconds")
 
     info = sub.add_parser("info", help="device info, battery, sensors")
-    info.add_argument("--address", help="BLE address of the pod")
+    info.add_argument("--address", help="BLE address of the pod (live POWER probe)")
 
     rec = sub.add_parser("record", help="record a session")
     rec.add_argument("--source", default="synthetic", help="synthetic | <ble-address>")
@@ -111,28 +137,135 @@ def _cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def _info_static() -> int:
+    """Print the facts the SDK knows without a pod. Nothing is invented."""
+    from .codec import HEADER_SIZE, MAX_PAYLOAD  # noqa: PLC0415
+    from .record import STREAM_META  # noqa: PLC0415
+
+    print("Synapse Band v1 - static SDK facts (no pod probed)")
+    print("  add --address <pod> to read live POWER telemetry from a pod")
+    for stream, (name, type_, channels, _units) in STREAM_META.items():
+        del stream
+        print(f"  {name} ({type_}): {len(channels)} channels (pod-decided rate)")
+    print(
+        "  POWER telemetry channels: "
+        + ", ".join(_POWER_LABELS)
+        + " (1 Hz, INA219, S32 at milli scale)"
+    )
+    print(f"  frame header: {HEADER_SIZE} bytes, max payload {MAX_PAYLOAD} bytes (codec truth)")
+    print(f"  GATT service: {SERVICE_UUID}, raw chars subscribed per session stream")
+    print(f"  MTU: target {MTU_TARGET} bytes - the link's granted value is reported, not assumed")
+    print("  battery: NOT probed here; numbers come from a pod, never from this command")
+    return 0
+
+
+async def _probe_power(address: str) -> tuple[int | None, tuple[int, ...]]:
+    """Connect, negotiate the MTU and wait for one POWER frame from the pod.
+
+    Raises ``TransportError`` on connect/subscribe failure and when no
+    POWER frame arrives within ``_POWER_PROBE_TIMEOUT_S`` -- a probe that
+    learns nothing says so instead of printing placeholders.
+
+    Returns:
+        ``(granted_mtu, power_values)``: the MTU the link granted (or None
+        when the backend cannot negotiate) and the four power channels.
+
+    """
+    transport = _build_transport(address)
+    await transport.connect(address)
+    try:
+        granted = await transport.request_mtu(MTU_TARGET)
+        received: list[bytes] = []
+
+        def _on_power(_uuid: str, frame: bytes) -> None:
+            if not received:
+                received.append(frame)
+
+        await transport.subscribe(CHAR_POWER, _on_power)
+        deadline = time.monotonic() + _POWER_PROBE_TIMEOUT_S
+        try:
+            while not received:
+                if time.monotonic() >= deadline:
+                    raise TransportError(
+                        f"no POWER frame arrived within {_POWER_PROBE_TIMEOUT_S:.2f} s "
+                        f"from {address}"
+                    )
+                await asyncio.sleep(0.02)
+        finally:
+            try:
+                await transport.unsubscribe(CHAR_POWER)
+            except Exception:  # noqa: BLE001 - unsubscribe is best effort
+                pass
+
+        header, values = decode_frame(received[0])
+        if header.stream is not RawStream.POWER:
+            raise TransportError(
+                f"{address} delivered a {header.stream.name} frame to the POWER characteristic"
+            )
+        if len(values) < len(_POWER_LABELS):
+            raise TransportError(
+                f"POWER frame carries {len(values)} values, expected {len(_POWER_LABELS)}"
+            )
+        return granted, tuple(int(value) for value in values[: len(_POWER_LABELS)])
+    finally:
+        try:
+            await transport.disconnect()
+        except Exception:  # noqa: BLE001 - disconnect is best effort
+            pass
+
+
 def _cmd_info(args: argparse.Namespace) -> int:
-    print("Device: SYN-SYNTH-0000")
-    print("  Hardware: band-v1.0")
-    print("  Firmware: 1.0.0")
-    print("  Sensors: ECG(AD8232), PPG(MAX30102), IMU(ICM-20948), Temp(TMP117), Power(INA219)")
-    print("  Battery: 100% (Charging: No)")
-    print("  Cloud: Disconnected (offline mode)")
+    if not args.address:
+        return _info_static()
+    try:
+        granted, values = asyncio.run(_probe_power(args.address))
+    except (RawCodecError, TransportError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    granted_text = "unknown (backend does not negotiate)" if granted is None else f"{granted}"
+    print(f"pod {args.address}: POWER telemetry (INA219, 1 Hz)")
+    print(f"  MTU granted: {granted_text} (target {MTU_TARGET})")
+    for label, value in zip(_POWER_LABELS, values, strict=True):
+        print(f"  {label} = {value}")
     return 0
 
 
 def _cmd_record(args: argparse.Namespace) -> int:
-    if args.source != "synthetic":
-        print(
-            f"error: BLE recording from {args.source} is not implemented yet; "
-            "use the synthetic source or the host pipeline",
-            file=sys.stderr,
-        )
-        return 2
-    from .record import record_synthetic
+    from .record import (  # noqa: PLC0415
+        BleRecordError,
+        XdfRoundTripError,
+        record_ble,
+        record_synthetic,
+    )
 
-    record_synthetic(Path(args.out), duration_s=args.duration)
-    print(f"recorded {args.out} ({args.duration}s, synthetic)")
+    try:
+        if args.source.lower() == "synthetic":
+            record_synthetic(Path(args.out), duration_s=args.duration)
+            print(f"recorded {args.out} ({args.duration} s, synthetic)")
+            return 0
+        summary = record_ble(
+            args.source,
+            Path(args.out),
+            duration_s=args.duration,
+            transport=_build_transport(args.source),
+        )
+    except (BleRecordError, TransportError, XdfRoundTripError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    granted = summary["granted_mtu"]
+    granted_text = "unknown (backend does not negotiate)" if granted is None else str(granted)
+    frames = cast("dict[str, int]", summary["frames"])
+    rates = cast("dict[str, float]", summary["rate_hz"])
+    print(f"recorded {args.out} ({args.duration} s from {args.source})")
+    print(f"  MTU granted: {granted_text} (target {MTU_TARGET})")
+    for name, count in frames.items():
+        rate = rates.get(name, 0.0)
+        if rate > 0.0:
+            print(f"  {name}: {count} frames, {rate:.3f} Hz measured")
+        else:
+            print(f"  {name}: {count} frames, rate unmeasured (irregular)")
+    print(f"  dropped samples (loss counters carried by frames): {summary['dropped']}")
     return 0
 
 
@@ -143,7 +276,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         return 1
     suffix = path.suffix.lower()
     if suffix == ".fit":
-        from .fit import read_fit
+        from .fit import read_fit  # noqa: PLC0415
 
         parsed = read_fit(path)
         print(f"FIT: {path} ({path.stat().st_size} bytes)")
@@ -154,7 +287,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
             print(f"    ... {parsed.n_records - 10} more records")
         return 0
     if suffix in (".xdf", ".xdfz"):
-        from .xdf import read_xdf
+        from .xdf import read_xdf  # noqa: PLC0415
 
         session = read_xdf(path)
         print(f"XDF: {path} ({path.stat().st_size} bytes)")

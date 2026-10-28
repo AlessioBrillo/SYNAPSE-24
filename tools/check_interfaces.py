@@ -322,6 +322,27 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
             )
 
 
+def check_bleak_isolated(report: Report) -> None:
+    """Bleak imports live only in the SDK transport.
+
+    One BLE library surface, one place to review its use (decision Q7): every
+    client goes through ``synapse_device.transport``'s injected protocol, so a
+    bleak version bump or misbehaviour cannot hide in the AGPL packages.
+    """
+    pattern = re.compile(r"^\s*(?:import bleak\b|from bleak\b)", re.MULTILINE)
+    src_dir = DEFAULT_ROOT / "src"
+    for path in sorted(src_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        match = pattern.search(source)
+        if match:
+            line = source[: match.start()].count("\n") + 1
+            report.fail(
+                f"{path.relative_to(DEFAULT_ROOT)} imports bleak directly (line {line}): "
+                "the BLE library must stay behind synapse_device.transport "
+                "(make.py: one import surface, injected everywhere else)"
+            )
+
+
 def check_schemas_valid(report: Report, schemas_dir: Path) -> None:
     """Each payload schema file must be valid JSON with required structure."""
     if not schemas_dir.is_dir():
@@ -446,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
     check_schemas_valid(report, args.schemas_dir)
 
     check_gatt_uuids_consistent(report, args.gatt_contract)
+
+    check_bleak_isolated(report)
 
     if report.ok:
         print("INTERFACES OK")

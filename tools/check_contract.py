@@ -15,6 +15,8 @@ Run:
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -33,9 +35,26 @@ RESEARCH_C = FIRMWARE_DIR / "ble" / "ble_research_service.c"
 # tools/generate_contracts.py): the firmware includes this header instead of
 # carrying a second copy of the contract.
 CONTRACT_H = FIRMWARE_DIR / "ble" / "synapse_contract_generated.h"
-RAW_CODEC_PY = ROOT / "src" / "synapse24" / "hardware" / "raw_codec.py"
+# Decision Q7: there is ONE codec implementation, and it lives in the device
+# SDK; src/synapse24/hardware/raw_codec.py is a pure re-export of it. The
+# contract must never read the shim again: a re-export defines nothing, so
+# pointing here would let every constant drift silently.
+RAW_CODEC_PY = ROOT / "sdk" / "python" / "synapse_device" / "codec.py"
 BUILD_SCRIPT = ROOT / "scripts" / "build_and_flash_firmware.py"
 BRINGUP_DOC = ROOT / "HARDWARE_BRINGUP.md"
+# FIT developer-field contract and every source that mirrors it. The declared
+# directory is scanned for its .c/.h sources; the rest are single files.
+FIT_CONTRACT = ROOT / "contracts" / "fit_developer_fields.json"
+FIT_WRITER_H = FIRMWARE_DIR / "fit" / "fit_writer.h"
+FIT_SOURCES = (
+    FIRMWARE_DIR / "fit",
+    ROOT / "scripts" / "export_session_fit.py",
+    ROOT / "worker" / "hrv_worker.py",
+    ROOT / "sdk" / "python" / "synapse_device" / "fit.py",
+)
+# C source suffixes when a FIT source is a directory.
+_FIT_SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
+
 
 # MAX30102 sample-rate register -> Hz, from the datasheet.
 PPG_RATE_REGISTERS = {0x02: 50, 0x03: 64, 0x04: 100, 0x05: 200, 0x06: 400, 0x07: 800}
@@ -219,32 +238,40 @@ def _uuid_bytes_in_source(source: str, uuid_str: str) -> bool:
 
 
 def check_raw_frame_contract(hw: dict, report: Report) -> None:
-    """raw_frame.* must mirror the codec constants on both sides."""
+    """raw_frame.* must mirror the codec constants everywhere they are declared.
+
+    The contract reads the SDK's canonical codec (decision Q7); the repo's
+    ``raw_codec.py`` shim re-exports it, so a drift between the two is caught
+    here against the one implementation that actually writes the bytes.
+    """
     raw = hw.get("raw_frame", {})
     codec = RAW_CODEC_PY.read_text(encoding="utf-8") if RAW_CODEC_PY.is_file() else ""
+    if not codec:
+        report.check(False, f"the canonical codec is missing: {RAW_CODEC_PY}")
+        return
 
     report.check(
         f"MAX_PAYLOAD = {raw.get('max_payload_bytes')}" in codec,
-        f"raw_codec.MAX_PAYLOAD does not match raw_frame.max_payload_bytes="
+        f"codec.MAX_PAYLOAD does not match raw_frame.max_payload_bytes="
         f"{raw.get('max_payload_bytes')}",
     )
     report.check(
         f"HEADER_SIZE = {raw.get('header_bytes')}" in codec,
-        f"raw_codec.HEADER_SIZE does not match raw_frame.header_bytes={raw.get('header_bytes')}",
+        f"codec.HEADER_SIZE does not match raw_frame.header_bytes={raw.get('header_bytes')}",
     )
 
     for name, value in raw.get("stream_ids", {}).items():
         expected = f"{name.upper()} = 0X{int(value):02X}"
         report.check(
             expected in codec.upper(),
-            f"raw_codec.py does not define RawStream.{name.upper()} = 0x{int(value):02X}",
+            f"the canonical codec does not define RawStream.{name.upper()} = 0x{int(value):02X}",
         )
 
     for name, value in raw.get("sample_formats", {}).items():
         expected = f"{name.upper()} = 0X{int(value):02X}"
         report.check(
             expected in codec.upper(),
-            f"raw_codec.py does not define RawFormat.{name.upper()} = 0x{int(value):02X}",
+            f"the canonical codec does not define RawFormat.{name.upper()} = 0x{int(value):02X}",
         )
 
 
@@ -307,18 +334,169 @@ def check_consumer_service_contract(hw: dict, report: Report) -> None:
         f"consumer rate must be 1..rate_max<=10 Hz, got rate={rate!r} max={rate_max!r}",
     )
 
-    # The strategy input's malformed 6-group UUID (53594E41-...) must be gone
-    # from every source: it is not a valid UUID and UUID.fromString throws.
-    stale_uuid = "53594E41"
-    stale_hits = []
-    for path in [GATT_H, RESEARCH_C, RAW_CODEC_PY, HARDWARE_YAML]:
-        if path.is_file():
-            text = path.read_text(encoding="utf-8")
-            if stale_uuid in text:
-                stale_hits.append(path.name)
+
+# The strategy input's malformed 6-group UUID ("SYNAPSE-BAND", ASCII) —
+# written as e.g. 53594E41 followed by dash-separated hex groups — is not a
+# valid UUID and UUID.fromString/Java throws on it. It must never reappear in
+# a source that builds or parses a BLE filter; the contract's UUIDs come from
+# config/hardware.yaml (via tools/generate_contracts.py) only.
+_STALE_UUID_PREFIX = "53594E41"
+_STALE_UUID_RE = re.compile(rf"\b{_STALE_UUID_PREFIX}(?:-[0-9A-Fa-f]{{2,12}}){{2,}}\b")
+# The tree-wide scan skips archives and build/cache material. The strategy
+# directory is exempt because it archives the original external input for
+# cross-reference; re-entry anywhere that ships code is a violation.
+_STALE_SCAN_SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "SYNAPSE-AVERYN-STRATEGY"}
+_STALE_SCAN_SKIP_HIDDEN = (".",)
+_STALE_SCAN_SUFFIXES = {
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cfg",
+    ".cmake",
+    ".conf",
+    ".gradle",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".kt",
+    ".kconfig",
+    ".md",
+    ".py",
+    ".pyi",
+    ".sh",
+    ".toml",
+    ".ts",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+
+
+def check_stale_uuid_gone_from_sources(scan_root: Path, report: Report) -> None:
+    """Scan every text source under ``scan_root`` for the malformed UUID.
+
+    The old check read a fixed list of four files, which is why the prefix
+    could come back through a fifth. The scan now walks the whole tree. The
+    literal ``0x53594E41 / 0x53594E41u`` application version ("SYNA") is not a
+    UUID: only dash-separated multi-group forms match.
+    """
+    hits: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(scan_root):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not name.startswith(_STALE_SCAN_SKIP_HIDDEN) and name not in _STALE_SCAN_SKIP_DIRS
+        ]
+        folder = Path(dirpath)
+        for name in filenames:
+            path = folder / name
+            if path.suffix.lower() not in _STALE_SCAN_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if _STALE_UUID_RE.search(text):
+                try:
+                    hits.append(str(path.relative_to(ROOT)))
+                except ValueError:
+                    hits.append(str(path))
     report.check(
-        not stale_hits,
-        f"deprecated 6-group UUID prefix {stale_uuid} still present in: {', '.join(stale_hits)}",
+        not hits,
+        f"deprecated 6-group UUID prefix {_STALE_UUID_PREFIX}-... still present in: "
+        f"{', '.join(hits)} (the contract's UUIDs come from config/hardware.yaml; "
+        "see tools/generate_contracts.py)",
+    )
+
+
+# Not a field name: the contract-id -> wire definition-number mapping macro
+# that fit_writer.h derives from the ids (it is a function of the contract,
+# never a third spelling of a field).
+_DERIVED_FIELD_MACROS = {"SYNAPSE_DEV_FIELD_DEFINITION_NUM"}
+
+
+def check_fit_developer_names(
+    report: Report,
+    contract: Path | None = None,
+    writer: Path | None = None,
+    sources: list[Path] | tuple[Path, ...] | None = None,
+) -> None:
+    """FIT ``SYNAPSE_DEV_FIELD_*`` literals must match the contract, both ways.
+
+    ``contracts/fit_developer_fields.json`` is the single source of truth for
+    the developer fields' ids and names (field IDs are immutable once a
+    consumer imports files). Every literal in a FIT-relevant source must be
+    one of the contract's ``c_name`` values, and every canonical name must be
+    present in ``fit_writer.h`` because that header is the wiring both
+    exporters mirror. A check this strict is the point: the field ids and
+    names cannot be renegotiated by writing a third copy in code.
+    """
+    contract = contract if contract is not None else FIT_CONTRACT
+    writer = writer if writer is not None else FIT_WRITER_H
+    sources = sources if sources is not None else FIT_SOURCES
+
+    try:
+        descriptor = json.loads(contract.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        report.check(False, f"cannot read {contract} ({FIT_CONTRACT.name}): {exc}")
+        return
+    if not isinstance(descriptor, dict):
+        report.check(False, f"{FIT_CONTRACT.name} must be a JSON object with a 'fields' list")
+        return
+    fields = descriptor.get("fields", [])
+    canonical = {
+        field_desc.get("c_name")
+        for field_desc in fields
+        if isinstance(field_desc, dict) and field_desc.get("c_name")
+    }
+    report.check(bool(canonical), f"{FIT_CONTRACT.name} declares no c_name values")
+    declared_count = descriptor.get("num_fields")
+    report.check(
+        canonical and len(canonical) == declared_count,
+        f"{FIT_CONTRACT.name} declares num_fields={declared_count!r} but "
+        f"{len(canonical)} c_name values",
+    )
+
+    checked_paths: list[Path] = []
+    for entry in sources:
+        source_dir_or_file_path = Path(entry)
+        if source_dir_or_file_path.is_dir():
+            checked_paths.extend(
+                path
+                for path in sorted(source_dir_or_file_path.rglob("*"))
+                if path.is_file() and path.suffix.lower() in _FIT_SOURCE_SUFFIXES
+            )
+        elif source_dir_or_file_path.is_file():
+            checked_paths.append(source_dir_or_file_path)
+        else:
+            report.check(False, f"FIT source is missing: {source_dir_or_file_path}")
+
+    for path in checked_paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            report.check(False, f"cannot read FIT source {path}: {exc}")
+            continue
+        used = set(re.findall(r"SYNAPSE_DEV_FIELD_\w+", text))
+        unknown = sorted(used - canonical - _DERIVED_FIELD_MACROS)
+        report.check(
+            not unknown,
+            f"{path.name} uses FIT fields not in {FIT_CONTRACT.name}: {', '.join(unknown)} "
+            "(add them to the contract, named exactly once)",
+        )
+
+    if not writer.is_file():
+        report.check(False, f"the FIT writer header is missing: {writer}")
+        return
+    header = writer.read_text(encoding="utf-8")
+    missing = sorted(name for name in canonical if f"#define {name}" not in header)
+    report.check(
+        not missing,
+        f"{writer.name} does not define: {', '.join(missing)} "
+        f"(the contract {FIT_CONTRACT.name} and the header are one table)",
     )
 
 
@@ -474,6 +652,31 @@ def main() -> int:
         default=BRINGUP_YAML,
         help="Path to the bringup overrides (default: config/hardware_bringup.yaml)",
     )
+    parser.add_argument(
+        "--fit-contract",
+        type=Path,
+        default=None,
+        help="Path to the FIT developer-fields contract (default: contracts/fit_developer_fields.json)",
+    )
+    parser.add_argument(
+        "--fit-writer",
+        type=Path,
+        default=None,
+        help="Path to the firmware FIT writer header (default: firmware/esp32_band/fit/fit_writer.h)",
+    )
+    parser.add_argument(
+        "--fit-sources",
+        type=Path,
+        action="append",
+        default=None,
+        help="Files/directories holding SYNAPSE_DEV_FIELD_* literals; repeatable",
+    )
+    parser.add_argument(
+        "--stale-scan-root",
+        type=Path,
+        default=None,
+        help="Root of the tree scanned for the stale 6-group UUID (default: repo root)",
+    )
     args = parser.parse_args()
 
     hw = _load(args.hardware_yaml)
@@ -487,6 +690,13 @@ def main() -> int:
     check_raw_frame_contract(hw, report)
     check_canonical_firmware_paths(report)
     check_no_legacy_rate_literals(report)
+    check_stale_uuid_gone_from_sources(args.stale_scan_root or ROOT, report)
+    check_fit_developer_names(
+        report,
+        contract=args.fit_contract,
+        writer=args.fit_writer,
+        sources=args.fit_sources if args.fit_sources else None,
+    )
 
     if args.verbose:
         print(f"ran {report.checks_run} contract checks")

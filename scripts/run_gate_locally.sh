@@ -26,13 +26,13 @@ step uv run python tools/check_interfaces.py
 step uv run python tools/check_baseline_claim.py
 step uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --dry-run --verbose
 step uv run python -m pytest tests/test_phase1_dry_run.py -v --no-cov
-step uv run python -m pytest sdk/python/tests -v --no-cov
 step uv run python -m pytest tests/test_format_conformance.py -v --no-cov
 step uv run python -m pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
 step uv run python -m pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
-step uv run python -m pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py -v --no-cov -p no:cacheprovider
+step uv run python -m pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py -v --no-cov -p no:cacheprovider
 
-# The local host gate compiles with zig cc (clang); the server compiles with
+# Local-only extra (not in .woodpecker/ci.yml; tests/test_gate_parity.py
+# declares it): the local host compiles with zig cc (clang), the server with
 # gcc. A source that only clang accepts would pass here and fail there.
 step uv run python scripts/gcc_probe.py
 

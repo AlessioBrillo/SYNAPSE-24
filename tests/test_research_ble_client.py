@@ -22,11 +22,14 @@ from synapse24.hardware.raw_codec import RawFormat, RawStream, encode_frame
 from synapse24.hardware.research_ble_client import (
     GATT_CHAR_UUIDS,
     GATT_SERVICE_UUID,
+    MTU_FLOOR,
+    MTU_TARGET,
     SYNC_REQUEST_SIZE,
     ClockSyncResult,
+    MtuFloorError,
     ResearchBleClient,
 )
-from synapse24.hardware.research_client import ResearchStreamDecoder
+from synapse24.hardware.research_client import DeviceClock, ResearchStreamDecoder
 from tests.test_research_service_hil import SyntheticPod  # noqa: E402
 
 
@@ -37,7 +40,7 @@ def _run(coro):
 
 @dataclass
 class FakeTransport:
-    """Records writes and replays a scripted notification stream."""
+    """The SDK Transport surface, scripted: writes recorded, notify replayed."""
 
     notifications: dict[str, list[bytes]] = field(default_factory=dict)
     connected: bool = False
@@ -51,20 +54,20 @@ class FakeTransport:
     async def disconnect(self) -> None:
         self.connected = False
 
-    async def start_notify(self, char_uuid: str, callback) -> None:  # noqa: ANN001
+    async def subscribe(self, char_uuid: str, callback) -> None:  # noqa: ANN001
         self.subscribed.append(char_uuid)
         # Deliver the scripted notifications immediately, in order.
         for payload in self.notifications.get(char_uuid, []):
-            callback(self, bytearray(payload))
+            callback(char_uuid, bytearray(payload))
 
-    async def stop_notify(self, char_uuid: str) -> None:
+    async def unsubscribe(self, char_uuid: str) -> None:
         if char_uuid in self.subscribed:
             self.subscribed.remove(char_uuid)
 
-    async def write_gatt_char(self, char_uuid: str, data: bytes) -> None:
+    async def write(self, char_uuid: str, data: bytes, response: bool = True) -> None:
         self.writes.append((char_uuid, bytes(data)))
 
-    async def read_gatt_char(self, char_uuid: str) -> bytes:
+    async def read(self, char_uuid: str) -> bytes:
         return self.sync_reply
 
 
@@ -257,7 +260,7 @@ class DriftingPodTransport(FakeTransport):
         skew_us = elapsed_s * self.drift_ppm  # ppm in, microseconds out
         return int(host_s * 1_000_000.0 + skew_us + self.offset_ms * 1000.0)
 
-    async def read_gatt_char(self, char_uuid: str) -> bytes:
+    async def read(self, char_uuid: str) -> bytes:
         # The request reaches the pod one radio leg after the hub sent it;
         # the pod turns around, and the reply arrives one leg later, so the
         # host observes (turnaround + 2 * radio) of elapsed time.
@@ -338,3 +341,138 @@ def test_sync_exchanges_survive_a_rejected_exchange() -> None:
     assert model.record_exchange(bogus) is False
     assert model.n_exchanges == 5
     assert model.fit() == clean, "a rejected exchange must not move the model"
+
+
+# ---------------------------------------------------------------------------
+# Verified MTU (decision Q5) and typed restart semantics (defects N2/N3): the
+# silent failure modes of a reconnect-heavy soak.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NegotiatingTransport(FakeTransport):
+    """A transport that can negotiate the ATT MTU, as the SDK transport can."""
+
+    granted_mtu: int = MTU_TARGET
+    requested_mtu: int | None = None
+
+    async def request_mtu(self, mtu: int) -> int:
+        self.requested_mtu = mtu
+        return self.granted_mtu
+
+
+def test_mtu_target_is_requested_and_the_real_value_kept() -> None:
+    """The hub asks for 247 and stores what the link actually granted."""
+    transport = NegotiatingTransport(notifications=_pod_frames(0.2), granted_mtu=185)
+    client = ResearchBleClient(address="SYNAPSE-BAND", transport=transport)
+
+    _run(client.connect())
+
+    assert transport.requested_mtu == MTU_TARGET
+    assert transport.subscribed, "still connected"
+    assert client.mtu == 185
+
+
+def test_mtu_at_the_floor_is_accepted() -> None:
+    frames = _pod_frames(0.2)
+    transport = NegotiatingTransport(notifications=frames, granted_mtu=MTU_FLOOR)
+    client = ResearchBleClient(address="SYNAPSE-BAND", transport=transport)
+
+    _run(client.connect())
+
+    assert transport.subscribed
+    assert client.mtu == MTU_FLOOR
+    assert client.is_clean()
+
+
+def test_mtu_below_the_floor_refuses_the_session() -> None:
+    """Refuse a link whose MTU cannot carry the ECG budget.
+
+    A session at the default MTU 23 records a tenth of the ECG rate while
+    pretending to work; the hub refuses it instead (decision Q5).
+    """
+    frames = _pod_frames(0.2)
+    transport = NegotiatingTransport(notifications=frames, granted_mtu=23)
+    client = ResearchBleClient(address="SYNAPSE-BAND", transport=transport)
+
+    with pytest.raises(MtuFloorError, match="below the floor"):
+        _run(client.connect())
+
+    assert transport.subscribed == [], "no subscription on a starved link"
+    assert client.mtu == 23
+
+
+def test_transport_without_mtu_negotiation_reports_unknown() -> None:
+    """Without a request_mtu surface, the MTU stays UNKNOWN.
+
+    Never assumed: the calibration value is None instead of a made-up size.
+    """
+    transport = FakeTransport(notifications=_pod_frames(0.2))
+    client = ResearchBleClient(address="SYNAPSE-BAND", transport=transport)
+
+    _run(client.connect())
+
+    assert transport.subscribed
+    assert client.mtu is None
+
+
+def test_wrap_flag_counts_even_when_the_stamp_no_longer_regresses() -> None:
+    """Defect N3: the wrap flag alone was dead code.
+
+    When the link stalls across the 2^32-us edge, the next frame's low stamp
+    can already sit ABOVE the previous one while its flag still says
+    "wrapped" — the numeric regression never fires and 71 minutes of pod
+    time went missing.
+    """
+    clock = DeviceClock()
+    assert clock.extend(0xFFFFFFF0) == 0xFFFFFFF0
+
+    extended = clock.extend(0x00100000, flags=1)
+
+    assert clock.wraps == 1
+    assert extended == (1 << 32) + 0x00100000
+
+
+def test_wrap_flag_and_regression_do_not_double_count() -> None:
+    clock = DeviceClock()
+    clock.extend(0xFFFFFFF0)
+
+    clock.extend(0x100, flags=1)  # regression AND flag: one wrap, once
+
+    assert clock.wraps == 1
+
+
+def test_firmware_restart_is_a_typed_event_not_65k_lost_frames() -> None:
+    """Defect N2: a sequence+clock restart was read as a ~65533-frame gap.
+
+    The pod reboots under the link: its sequence and its clock both count
+    from zero again. That is a fact to report, not a loss to gate on.
+    """
+    decoder = ResearchStreamDecoder()
+    values = [100, 200]
+    decoder.feed(encode_frame(RawStream.ECG, 10, 1_000_000, 0, RawFormat.S16, values))
+    decoder.feed(encode_frame(RawStream.ECG, 11, 1_002_000, 0, RawFormat.S16, values))
+
+    # The pod restarts mid-link: sequence 0, pod clock back at ~4 ms.
+    decoder.feed(encode_frame(RawStream.ECG, 0, 4_000, 0, RawFormat.S16, values))
+
+    assert decoder.restarts == {RawStream.ECG: 1}
+    assert decoder.drops == [], f"a restart must not be a loss: {decoder.drops}"
+    assert decoder.is_clean()
+
+
+def test_a_plain_giant_sequence_gap_is_still_a_gap() -> None:
+    """Keep real losses visible under the restart rule.
+
+    A huge forward jump without a clock regression stays a DropEvent.
+    """
+    decoder = ResearchStreamDecoder()
+    values = [100, 200]
+    decoder.feed(encode_frame(RawStream.ECG, 10, 1_000_000, 0, RawFormat.S16, values))
+
+    decoder.feed(encode_frame(RawStream.ECG, 1000, 1_998_000, 0, RawFormat.S16, values))
+
+    assert decoder.restarts == {}, "no clock regression: this is a real gap"
+    assert len(decoder.drops) == 1
+    assert decoder.drops[0].gap == 989
+    assert not decoder.is_clean()

@@ -18,6 +18,10 @@ from __future__ import annotations
 import struct
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from synapse_device.transport import Transport
 
 # GATT UUIDs — must match firmware/common/ble/ble_lsl_bridge.h
 # and config/hardware_bringup.yaml bringup.ble.characteristics.
@@ -179,8 +183,10 @@ class ClockSyncHost:
 class SynapseBleClient:
     """Async BLE client for SYNAPSE-24 pods (bringup + streaming).
 
-    ``bleak`` is imported lazily so the module stays importable (and
-    testable) on hosts without BLE hardware.
+    The transport is the SDK protocol (``synapse_device.transport.Transport``):
+    bleak satisfies it at runtime, a synthetic pod in tests — and this module
+    keeps no import of bleak at all, so the BLE library has exactly one
+    import surface in the codebase.
     """
 
     def __init__(self, address: str | None = None, device_name_filter: str = "SYNAPSE") -> None:
@@ -195,38 +201,32 @@ class SynapseBleClient:
         return int(time.time() * 1_000_000)
 
     async def scan(self, timeout_s: float = 10.0) -> str | None:
-        """Scan for a SYNAPSE device; return its address or ``None``."""
-        from bleak import BleakScanner
+        """Scan for a SYNAPSE device via the SDK transport; return its address."""
+        from synapse_device.transport import discover
 
-        devices = await BleakScanner.discover(timeout=timeout_s)
-        filt = self.device_name_filter.upper()
-        for d in devices:
-            if (d.name or "").upper().find(filt) >= 0:
-                addr = d.address
-                if isinstance(addr, str):
-                    self.address = addr
-                    return addr
-        return None
+        address = await discover(self.device_name_filter, timeout_s=timeout_s)
+        if address is not None:
+            self.address = address
+        return address
 
-    async def sync_exchange(self, client: object, num_exchanges: int = 1) -> list[SyncExchange]:
-        """Run ``num_exchanges`` ping-pong exchanges on an open BleakClient.
+    async def sync_exchange(
+        self, transport: "Transport", num_exchanges: int = 1
+    ) -> list[SyncExchange]:
+        """Run ``num_exchanges`` ping-pong exchanges over a connected transport.
 
-        ``client`` is typed as ``object`` so this module keeps no hard dependency
-        on bleak at import time, so the attribute accesses are annotated
-        explicitly here. This was previously two mypy errors that kept the
-        entire lint job -- and therefore the test job -- red.
+        The transport is the SDK ``Transport`` protocol (bleak satisfies it at
+        runtime, the synthetic pod in tests) — read-after-write on the SYNC
+        characteristic, NTP-style offset/RTT as the firmware's
+        clock_sync.cpp computes it.
         """
-        from bleak import BleakClient
-
         results: list[SyncExchange] = []
-        ble_client: BleakClient = client  # type: ignore[assignment]
         for _ in range(num_exchanges):
             self._next_seq += 1
             pod_send = self.now_us()
-            await ble_client.write_gatt_char(
+            await transport.write(
                 GATT_CHAR_UUID_SYNC, pack_sync_request(self._next_seq, pod_send), response=False
             )
-            raw = bytes(await ble_client.read_gatt_char(GATT_CHAR_UUID_SYNC))
+            raw = bytes(await transport.read(GATT_CHAR_UUID_SYNC))
             pod_recv = self.now_us()
             seq, hub_recv, hub_send = unpack_sync_response(raw)
             results.append(

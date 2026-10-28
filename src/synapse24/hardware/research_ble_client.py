@@ -17,9 +17,10 @@ import struct
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
+from synapse_device.transport import Transport
 
 from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
 from synapse24.hardware.raw_codec import RawStream, decode_frame
@@ -28,6 +29,9 @@ from synapse24.hardware.research_client import ResearchStreamDecoder
 __all__ = [
     "GATT_CHAR_UUIDS",
     "GATT_SERVICE_UUID",
+    "MTU_FLOOR",
+    "MTU_TARGET",
+    "MtuFloorError",
     "ResearchBleClient",
     "SYNC_REQUEST_SIZE",
     "SYNC_RESPONSE_SIZE",
@@ -50,21 +54,16 @@ SYNC_CHAR_UUID = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
 SYNC_REQUEST_SIZE = struct.calcsize("<Iq")  # 12: seq + pod_send_us
 SYNC_RESPONSE_SIZE = struct.calcsize("<Iqq")  # 20: seq + pod_recv_us + pod_send_us
 
+# The ATT MTU is verified, not assumed. The ECG budget (50 S16 values per
+# frame at 500 Hz = 10 notification/s) is infeasible at the default MTU 23; the
+# hub requests the 247 target and refuses the link below the floor instead of
+# silently recording 1/10th of the sample rate for hours (decision Q5).
+MTU_TARGET = 247
+MTU_FLOOR = 115
 
-class Transport(Protocol):
-    """Minimal BLE surface the client needs; bleak satisfies this at runtime."""
 
-    async def connect(self, address: str) -> None: ...
-
-    async def disconnect(self) -> None: ...
-
-    async def start_notify(self, char_uuid: str, callback: Callable[[Any, bytes], Any]) -> None: ...
-
-    async def stop_notify(self, char_uuid: str) -> None: ...
-
-    async def write_gatt_char(self, char_uuid: str, data: bytes) -> None: ...
-
-    async def read_gatt_char(self, char_uuid: str) -> bytes: ...
+class MtuFloorError(RuntimeError):
+    """The link's negotiated ATT MTU can't carry the ECG throughput budget."""
 
 
 @dataclass
@@ -118,6 +117,9 @@ class ResearchBleClient:
             (Guardian Principle 3).
         lsl_clock_fn: LSL clock source, injectable for tests. Defaults to
             ``pylsl.local_clock``.
+        mtu: Negotiated ATT MTU (set by :meth:`connect`; None when the
+            transport cannot negotiate, so the value stays verified-or-unknown
+            rather than assumed).
     """
 
     address: str
@@ -128,6 +130,7 @@ class ResearchBleClient:
     sync_history: list[ClockSyncResult] = field(default_factory=list)
     clock_model: PodClockModel | None = None
     lsl_clock_fn: Callable[[], float] | None = None
+    mtu: int | None = None
     _running: bool = False
 
     def _lsl_now_us(self) -> int:
@@ -139,23 +142,51 @@ class ResearchBleClient:
             clock = local_clock
         return int(float(clock()) * 1_000_000)
 
+    async def _negotiate_mtu(self) -> int | None:
+        """Request the target ATT MTU and verify what the link actually grants.
+
+        Returns:
+            The negotiated MTU, or None when the transport cannot negotiate.
+
+        Raises:
+            MtuFloorError: On a link below :data:`MTU_FLOOR`; a session at the
+                default MTU 23 records a tenth of the ECG rate for hours and
+                pretends it worked, so the hub refuses it instead.
+        """
+        request = getattr(self.transport, "request_mtu", None)
+        if request is None:
+            return None
+        mtu = await request(MTU_TARGET)
+        if mtu is None:
+            return None
+        # Store the verified value even when it is refused: the caller sees
+        # what the link really has, not a sanitised number.
+        self.mtu = int(mtu)
+        if mtu < MTU_FLOOR:
+            raise MtuFloorError(
+                f"negotiated ATT MTU {mtu} is below the floor {MTU_FLOOR} "
+                f"(target {MTU_TARGET}): the ECG budget is infeasible there"
+            )
+        return self.mtu
+
     async def connect(self) -> None:
         """Connect and subscribe to the requested raw streams."""
         await self.transport.connect(self.address)
+        self.mtu = await self._negotiate_mtu()
         for stream in self.streams:
             char = GATT_CHAR_UUIDS[stream]
 
             def handler(_sender: Any, payload: bytes, *, _char: str = char) -> None:
                 self._on_notification(_char, payload)
 
-            await self.transport.start_notify(char, handler)
+            await self.transport.subscribe(char, handler)
         self._running = True
 
     async def disconnect(self) -> None:
         for stream in self.streams:
             char = GATT_CHAR_UUIDS[stream]
             if self._running:
-                await self.transport.stop_notify(char)
+                await self.transport.unsubscribe(char)
         self._running = False
         await self.transport.disconnect()
 
@@ -192,8 +223,8 @@ class ResearchBleClient:
         hub_send = time.monotonic_ns() // 1000  # us
         lsl_send_us = self._lsl_now_us()
         request = struct.pack("<Iq", seq, hub_send)
-        await self.transport.write_gatt_char(SYNC_CHAR_UUID, request)
-        response = await self.transport.read_gatt_char(SYNC_CHAR_UUID)
+        await self.transport.write(SYNC_CHAR_UUID, request)
+        response = await self.transport.read(SYNC_CHAR_UUID)
         lsl_recv_us = self._lsl_now_us()
         hub_recv = time.monotonic_ns() // 1000
 

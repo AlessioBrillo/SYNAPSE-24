@@ -64,6 +64,19 @@ extern "C" {
 #define SYNAPSE_RESEARCH_RING_DEPTH 64u
 #define SYNAPSE_RESEARCH_MAX_CHANNELS 3u
 
+/** Frames flush_stream may emit in one submit tick. The loop drains the ring
+ *  frame by frame, sized by the negotiated MTU: at MTU 23 an ECG flush of 50
+ *  samples takes 13 frames, at MTU 115 one. The cap keeps a hostile MTU from
+ *  monopolising the sensor task, and the leftover state is queued state (the
+ *  ring), never a silent loss: the counters keep counting. */
+#define SYNAPSE_RESEARCH_MAX_FRAMES_PER_TICK 16u
+
+/** Per-stream hard MTU floor: header 12 + ATT 3 + one whole sample.  (PPG's
+ *  S32 2-channel sample = 8 B; POWER's 4-channel sample = 16 B.)
+ *  The THROUGHPUT floor the host enforces (115) is above this: these floor is
+ *  about "a frame is physically impossible", not about the ECG sample rate. */
+#define SYNAPSE_RESEARCH_MIN_MTU 23u
+
 /** Unit scaling applied before quantising to the frame format. Values are
  *  physical quantities scaled so that 1 LSB is a fixed engineering unit; the
  *  host divides by the same constant. */
@@ -92,7 +105,15 @@ typedef struct {
                                *  frame; travels in the frame header's        *
                                *  `dropped` byte (saturated at 255)          */
     int32_t ring[SYNAPSE_RESEARCH_RING_DEPTH * SYNAPSE_RESEARCH_MAX_CHANNELS];
-    int64_t first_ts_us;    /**< device timestamp of the oldest buffered sample */
+    /* Low 32 bits of the device timestamp of EACH buffered sample, in the
+     * same order as `ring`. The frame stamp is ts_ring[0]; flushing n of m
+     * samples advances to ts_ring[n] next, so a partial flush never has to
+     * *reconstruct* a timestamp by multiplying a rate back: spacing changes
+     * with queue-at-BLE jitter, per-sample stamps do not. */
+    uint32_t ts_ring[SYNAPSE_RESEARCH_RING_DEPTH];
+    int64_t first_ts_us;    /**< low-epoch device timestamp of the oldest
+                              *  buffered sample; encode() takes the exact
+                              *  per-frame stamp from ts_ring[0]           */
     uint32_t last_flushed_ts_low; /**< low 32 bits of the previous frame's    *
                                   *  first timestamp: the wrap witness        */
     bool has_flushed;       /**< at least one frame emitted for this stream  */

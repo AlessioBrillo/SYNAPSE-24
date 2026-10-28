@@ -42,6 +42,10 @@ SYNC_RESPONSE_SIZE = struct.calcsize("<Iqq")  # seq + pod_recv_us + pod_send_us
 
 NotificationHandler = Callable[[str, bytes], None]
 
+# The ATT MTU the hub asks for (config/hardware.yaml bringup.ble.mtu_target).
+# The granted value is ALWAYS the link's answer, never this constant.
+MTU_TARGET = 247
+
 
 @runtime_checkable
 class Transport(Protocol):
@@ -53,6 +57,19 @@ class Transport(Protocol):
     async def unsubscribe(self, char_uuid: str) -> None: ...
     async def write(self, char_uuid: str, data: bytes, response: bool = True) -> None: ...
     async def read(self, char_uuid: str) -> bytes: ...
+
+    async def request_mtu(self, mtu: int) -> int | None:
+        """Ask the link for ``mtu`` ATT bytes and report what it granted.
+
+        Returns:
+            The granted MTU, or None when the backend cannot negotiate (the
+            caller keeps an unknown MTU instead of an assumed one).
+
+        Raises:
+            TransportError: when called while not connected.
+
+        """
+        ...
 
 
 class TransportError(RuntimeError):
@@ -69,6 +86,9 @@ class SyntheticTransport(Transport):
     def __init__(self, address: str = "SYNTHETIC") -> None:
         self.address = address
         self.connected = False
+        self.mtu: int | None = None
+        # The granted MTU the simulated link reports on request_mtu().
+        self.granted_mtu: int | None = MTU_TARGET
         self._subscribed: dict[str, NotificationHandler] = {}
         self._notify_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         self._running = False
@@ -102,6 +122,16 @@ class SyntheticTransport(Transport):
         if not self.connected:
             raise TransportError("not connected")
         return b""
+
+    async def request_mtu(self, mtu: int) -> int | None:
+        if not self.connected:
+            raise TransportError("not connected")
+        # The synthetic link grants whatever it is told (granted_mtu=None
+        # models a backend that cannot negotiate: the MTU stays unknown).
+        if self.granted_mtu is None:
+            return None
+        self.mtu = int(self.granted_mtu)
+        return self.mtu
 
     # --- synthetic pod behaviour ------------------------------------------
 
@@ -160,6 +190,7 @@ try:  # pragma: no cover - bleak optional at import time
 
         def __init__(self) -> None:
             self._client: BleakClient | None = None
+            self.mtu: int | None = None
 
         async def connect(self, address: str) -> None:
             self._client = BleakClient(address)
@@ -198,6 +229,26 @@ try:  # pragma: no cover - bleak optional at import time
                 raise TransportError("not connected")
             return await self._client.read_gatt_char(char_uuid)
 
+        async def request_mtu(self, mtu: int) -> int | None:
+            """Negotiate the ATT MTU and report the link's answer.
+
+            bleak exposes ``set_mtu_size`` (Windows/WinRT backend); where the
+            backend cannot negotiate the real MTU stays UNKNOWN (None) —
+            never the requested number dressed up as a fact.
+            """
+            if self._client is None:
+                raise TransportError("not connected")
+            setter = getattr(self._client, "set_mtu_size", None)
+            if setter is None:
+                return None
+            granted = await setter(mtu)
+            try:
+                self.mtu = int(granted)
+            except (TypeError, ValueError):
+                self.mtu = None
+            return self.mtu
+
+
 except ImportError:  # pragma: no cover - bleak not installed
 
     class BleakTransport(Transport):  # type: ignore[no-redef]
@@ -216,3 +267,41 @@ except ImportError:  # pragma: no cover - bleak not installed
 
         async def read(self, char_uuid: str) -> bytes:
             raise TransportError("bleak not installed")
+
+        async def request_mtu(self, mtu: int) -> int | None:
+            raise TransportError("bleak not installed: `pip install synapse-device[ble]`")
+
+
+def build_transport(address: str) -> Transport:
+    """Build the runtime transport for ``address`` (the single factory seam).
+
+    ``SYNTHETIC`` selects the in-process pod that speaks the real frame
+    format; any other value builds the real BLE bridge (which raises a
+    clear ``TransportError`` on use when bleak is not installed). The CLI's
+    ``info``/``record`` commands and the recorder share this one seam, so
+    tests can inject a fake by replacing one callable.
+    """
+    if address.upper() == "SYNTHETIC":
+        return SyntheticTransport(address)
+    return BleakTransport()
+
+
+async def discover(name_filter: str = "SYNAPSE", timeout_s: float = 10.0) -> str | None:
+    """Scan for a SYnapse pod and return its address, or None.
+
+    The single place that touches the BLE scanner: every client goes through
+    this helper, so the bleak import surface stays inside this module.
+    """
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        raise TransportError("bleak not installed: `pip install synapse-device[ble]`") from None
+
+    devices = await BleakScanner.discover(timeout=timeout_s)
+    wanted = name_filter.upper()
+    for device in devices:
+        if (device.name or "").upper().find(wanted) >= 0:
+            address = device.address
+            if isinstance(address, str):
+                return address
+    return None

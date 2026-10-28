@@ -11,11 +11,13 @@ as corrupted data rather than as a broken build.
 
 > **Soak mode needs LabRecorderCLI.** The 6-hour soak (`--soak`) records
 > continuously through LabRecorderCLI, which is *not* installable from this
-> repository: download it from
+> repository (it is the single writer for the real soak): download it from
 > <https://github.com/labstreaminglayer/App-LabRecorder> (Windows: run the
 > installer; the default path is already searched), then either leave it on
 > PATH or point `SYNAPSE_LABRECORDER_CLI` at it. Doing this after the rig is
 > wired is a wasted evening; do it with the rest of the prerequisites.
+> (`--soak-rehearsal` does not need the recorder: it writes a marked
+> synthetic spool, and its output is never G1 evidence.)
 
 ## 0. Wiring
 
@@ -202,7 +204,7 @@ have seen. Save it alongside the gate report; do not let it annul a green run.
 ## 5. Soak test — the MVP bar
 
 The SOP's 30-minute zero-drop run is a proxy. The project promises 24/7
-Tier-0, and the pod's 32-bit microsecond timestamp wraps every ~71,6 minutes —
+Tier-0, and the pod's 32-bit microsecond timestamp wraps every ~71.6 minutes —
 so only a multi-hour run exercises `DeviceClock` for real. (The wrap path is
 also exercised in CI by `tests/test_live_wrap_timecompression.py` — 10 hours
 of device clock compressed into milliseconds, with the wrap flag on *and*
@@ -212,6 +214,19 @@ off — so the bench run is the physical confirmation, not the only witness.)
 zero dropped frames, monotonic XDF, and the pod on battery.** Passing that,
 plus the SOP numbers in `data/live_validation/gate_report.json`, is what
 unlocks the G2 order.
+
+There are exactly two soak modes, and only one of them counts:
+
+| Mode | Command | What it proves |
+|---|---|---|
+| **Real soak (`--soak`)** — the G1 evidence | `uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml --duration 21600 --soak` | six physical hours on the pod: radio, ring, clock wrap, battery. Writes the XDF through LabRecorderCLI (single writer, see the note at the top) and the gate report to `data/live_validation/gate_report.json` (override with `--gate-report`) |
+| **Rehearsal (`--soak-rehearsal`)** — machinery proof only | `uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml --duration 300 --soak-rehearsal` | the same validation loop and gate-report path over a deterministic synthetic spool, runnable in CI and without LabRecorderCLI. Its artifact marks itself (`rehearsal: true`, `source: "spool (synthetic rehearsal)"`) and is **never** G1 evidence |
+
+The two flags are mutually exclusive — the script refuses the combination.
+A rehearsal run is for CI and for verifying the harness before the real
+overnight run; its gate report carries `rehearsal: true`, and
+`tests/test_soak_truthfulness.py` pins that no rehearsal-row report can
+be presented as the 6-hour soak.
 
 Two rules that keep the bar honest:
 

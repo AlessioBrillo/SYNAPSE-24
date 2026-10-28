@@ -10,8 +10,20 @@ import asyncio
 import numpy as np
 import pytest
 
-from synapse_device.codec import RawFormat, RawStream, decode_frame, encode_frame
-from synapse_device.transport import CHAR_ECG, CHAR_PPG, SyntheticTransport, TransportError
+from synapse_device.codec import (
+    STREAM_CHANNELS,
+    RawFormat,
+    RawStream,
+    decode_frame,
+    encode_frame,
+)
+from synapse_device.transport import (
+    CHAR_ECG,
+    CHAR_PPG,
+    MTU_TARGET,
+    SyntheticTransport,
+    TransportError,
+)
 
 
 async def _emit_and_collect() -> list:
@@ -19,8 +31,8 @@ async def _emit_and_collect() -> list:
     captured = []
 
     def handler(uuid, data):
-        header, samples = decode_frame(data)
-        captured.append((header, samples))
+        header, values = decode_frame(data)
+        captured.append((header, values))
 
     await t.connect("SYN-0000")
     await t.subscribe(CHAR_ECG, handler)
@@ -62,17 +74,50 @@ def test_emits_real_frames():
     assert len(captured) > 0, "synthetic pod emitted no frames"
     streams = {h.stream for h, _ in captured}
     assert RawStream.ECG in streams and RawStream.PPG in streams
-    for header, samples in captured:
-        assert header.fmt == RawFormat.S16
-        assert samples.shape[1] == {RawStream.ECG: 1, RawStream.PPG: 2}[header.stream]
-        assert np.all(np.isfinite(samples))
+    for header, values in captured:
+        assert header.sample_format == RawFormat.S16
+        assert values.shape[0] == header.sample_count
+        assert header.sample_count % STREAM_CHANNELS[header.stream] == 0
+        assert np.all(np.isfinite(values))
 
 
 def test_roundtrip_via_codec():
-    samples = np.array([[100, 200], [300, 400]], dtype=np.float64)
-    frame = encode_frame(RawStream.PPG, 7, 5, 0, RawFormat.S16, samples)
+    values = np.array([100, 200, 300, 400], dtype=np.int64)  # 2 PPG samples
+    frame = encode_frame(RawStream.PPG, 7, 5, 0, RawFormat.S16, values)
     header, out = decode_frame(frame)
-    assert header.sample_count == 2
+    assert header.sample_count == 4  # values, channel-minor
+    assert out.reshape(-1, 2).shape[0] == 2  # samples
     assert header.sequence == 7
     assert header.timestamp_us == 5
-    np.testing.assert_array_equal(out, samples)
+    np.testing.assert_array_equal(out, values)
+
+
+def test_request_mtu_grants_the_simulated_link():
+    async def _go():
+        t = SyntheticTransport()
+        await t.connect("SYN-0000")
+        assert t.mtu is None, "MTU unknown until it is negotiated"
+        granted = await t.request_mtu(MTU_TARGET)
+        assert granted == MTU_TARGET
+        assert t.mtu == MTU_TARGET
+        await t.disconnect()
+
+    asyncio.run(_go())
+
+
+def test_request_mtu_before_connect_raises():
+    async def _go():
+        t = SyntheticTransport()
+        with pytest.raises(TransportError):
+            await t.request_mtu(MTU_TARGET)
+
+    asyncio.run(_go())
+
+
+def test_transport_without_negotiation_reports_unknown():
+    """A backend that cannot negotiate keeps the MTU UNKNOWN (None)."""
+    t = SyntheticTransport()
+    t.granted_mtu = None
+    asyncio.run(t.connect("SYN-0000"))
+    assert asyncio.run(t.request_mtu(MTU_TARGET)) is None
+    assert t.mtu is None
