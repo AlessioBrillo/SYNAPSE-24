@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import BOARD_ADAPTERS, BoardAdapter, BoardConfig
+from .base import BOARD_ADAPTERS, BoardAdapter, BoardConfig, build_board_config
 
 
 class CerelogAdapter(BoardAdapter):
@@ -33,16 +33,12 @@ class CerelogAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            mac_address=overrides.get("mac_address", ""),
-            serial_port=overrides.get("serial_port", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("mac_address", "serial_port", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "mac_address": "",
+            "serial_port": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for Cerelog ESP-EEG."""
@@ -75,15 +71,11 @@ class PiEEGAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            serial_port=overrides.get("serial_port", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("serial_port", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "serial_port": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
@@ -115,15 +107,11 @@ class OpenBCIGanglionAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            mac_address=overrides.get("mac_address", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("mac_address", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "mac_address": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
@@ -155,15 +143,11 @@ class OpenBCICytonAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            serial_port=overrides.get("serial_port", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("serial_port", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "serial_port": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {
@@ -195,15 +179,11 @@ class MuseSAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            mac_address=overrides.get("mac_address", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("mac_address", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "mac_address": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {

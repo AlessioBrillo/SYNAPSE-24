@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import types
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -73,6 +73,20 @@ class BoardConfig:
     def from_dict(cls, data: dict[str, Any]) -> BoardConfig:
         """Create from dictionary."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+def build_board_config(board_id: str, values: dict[str, Any]) -> BoardConfig:
+    """Build a frozen :class:`BoardConfig` from defaults plus known overrides.
+
+    ``BoardConfig`` is frozen, so fields cannot be assigned after construction:
+    known keys are applied through :func:`dataclasses.replace` and unknown keys
+    are ignored (callers pass loose config dicts).  The previous ``setattr``
+    implementations raised ``FrozenInstanceError`` on any override outside the
+    two or three fields they special-cased.
+    """
+    config = BoardConfig(board_id=board_id)
+    valid = {key: value for key, value in values.items() if key in config.__dataclass_fields__}
+    return replace(config, **valid)
 
 
 class BoardManager:

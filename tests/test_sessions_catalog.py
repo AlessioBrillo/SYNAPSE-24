@@ -90,7 +90,7 @@ def test_index_fit_is_indexed_lightly(tmp_path: Path) -> None:
     assert rec.format == "fit"
     assert rec.fit_valid is True
     assert rec.xdf_valid is None
-    assert rec.n_samples_total == 0
+    assert rec.n_samples_total == 1  # _make_fit writes exactly one record
     assert rec.session_id.startswith("syn-")
 
 

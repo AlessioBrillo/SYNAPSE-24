@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from .base import BoardAdapter, BoardConfig
+from .base import BoardAdapter, BoardConfig, build_board_config
 
 
 class SyntheticBoardConfig:
@@ -65,12 +65,9 @@ class SyntheticBoardAdapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        """Create board configuration."""
-        config = BoardConfig(board_id=self.board_id, sampling_rate=self.default_sampling_rate)
-        for key, value in overrides.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-        return config
+        """Create board configuration from defaults plus known overrides."""
+        defaults: dict[str, Any] = {"sampling_rate": self.default_sampling_rate}
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for synthetic board."""
@@ -186,11 +183,7 @@ class SyntheticPlaybackAdapter(BoardAdapter):
         return {}
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(board_id=self.board_id)
-        for key, value in overrides.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-        return config
+        return build_board_config(self.board_id, overrides)
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         return {}

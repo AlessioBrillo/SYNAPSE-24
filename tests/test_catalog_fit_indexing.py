@@ -46,7 +46,7 @@ def test_index_fit_populates_metadata(tmp_path):
 
     rec = index_fit(fit_path)
 
-    assert rec.device_serial == "SYN-0012345"
+    assert rec.device_serial == "SYN-012345"
     assert rec.format == "fit"
     assert rec.fit_valid is True
     assert rec.n_samples_total == 3
