@@ -27,7 +27,15 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from synapse_device.fit import FIT_CRC_SIZE, FIT_EPOCH, FIT_HEADER_DEFINITION, fit_crc16, read_fit
+from synapse_device.fit import (
+    FIT_CRC_SIZE,
+    FIT_EPOCH,
+    FIT_FIELD_FILE_ID_SERIAL,
+    FIT_FIELD_FILE_ID_TIME_CREATED,
+    FIT_HEADER_DEFINITION,
+    fit_crc16,
+    read_fit,
+)
 
 # project imports
 from synapse24.utils import validate_xdf
@@ -203,9 +211,9 @@ def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: 
                 else:
                     pos += size
                     continue
-                if field_num == 0:  # FIT_FIELD_FILE_ID_SERIAL
+                if field_num == FIT_FIELD_FILE_ID_SERIAL:
                     serial = value
-                elif field_num == 1:  # FIT_FIELD_FILE_ID_TIME_CREATED
+                elif field_num == FIT_FIELD_FILE_ID_TIME_CREATED:
                     time_created_fit = value
                 pos += size
             if serial is not None:

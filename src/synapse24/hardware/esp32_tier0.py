@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover
     StreamOutlet = None
     local_clock = None
 
-from .base import BoardAdapter, BoardConfig
+from .base import BoardAdapter, BoardConfig, build_board_config
 
 # config/hardware.yaml, resolved relative to the repository root
 # (src/synapse24/hardware/esp32_tier0.py -> <root>/config/hardware.yaml).
@@ -459,16 +459,12 @@ class ESP32Tier0Adapter(BoardAdapter):
         }
 
     def create_config(self, **overrides: Any) -> BoardConfig:
-        config = BoardConfig(
-            board_id=self.board_id,
-            mac_address=overrides.get("mac_address", ""),
-            serial_port=overrides.get("serial_port", ""),
-            sampling_rate=overrides.get("sampling_rate", self.default_sampling_rate),
-        )
-        for key, value in overrides.items():
-            if hasattr(config, key) and key not in ("mac_address", "serial_port", "sampling_rate"):
-                setattr(config, key, value)
-        return config
+        defaults: dict[str, Any] = {
+            "mac_address": "",
+            "serial_port": "",
+            "sampling_rate": self.default_sampling_rate,
+        }
+        return build_board_config(self.board_id, {**defaults, **overrides})
 
     def get_stream_mapping(self) -> dict[str, dict[str, Any]]:
         """Get LSL stream mapping for ESP32 Tier 0 (forearm hub)."""
