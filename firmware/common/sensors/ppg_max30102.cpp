@@ -8,6 +8,11 @@
 
 static const char* TAG = "ppg_max30102";
 
+// Init and read errors are returned, never ESP_ERROR_CHECK'd: a missing or loose
+// sensor must degrade that sensor, not reboot-loop the band.
+#define CHK(x) do { esp_err_t _e = (x); if (_e != ESP_OK) { \
+    ESP_LOGE(TAG, "%s failed: %s", #x, esp_err_to_name(_e)); return _e; } } while (0)
+
 #define MAX30102_REG_INTR_STATUS_1  0x00
 #define MAX30102_REG_INTR_STATUS_2  0x01
 #define MAX30102_REG_INTR_ENABLE_1  0x02
@@ -33,6 +38,7 @@ typedef struct {
     ppg_max30102_config_t config;
     bool initialized;
     bool fifo_enabled;
+    uint32_t skipped_samples;  // FIFO samples superseded by a newer one before they were read
 } ppg_max30102_ctx_t;
 
 static ppg_max30102_ctx_t s_ctx = {};
@@ -107,30 +113,38 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
     }
 
     uint8_t part_id;
-    ESP_ERROR_CHECK(max30102_read_reg(MAX30102_REG_PART_ID, &part_id));
+    CHK(max30102_read_reg(MAX30102_REG_PART_ID, &part_id));
     if (part_id != 0x15) {
         ESP_LOGE(TAG, "Invalid PART_ID: 0x%02X (expected 0x15)", part_id);
         return ESP_ERR_NOT_FOUND;
     }
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x40));
+    CHK(max30102_write_reg(MAX30102_REG_MODE_CONFIG, 0x40));
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_INTR_ENABLE_1, 0x00));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_INTR_ENABLE_2, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_INTR_ENABLE_1, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_INTR_ENABLE_2, 0x00));
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_FIFO_CONFIG, 0x4F));
+    // No sample averaging (the output rate is exactly SPO2_SR), rollover on so the
+    // FIFO always holds the freshest samples, almost-full threshold 15.
+    CHK(max30102_write_reg(MAX30102_REG_FIFO_CONFIG, 0x1F));
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_MODE_CONFIG, MAX30102_MODE_MULTI_LED));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_SPO2_CONFIG, 0x27));
+    // SpO2 mode = RED + IR, 3 bytes each. (Multi-LED mode would also need the
+    // SLOT registers, and the MAX30102 has no green LED.)
+    CHK(max30102_write_reg(MAX30102_REG_MODE_CONFIG, MAX30102_MODE_SPO2));
+    uint8_t spo2_cfg = (uint8_t)(((config->adc_range & 0x03) << 5) |
+                                 ((config->sample_rate & 0x07) << 2) |
+                                 (config->pulse_width & 0x03));
+    CHK(max30102_write_reg(MAX30102_REG_SPO2_CONFIG, spo2_cfg));
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_LED1_PA, config->led_current_red));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_LED2_PA, config->led_current_ir));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_LED3_PA, config->led_current_green));
+    CHK(max30102_write_reg(MAX30102_REG_LED1_PA, config->led_current_red));
+    CHK(max30102_write_reg(MAX30102_REG_LED2_PA, config->led_current_ir));
 
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_FIFO_WR_PTR, 0x00));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_OVF_COUNTER, 0x00));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_FIFO_WR_PTR, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_OVF_COUNTER, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
+    s_ctx.skipped_samples = 0;
+    s_ctx.fifo_enabled = true;  // acquisition starts with the scheduler; nothing else enables the FIFO
 
     if (config->gpio_int >= 0) {
         gpio_config_t io_conf = {
@@ -152,9 +166,28 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
 
     if (!s_ctx.initialized || !s_ctx.fifo_enabled) return ESP_ERR_INVALID_STATE;
 
+    // The sensor runs on its own clock and the poll on another: drain what is
+    // buffered and keep the newest sample, so the FIFO cannot lag or overflow.
+    // ponytail: older samples in a burst are counted, not forwarded (one sample
+    // per poll); read them all into the ring if the poll jitter ever matters.
+    uint8_t wr = 0, rd = 0;
+    CHK(max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr));
+    CHK(max30102_read_reg(MAX30102_REG_FIFO_RD_PTR, &rd));
+    uint8_t avail = (uint8_t)((wr - rd) & 0x1F);
+    if (avail == 0) {
+        // wr == rd means empty OR a FIFO that wrapped completely (rollover is on
+        // and the poll stalled >= 32 samples): the overflow counter tells them apart.
+        uint8_t ovf = 0;
+        CHK(max30102_read_reg(MAX30102_REG_OVF_COUNTER, &ovf));
+        if (ovf == 0) return ESP_ERR_NOT_FOUND;  // nothing new since the last poll
+        avail = 32;
+    }
+
     uint8_t fifo_data[6];
-    esp_err_t ret = max30102_read_fifo(fifo_data, 6);
-    if (ret != ESP_OK) return ret;
+    for (uint8_t i = 0; i < avail; i++) {
+        CHK(max30102_read_fifo(fifo_data, 6));
+    }
+    s_ctx.skipped_samples += (uint32_t)(avail - 1);
 
     uint32_t red = ((uint32_t)fifo_data[0] << 16) | ((uint32_t)fifo_data[1] << 8) | fifo_data[2];
     uint32_t ir = ((uint32_t)fifo_data[3] << 16) | ((uint32_t)fifo_data[4] << 8) | fifo_data[5];
@@ -173,6 +206,10 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
     return ESP_OK;
 }
 
+uint32_t ppg_max30102_skipped_samples(void) {
+    return s_ctx.skipped_samples;
+}
+
 esp_err_t ppg_max30102_get_sqi(ppg_sqi_result_t* result) {
     return ppg_sqi_get_latest(result);
 }
@@ -189,9 +226,9 @@ esp_err_t ppg_max30102_deinit(void* user_ctx) {
 esp_err_t ppg_max30102_enable_fifo(void* user_ctx) {
     (void)user_ctx;
     if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_FIFO_WR_PTR, 0x00));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_OVF_COUNTER, 0x00));
-    ESP_ERROR_CHECK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_FIFO_WR_PTR, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_OVF_COUNTER, 0x00));
+    CHK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
     s_ctx.fifo_enabled = true;
     return ESP_OK;
 }

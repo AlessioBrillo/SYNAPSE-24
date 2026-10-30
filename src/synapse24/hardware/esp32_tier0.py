@@ -108,10 +108,10 @@ class ESP32Tier0Config:
     """
 
     # ECG (AD8232)  # noqa: ERA001
-    ecg_adc_pin: int = 36
+    ecg_adc_pin: int = 1
     ecg_sampling_rate: int = field(default_factory=lambda: _normative("ecg_hz"))
-    ecg_lead_off_plus: int = 39
-    ecg_lead_off_minus: int = 34
+    ecg_lead_off_plus: int = 15
+    ecg_lead_off_minus: int = 15  # same pin: LO+/LO- are combined on the module's LO output
 
     # PPG (MAX30102)  # noqa: ERA001
     ppg_i2c_addr: int = 0x57

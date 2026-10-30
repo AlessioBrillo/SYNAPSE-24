@@ -119,6 +119,9 @@ esp_err_t synapse_sensors_get_gps(gps_data_t *gps);
 esp_err_t synapse_sensors_get_temp(temp_data_t *temp);
 #endif
 
+/** Bitmask of sensors whose init succeeded (bit n = sensor_type_t n). */
+uint8_t synapse_sensors_health_mask(void);
+
 /**
  * @brief Get sensor scheduler stats (sample counts, dropped samples)
  * @param[out] sample_counts Array of 4 uint32_t (ECG, PPG, IMU, EEG)

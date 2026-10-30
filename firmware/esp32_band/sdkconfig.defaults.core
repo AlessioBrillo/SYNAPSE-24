@@ -19,7 +19,7 @@ CONFIG_SYNAPSE_FEATURE_PROVISIONING=n
 CONFIG_SYNAPSE_FEATURE_OTA=n
 
 # Keep edge triage on-device: it is part of what the MVP demo must show.
-CONFIG_SYNAPSE_FEATURE_EDGE_AI=y
+# CONFIG_SYNAPSE_FEATURE_EDGE_AI is not set
 CONFIG_SYNAPSE_FEATURE_POWER_MONITOR=y
 
 # Research raw-streaming service (Synapse Research Service). This is the

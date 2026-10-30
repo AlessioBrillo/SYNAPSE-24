@@ -37,6 +37,9 @@ esp_err_t ppg_max30102_deinit(void* user_ctx);
 esp_err_t ppg_max30102_enable_fifo(void* user_ctx);
 esp_err_t ppg_max30102_disable_fifo(void* user_ctx);
 
+// Samples superseded by a newer one before they could be forwarded (poll slower than the sensor).
+uint32_t ppg_max30102_skipped_samples(void);
+
 // Get latest PPG SQI result for motion gate (Architecture.md §74)
 esp_err_t ppg_max30102_get_sqi(ppg_sqi_result_t* result);
 
