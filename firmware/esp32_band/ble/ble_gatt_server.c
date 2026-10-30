@@ -377,6 +377,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             s_hr_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_batt_handle) {
             s_batt_subscribed = event->subscribe.cur_notify;
+            if (s_batt_subscribed && s_batt_notify_pending) {
+                s_batt_notify_pending = false;
+                (void)synapse_ble_gatt_notify_battery(s_batt_level, false);
+            }
         }
         // Route research-service CCCDs to the raw stream table: a stream only
         // transmits once its characteristic has been subscribed.

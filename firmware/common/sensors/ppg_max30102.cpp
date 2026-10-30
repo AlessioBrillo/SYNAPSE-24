@@ -174,7 +174,14 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
     CHK(max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr));
     CHK(max30102_read_reg(MAX30102_REG_FIFO_RD_PTR, &rd));
     uint8_t avail = (uint8_t)((wr - rd) & 0x1F);
-    if (avail == 0) return ESP_ERR_NOT_FOUND;  // nothing new since the last poll
+    if (avail == 0) {
+        // wr == rd means empty OR a FIFO that wrapped completely (rollover is on
+        // and the poll stalled >= 32 samples): the overflow counter tells them apart.
+        uint8_t ovf = 0;
+        CHK(max30102_read_reg(MAX30102_REG_OVF_COUNTER, &ovf));
+        if (ovf == 0) return ESP_ERR_NOT_FOUND;  // nothing new since the last poll
+        avail = 32;
+    }
 
     uint8_t fifo_data[6];
     for (uint8_t i = 0; i < avail; i++) {

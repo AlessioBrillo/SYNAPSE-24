@@ -105,8 +105,8 @@ static void note_init(sensor_type_t type, const char *name, esp_err_t err) {
 static void ecg_init_wrap(void *ctx) {
     note_init(SENSOR_TYPE_ECG, "ECG", ecg_ad8232_init((const ecg_ad8232_config_t *)ctx));
 }
-static void ecg_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)ecg_ad8232_read(sample, ctx);
+static esp_err_t ecg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return ecg_ad8232_read(sample, ctx);
 }
 static void ecg_deinit_wrap(void *ctx) {
     (void)ecg_ad8232_deinit(ctx);
@@ -114,8 +114,8 @@ static void ecg_deinit_wrap(void *ctx) {
 static void ppg_init_wrap(void *ctx) {
     note_init(SENSOR_TYPE_PPG, "PPG", ppg_max30102_init((const ppg_max30102_config_t *)ctx));
 }
-static void ppg_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)ppg_max30102_read(sample, ctx);
+static esp_err_t ppg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return ppg_max30102_read(sample, ctx);
 }
 static void ppg_deinit_wrap(void *ctx) {
     (void)ppg_max30102_deinit(ctx);
@@ -123,8 +123,8 @@ static void ppg_deinit_wrap(void *ctx) {
 static void imu_init_wrap(void *ctx) {
     note_init(SENSOR_TYPE_IMU, "IMU", imu_icm20948_init((const imu_icm20948_config_t *)ctx));
 }
-static void imu_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)imu_icm20948_read(sample, ctx);
+static esp_err_t imu_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return imu_icm20948_read(sample, ctx);
 }
 static void imu_deinit_wrap(void *ctx) {
     (void)imu_icm20948_deinit(ctx);
@@ -140,12 +140,25 @@ static esp_err_t register_and_spawn(int idx, const sensor_config_t *cfg, uint32_
     if (err != ESP_OK) {
         return err;
     }
+    if (!(s_sensor_health & (1u << cfg->type))) {
+        // Init failed (reported by note_init): keep the band up without polling a dead sensor.
+        ESP_LOGW(TAG, "%s not initialised: no polling task", cfg->name);
+        return ESP_OK;
+    }
     if (xTaskCreate(sensor_task_fn, cfg->name, stack, &s_sensor_cfg[idx], prio, &s_sensor_task[idx]) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create task for %s", cfg->name);
         s_sensor_task[idx] = NULL;
         return ESP_ERR_NO_MEM;
     }
     return sensor_scheduler_set_task(&g_sensors.scheduler, cfg->type, s_sensor_task[idx]);
+}
+
+// A sensor that cannot be registered or spawned is reported and skipped: the
+// band must stay up and advertise (fail-soft), not reboot-loop.
+static void spawn_or_log(esp_err_t err, const char *name) {
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s disabled: %s", name, esp_err_to_name(err));
+    }
 }
 
 uint8_t synapse_sensors_health_mask(void) {
@@ -192,7 +205,7 @@ esp_err_t synapse_sensors_init(void) {
         .user_ctx = &g_sensors.ecg_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(register_and_spawn(0, &ecg_sensor, 4096, SENSOR_TASK_PRIO_ECG));
+    spawn_or_log(register_and_spawn(0, &ecg_sensor, 4096, SENSOR_TASK_PRIO_ECG), "ECG");
 
     // Register PPG sensor
     sensor_config_t ppg_sensor = {
@@ -205,7 +218,7 @@ esp_err_t synapse_sensors_init(void) {
         .user_ctx = &g_sensors.ppg_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(register_and_spawn(1, &ppg_sensor, 4096, SENSOR_TASK_PRIO_PPG));
+    spawn_or_log(register_and_spawn(1, &ppg_sensor, 4096, SENSOR_TASK_PRIO_PPG), "PPG");
 
     // Register IMU sensor
     sensor_config_t imu_sensor = {
@@ -218,7 +231,7 @@ esp_err_t synapse_sensors_init(void) {
         .user_ctx = &g_sensors.imu_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(register_and_spawn(2, &imu_sensor, 4096, SENSOR_TASK_PRIO_IMU));
+    spawn_or_log(register_and_spawn(2, &imu_sensor, 4096, SENSOR_TASK_PRIO_IMU), "IMU");
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Initialize GPS

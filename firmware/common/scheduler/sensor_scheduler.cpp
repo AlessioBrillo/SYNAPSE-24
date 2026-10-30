@@ -357,11 +357,14 @@ void sensor_task_fn(void* arg) {
 
         sample.timestamp_us = get_time_us();
         sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
-        sample.sequence = scheduler->sample_counts[config->type]++;
 
-        if (config->read) {
-            config->read(&sample, config->user_ctx);
+        // A failed or empty read must not become a sample: the previous values
+        // would be re-sent with a fresh timestamp (or zeros for a dead sensor).
+        if (config->read && config->read(&sample, config->user_ctx) != ESP_OK) {
+            scheduler->read_errors[config->type]++;
+            continue;
         }
+        sample.sequence = scheduler->sample_counts[config->type]++;
 
         sensor_ring_buffer_push(&scheduler->buffers[config->type], &sample);
     }

@@ -62,10 +62,12 @@ typedef struct {
     bool running;
     uint32_t sample_counts[SENSOR_SCHEDULER_MAX_SENSORS];
     uint32_t dropped_samples[SENSOR_SCHEDULER_MAX_SENSORS];
+    uint32_t read_errors[SENSOR_SCHEDULER_MAX_SENSORS];  // reads that did not deliver a sample
     volatile uint32_t rates_hz[SENSOR_SCHEDULER_MAX_SENSORS];
 } sensor_scheduler_t;
 
-typedef void (*sensor_read_fn_t)(sensor_sample_t* sample, void* user_ctx);
+// Returns ESP_OK only when `sample` holds a fresh reading; anything else is dropped and counted.
+typedef esp_err_t (*sensor_read_fn_t)(sensor_sample_t* sample, void* user_ctx);
 typedef void (*sensor_init_fn_t)(void* user_ctx);
 typedef void (*sensor_deinit_fn_t)(void* user_ctx);
 

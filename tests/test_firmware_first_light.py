@@ -221,3 +221,36 @@ def test_edge_ai_is_off_until_its_arena_bug_is_fixed() -> None:
     assert re.search(r"config SYNAPSE_FEATURE_EDGE_AI\n\s+bool .*\n\s+default n\b", _src(KCONFIG))
     main = _src(APP_MAIN)
     assert main.count("#if defined(CONFIG_SYNAPSE_FEATURE_EDGE_AI)") == 2
+
+
+# --- review follow-ups (PR #56) ----------------------------------------------------
+
+
+def test_a_failed_read_is_counted_not_pushed_as_a_sample() -> None:
+    task = _src(SCHEDULER).split("void sensor_task_fn", 1)[1]
+    assert "config->read(&sample, config->user_ctx) != ESP_OK" in task
+    assert "read_errors[config->type]++" in task
+    # the sequence number is consumed only by a delivered sample
+    assert task.index("read_errors[config->type]++") < task.index("sample_counts[config->type]++")
+    wrappers = _src(SENSORS)
+    for name in ("ecg", "ppg", "imu"):
+        assert f"static esp_err_t {name}_read_wrap" in wrappers, name
+
+
+def test_a_sensor_that_failed_init_gets_no_task_and_no_abort() -> None:
+    src = _src(SENSORS)
+    assert "no polling task" in src
+    assert "ESP_ERROR_CHECK(register_and_spawn" not in src
+
+
+def test_the_imu_gyro_divider_uses_the_gyro_base_rate() -> None:
+    code = _strip_comments(_src(IMU))
+    assert re.search(r"ICM20948_GYRO_BASE_ODR_HZ\s+1100", code)
+    assert "smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, config->gyro_odr_hz)" in code
+    assert "smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ, config->accel_odr_hz)" in code
+
+
+def test_the_ppg_tells_an_empty_fifo_from_a_wrapped_one() -> None:
+    code = _strip_comments(_src(PPG))
+    assert "MAX30102_REG_OVF_COUNTER, &ovf" in code
+    assert "avail = 32;" in code

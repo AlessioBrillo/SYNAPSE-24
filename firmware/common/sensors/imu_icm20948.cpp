@@ -30,7 +30,8 @@ static const char* TAG = "imu_icm20948";
 #define ICM20948_REG_GYRO_SMPLRT_DIV    0x00   // bank 2
 #define ICM20948_REG_ACCEL_SMPLRT_DIV_1 0x10   // bank 2 (high byte)
 #define ICM20948_REG_ACCEL_SMPLRT_DIV_2 0x11   // bank 2 (low byte)
-#define ICM20948_BASE_ODR_HZ        1125       // output rate with DLPF enabled, before the divider
+#define ICM20948_ACCEL_BASE_ODR_HZ  1125       // accel output rate with DLPF enabled, before the divider
+#define ICM20948_GYRO_BASE_ODR_HZ   1100       // gyro base rate differs from the accel's
 
 #define ICM20948_AK09916_ADDR       0x0C
 #define AK09916_REG_WIA1            0x00
@@ -118,11 +119,11 @@ static esp_err_t ak09916_read_reg(uint8_t reg, uint8_t* value) {
     return i2c_read_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value);
 }
 
-// Sample-rate divider: ODR = 1125 / (1 + div), rounded to the nearest rate.
-static uint16_t smplrt_div_for(uint32_t odr_hz) {
+// Sample-rate divider: ODR = base / (1 + div), rounded to the nearest rate.
+static uint32_t smplrt_div_for(uint32_t base_hz, uint32_t odr_hz) {
     if (odr_hz == 0) odr_hz = 50;
-    uint32_t div = (ICM20948_BASE_ODR_HZ + odr_hz / 2) / odr_hz;
-    return (uint16_t)(div > 0 ? div - 1 : 0);
+    uint32_t div = (base_hz + odr_hz / 2) / odr_hz;
+    return div > 0 ? div - 1 : 0;
 }
 
 esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
@@ -179,7 +180,7 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
     // DLPF on (FCHOICE=1) at ~24 Hz so a 50 Hz poll does not alias.
     // ponytail: fixed filter, only right for ODR <= 50 Hz; derive it from the ODR if that ever rises.
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_CONFIG, accel_fsr | 0x20 | 0x01));
-    uint16_t adiv = smplrt_div_for(config->accel_odr_hz);
+    uint32_t adiv = smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ, config->accel_odr_hz);
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_1, (uint8_t)(adiv >> 8)));
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_2, (uint8_t)(adiv & 0xFF)));
     CHK(icm20948_select_bank(ICM20948_BANK_0));
@@ -194,8 +195,12 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
         default: gyro_fsr = 0x00; s_ctx.gyro_scale = 250.0f / 32768.0f; break;
     }
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_CONFIG_1, gyro_fsr | 0x28 | 0x01));
-    uint16_t gdiv = smplrt_div_for(config->gyro_odr_hz);
-    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_SMPLRT_DIV, (uint8_t)(gdiv > 255 ? 255 : gdiv)));
+    uint32_t gdiv = smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, config->gyro_odr_hz);
+    if (gdiv > 255) {  // 8-bit divider: the slowest gyro ODR is ~4.3 Hz
+        ESP_LOGW(TAG, "gyro ODR %u Hz is below the divider range; running at the slowest rate", (unsigned)config->gyro_odr_hz);
+        gdiv = 255;
+    }
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_SMPLRT_DIV, (uint8_t)gdiv));
     CHK(icm20948_select_bank(ICM20948_BANK_0));
 
     // The magnetometer is optional: accel/gyro keep working if it does not answer.

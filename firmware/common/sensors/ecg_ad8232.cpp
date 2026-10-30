@@ -52,6 +52,10 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     err = adc_oneshot_config_channel(s_ctx.adc_handle, (adc_channel_t)config->adc_channel, &chan_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ADC channel config failed: %s", esp_err_to_name(err));
+        if (s_ctx.owns_adc) {
+            adc_oneshot_del_unit(s_ctx.adc_handle);
+        }
+        s_ctx.adc_handle = NULL;
         return err;
     }
 
