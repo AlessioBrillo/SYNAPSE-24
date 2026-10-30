@@ -1,6 +1,6 @@
 /**
  * @file synapse_provisioning.c
- * @brief Provisioning implementation (NVS-backed, WiFi STA)
+ * @brief Provisioning implementation (NVS-backed, BLE-only)
  */
 
 #include <string.h>
@@ -34,17 +34,15 @@ esp_err_t synapse_provisioning_init(EventGroupHandle_t system_events) {
 
 bool synapse_provisioning_is_complete(void) { return s_complete; }
 
-esp_err_t synapse_provisioning_connect_wifi(void) {
-    // MVP: WiFi connect deferred to future (requires creds via provisioning write).
-    // Return OK to allow normal operation without WiFi (BLE-only MVP).
-    ESP_LOGI(TAG, "WiFi connect deferred (BLE-only MVP)");
-    return ESP_OK;
-}
-
 void synapse_provisioning_process(void) { /* no background work for MVP */ }
 
 esp_err_t synapse_provisioning_process_cmd(uint8_t cmd, const uint8_t *data, uint16_t len) {
     ESP_LOGI(TAG, "Prov cmd=%d len=%d", cmd, len);
+    // 1, 2 were the Wi-Fi / cloud URL commands (removed, ADR-0014): tell the
+    // phone instead of acknowledging a write that was never stored.
+    if (cmd == 1 || cmd == 2) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     if (cmd == 6) { // COMMIT
         nvs_handle_t h;
         if (nvs_open(PROV_NS, NVS_READWRITE, &h) == ESP_OK) {
