@@ -48,7 +48,6 @@ static synapse_wired_sync_t s_wired_sync = {0};
 #endif
 
 // Event bits for system state
-#define WIFI_CONNECTED_BIT      BIT0
 #define PROVISIONING_DONE_BIT   BIT1
 #define OTA_IN_PROGRESS_BIT     BIT2
 #define ACQUISITION_RUNNING_BIT BIT3
@@ -305,20 +304,6 @@ void app_main(void)
 EventGroupHandle_t synapse_get_system_events(void)
 {
     return s_system_events;
-}
-
-void synapse_set_wifi_connected(bool connected)
-{
-    if (connected) {
-        xEventGroupSetBits(s_system_events, WIFI_CONNECTED_BIT);
-    } else {
-        xEventGroupClearBits(s_system_events, WIFI_CONNECTED_BIT);
-    }
-}
-
-bool synapse_is_wifi_connected(void)
-{
-    return (xEventGroupGetBits(s_system_events) & WIFI_CONNECTED_BIT) != 0;
 }
 
 void synapse_set_provisioning_done(bool done)
