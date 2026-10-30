@@ -9,6 +9,11 @@
 
 static const char* TAG = "imu_icm20948";
 
+// Init and hot-path errors are returned, never ESP_ERROR_CHECK'd: a loose wire
+// must degrade one sensor, not reboot-loop the band.
+#define CHK(x) do { esp_err_t _e = (x); if (_e != ESP_OK) { \
+    ESP_LOGE(TAG, "%s failed: %s", #x, esp_err_to_name(_e)); return _e; } } while (0)
+
 #define ICM20948_REG_BANK_SEL       0x7F
 #define ICM20948_REG_WHO_AM_I       0x00
 #define ICM20948_REG_PWR_MGMT_1     0x06
@@ -21,12 +26,18 @@ static const char* TAG = "imu_icm20948";
 #define ICM20948_REG_ACCEL_CONFIG   0x14
 #define ICM20948_REG_GYRO_CONFIG_1  0x01
 #define ICM20948_REG_GYRO_CONFIG_2  0x02
+#define ICM20948_REG_INT_PIN_CFG    0x0F   // bank 0; bit1 = BYPASS_EN
+#define ICM20948_REG_GYRO_SMPLRT_DIV    0x00   // bank 2
+#define ICM20948_REG_ACCEL_SMPLRT_DIV_1 0x10   // bank 2 (high byte)
+#define ICM20948_REG_ACCEL_SMPLRT_DIV_2 0x11   // bank 2 (low byte)
+#define ICM20948_BASE_ODR_HZ        1125       // output rate with DLPF enabled, before the divider
 
 #define ICM20948_AK09916_ADDR       0x0C
 #define AK09916_REG_WIA1            0x00
 #define AK09916_REG_WIA2            0x01
 #define AK09916_REG_ST1             0x10
 #define AK09916_REG_HXL             0x11
+#define AK09916_REG_ST2             0x18
 #define AK09916_REG_CNTL2           0x31
 #define AK09916_REG_CNTL3           0x32
 
@@ -40,6 +51,7 @@ typedef struct {
     float accel_scale;
     float gyro_scale;
     float mag_scale;
+    int16_t mag_raw[3];  // last valid magnetometer sample (held while the AK09916 is not ready)
 } imu_icm20948_ctx_t;
 
 static imu_icm20948_ctx_t s_ctx = {};
@@ -95,25 +107,22 @@ static esp_err_t i2c_read_multi(i2c_port_t port, int addr, uint8_t reg, uint8_t*
     return ret;
 }
 
+// The AK09916 is reached through the ICM-20948 bypass (INT_PIN_CFG.BYPASS_EN with
+// the internal I2C master off), so it answers at 0x0C directly on the host bus.
+// No bank switching is involved.
 static esp_err_t ak09916_write_reg(uint8_t reg, uint8_t value) {
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_3));
-    ESP_ERROR_CHECK(i2c_write_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value));
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_0));
-    return ESP_OK;
+    return i2c_write_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value);
 }
 
 static esp_err_t ak09916_read_reg(uint8_t reg, uint8_t* value) {
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_3));
-    esp_err_t ret = i2c_read_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value);
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_0));
-    return ret;
+    return i2c_read_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value);
 }
 
-static esp_err_t ak09916_read_multi(uint8_t reg, uint8_t* data, size_t len) {
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_3));
-    esp_err_t ret = i2c_read_multi(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, data, len);
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_0));
-    return ret;
+// Sample-rate divider: ODR = 1125 / (1 + div), rounded to the nearest rate.
+static uint16_t smplrt_div_for(uint32_t odr_hz) {
+    if (odr_hz == 0) odr_hz = 50;
+    uint32_t div = (ICM20948_BASE_ODR_HZ + odr_hz / 2) / odr_hz;
+    return (uint16_t)(div > 0 ? div - 1 : 0);
 }
 
 esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
@@ -142,21 +151,23 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
     }
 
     uint8_t whoami;
-    ESP_ERROR_CHECK(i2c_read_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_WHO_AM_I, &whoami));
+    CHK(i2c_read_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_WHO_AM_I, &whoami));
     if (whoami != 0xEA) {
         ESP_LOGE(TAG, "Invalid WHO_AM_I: 0x%02X (expected 0xEA)", whoami);
         return ESP_ERR_NOT_FOUND;
     }
 
-    ESP_ERROR_CHECK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_PWR_MGMT_1, 0x01));
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_PWR_MGMT_1, 0x01));
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_ERROR_CHECK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_PWR_MGMT_2, 0x00));
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_PWR_MGMT_2, 0x00));
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ESP_ERROR_CHECK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_USER_CTRL, 0x20));
+    // Internal I2C master OFF + bypass ON: the magnetometer is wired to the host bus.
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_USER_CTRL, 0x00));
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_INT_PIN_CFG, 0x02));
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_2));
+    CHK(icm20948_select_bank(ICM20948_BANK_2));
     uint8_t accel_fsr = 0;
     switch (config->accel_fsr_g) {
         case 2: accel_fsr = 0x00; s_ctx.accel_scale = 2.0f / 32768.0f; break;
@@ -165,10 +176,15 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
         case 16: accel_fsr = 0x06; s_ctx.accel_scale = 16.0f / 32768.0f; break;
         default: accel_fsr = 0x00; s_ctx.accel_scale = 2.0f / 32768.0f; break;
     }
-    ESP_ERROR_CHECK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_CONFIG, accel_fsr | 0x01));
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_0));
+    // DLPF on (FCHOICE=1) at ~24 Hz so a 50 Hz poll does not alias.
+    // ponytail: fixed filter, only right for ODR <= 50 Hz; derive it from the ODR if that ever rises.
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_CONFIG, accel_fsr | 0x20 | 0x01));
+    uint16_t adiv = smplrt_div_for(config->accel_odr_hz);
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_1, (uint8_t)(adiv >> 8)));
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_2, (uint8_t)(adiv & 0xFF)));
+    CHK(icm20948_select_bank(ICM20948_BANK_0));
 
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_2));
+    CHK(icm20948_select_bank(ICM20948_BANK_2));
     uint8_t gyro_fsr = 0;
     switch (config->gyro_fsr_dps) {
         case 250: gyro_fsr = 0x00; s_ctx.gyro_scale = 250.0f / 32768.0f; break;
@@ -177,19 +193,29 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
         case 2000: gyro_fsr = 0x06; s_ctx.gyro_scale = 2000.0f / 32768.0f; break;
         default: gyro_fsr = 0x00; s_ctx.gyro_scale = 250.0f / 32768.0f; break;
     }
-    ESP_ERROR_CHECK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_CONFIG_1, gyro_fsr | 0x01));
-    ESP_ERROR_CHECK(icm20948_select_bank(ICM20948_BANK_0));
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_CONFIG_1, gyro_fsr | 0x28 | 0x01));
+    uint16_t gdiv = smplrt_div_for(config->gyro_odr_hz);
+    CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_SMPLRT_DIV, (uint8_t)(gdiv > 255 ? 255 : gdiv)));
+    CHK(icm20948_select_bank(ICM20948_BANK_0));
 
-    ESP_ERROR_CHECK(ak09916_write_reg(AK09916_REG_CNTL3, 0x01));
-    vTaskDelay(pdMS_TO_TICKS(100));
-    uint8_t wia1, wia2;
-    ESP_ERROR_CHECK(ak09916_read_reg(AK09916_REG_WIA1, &wia1));
-    ESP_ERROR_CHECK(ak09916_read_reg(AK09916_REG_WIA2, &wia2));
-    if (wia1 != 0x48 || wia2 != 0x09) {
-        ESP_LOGW(TAG, "AK09916 WHO_AM_I: 0x%02X%02X (expected 0x4809)", wia1, wia2);
-    }
-    ESP_ERROR_CHECK(ak09916_write_reg(AK09916_REG_CNTL2, 0x08));
+    // The magnetometer is optional: accel/gyro keep working if it does not answer.
     s_ctx.mag_scale = 0.15f;
+    memset(s_ctx.mag_raw, 0, sizeof(s_ctx.mag_raw));
+    uint8_t wia1 = 0, wia2 = 0;
+    if (ak09916_write_reg(AK09916_REG_CNTL3, 0x01) == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (ak09916_read_reg(AK09916_REG_WIA1, &wia1) == ESP_OK &&
+            ak09916_read_reg(AK09916_REG_WIA2, &wia2) == ESP_OK &&
+            wia1 == 0x48 && wia2 == 0x09) {
+            if (ak09916_write_reg(AK09916_REG_CNTL2, 0x08) != ESP_OK) {  // continuous mode 4 (100 Hz)
+                ESP_LOGW(TAG, "AK09916 mode set failed: magnetometer stays at zero");
+            }
+        } else {
+            ESP_LOGW(TAG, "AK09916 not found (WIA=0x%02X%02X, expected 0x4809): magnetometer stays at zero", wia1, wia2);
+        }
+    } else {
+        ESP_LOGW(TAG, "AK09916 unreachable: magnetometer stays at zero");
+    }
 
     if (config->gpio_int >= 0) {
         gpio_config_t io_conf = {
@@ -213,21 +239,30 @@ esp_err_t imu_icm20948_read(sensor_sample_t* sample, void* user_ctx) {
     if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
 
     uint8_t data[6];
-    ESP_ERROR_CHECK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_ACCEL_XOUT_H, data, 6));
+    CHK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_ACCEL_XOUT_H, data, 6));
     int16_t ax_raw = (int16_t)((data[0] << 8) | data[1]);
     int16_t ay_raw = (int16_t)((data[2] << 8) | data[3]);
     int16_t az_raw = (int16_t)((data[4] << 8) | data[5]);
 
-    ESP_ERROR_CHECK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_GYRO_XOUT_H, data, 6));
+    CHK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_GYRO_XOUT_H, data, 6));
     int16_t gx_raw = (int16_t)((data[0] << 8) | data[1]);
     int16_t gy_raw = (int16_t)((data[2] << 8) | data[3]);
     int16_t gz_raw = (int16_t)((data[4] << 8) | data[5]);
 
-    uint8_t mag_data[6];
-    ESP_ERROR_CHECK(ak09916_read_multi(AK09916_REG_HXL, mag_data, 6));
-    int16_t mx_raw = (int16_t)((mag_data[1] << 8) | mag_data[0]);
-    int16_t my_raw = (int16_t)((mag_data[3] << 8) | mag_data[2]);
-    int16_t mz_raw = (int16_t)((mag_data[5] << 8) | mag_data[4]);
+    // ST1, HXL..HZH, ST2 in one burst: reading ST2 releases the AK09916 data
+    // protection, otherwise the output freezes after the first sample.
+    // The mag runs at 100 Hz and is polled at the IMU rate, so a not-ready or
+    // overflowed sample keeps the last valid one instead of failing the read.
+    uint8_t mag[9];
+    if (i2c_read_multi(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, AK09916_REG_ST1, mag, 9) == ESP_OK &&
+        (mag[0] & 0x01) && !(mag[8] & 0x08)) {
+        s_ctx.mag_raw[0] = (int16_t)((mag[2] << 8) | mag[1]);
+        s_ctx.mag_raw[1] = (int16_t)((mag[4] << 8) | mag[3]);
+        s_ctx.mag_raw[2] = (int16_t)((mag[6] << 8) | mag[5]);
+    }
+    int16_t mx_raw = s_ctx.mag_raw[0];
+    int16_t my_raw = s_ctx.mag_raw[1];
+    int16_t mz_raw = s_ctx.mag_raw[2];
 
     sample->data.imu.ax = ax_raw * s_ctx.accel_scale;
     sample->data.imu.ay = ay_raw * s_ctx.accel_scale;

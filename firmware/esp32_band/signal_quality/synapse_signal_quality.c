@@ -22,7 +22,7 @@
 static const char *TAG = "SYNAPSE_SQ";
 
 // ppg_dsp / ppg_processor are designed for 50 Hz PPG; fail the build rather than report HR wrong by 64/50.
-_Static_assert(CONFIG_SYNAPSE_PPG_SAMPLE_RATE == 0x02, "SYNAPSE_PPG_SAMPLE_RATE must be 0x02 (50 Hz)");
+_Static_assert(CONFIG_SYNAPSE_PPG_SAMPLE_RATE == 0x00, "SYNAPSE_PPG_SAMPLE_RATE must be 0x00 (SPO2_SR = 50 Hz)");
 
 static ppg_quality_t g_latest_ppg_quality = {0};
 static ecg_quality_t g_latest_ecg_quality = {0};

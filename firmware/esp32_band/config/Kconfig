@@ -69,9 +69,14 @@ config SYNAPSE_FEATURE_OTA
 
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"
-    default y
+    default n
     help
         Enable TFLM inference for stress triage (3-class) and motion classification.
+
+        Off by default: the inference task is never started and the interpreter
+        is constructed inside its own tensor arena (triage_inference.cpp), which
+        corrupts memory once it runs. Fix that before turning this on. With it
+        off the feature stream reports stress_level = unknown, never a fabricated class.
 
 config SYNAPSE_FEATURE_POWER_MONITOR
     bool "Enable power budget monitoring"
@@ -97,7 +102,7 @@ config SYNAPSE_FEATURE_WIRED_SYNC
     bool "Enable wired GPIO sync (pod<->hub hardware marker)"
     default y
     help
-        Compile the wired-sync driver (GPIO 27) used to align two pods with a
+        Compile the wired-sync driver (GPIO 10) used to align two pods with a
         hardware pulse. The smoke kit's two-pod bench is where the pod<->pod
         residual is measured; the feature itself is gated behind G2 (a real
         head pod on a second body site), so the driver ships early and stays
@@ -113,13 +118,15 @@ config SYNAPSE_ECG_ADC_CHANNEL
     default 0
     range 0 7
     help
-        ADC1 channel for AD8232 output. ADC1_CH0 = GPIO36.
+        ADC1 channel for AD8232 output. On the ESP32-S3 ADC1_CH0 = GPIO1
+        (GPIO36 is octal-PSRAM on the N8R8 module and cannot be used).
 
 config SYNAPSE_ECG_GPIO_DRDY
     int "ECG DRDY/Lead-off GPIO (-1 to disable)"
-    default 4
+    default 15
     help
-        GPIO for AD8232 DRDY/lead-off detection. -1 to disable.
+        GPIO for AD8232 lead-off detection (LO+ and LO- OR-ed on the module's
+        single LO output). -1 to disable. Not GPIO4: that is the battery ADC.
 
 config SYNAPSE_ECG_VREF_MV
     int "ECG ADC Reference Voltage (mV)"
@@ -171,11 +178,13 @@ config SYNAPSE_PPG_LED_CURRENT_GREEN
         MAX30102 green LED current register value (0x00-0x3F).
 
 config SYNAPSE_PPG_SAMPLE_RATE
-    hex "PPG Sample Rate Register"
-    default 0x02
+    hex "PPG Sample Rate Register (SPO2_SR code)"
+    default 0x00
     help
-        MAX30102 sample rate register. 0x02=50Hz, 0x03=64Hz, 0x04=100Hz.
-        On-device HR/HRV and edge triage are designed for 50 Hz (ppg_dsp.h).
+        MAX30102 SPO2_SR code, per datasheet: 0x00=50Hz, 0x01=100Hz, 0x02=200Hz,
+        0x03=400Hz, 0x04=800Hz, 0x05=1000Hz, 0x06=1600Hz, 0x07=3200Hz.
+        There is no 64 Hz setting. On-device HR/HRV and edge triage are designed
+        for 50 Hz (ppg_dsp.h), so anything but 0x00 fails the build.
 
 config SYNAPSE_PPG_PULSE_WIDTH
     hex "PPG Pulse Width Register"
@@ -289,7 +298,7 @@ config SYNAPSE_BAT_ADC_CHANNEL
     default 3
     range 0 7
     help
-        ADC1 channel for battery voltage divider. ADC1_CH3 = GPIO3.
+        ADC1 channel for battery voltage divider. On the ESP32-S3 ADC1_CH3 = GPIO4.
 
 config SYNAPSE_BAT_VOLTAGE_DIVIDER
     int "Battery Voltage Divider Ratio (x100)"

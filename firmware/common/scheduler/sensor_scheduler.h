@@ -86,6 +86,8 @@ esp_err_t sensor_scheduler_start(sensor_scheduler_t* scheduler);
 esp_err_t sensor_scheduler_stop(sensor_scheduler_t* scheduler);
 esp_err_t sensor_scheduler_deinit(sensor_scheduler_t* scheduler);
 esp_err_t sensor_scheduler_set_rate(sensor_scheduler_t* scheduler, sensor_type_t type, uint32_t rate_hz);
+// Publish the polling task of a registered sensor (needed by start/stop to resume/suspend it).
+esp_err_t sensor_scheduler_set_task(sensor_scheduler_t* scheduler, sensor_type_t type, TaskHandle_t task);
 
 bool sensor_ring_buffer_push(sensor_ring_buffer_t* rb, const sensor_sample_t* sample);
 bool sensor_ring_buffer_pop(sensor_ring_buffer_t* rb, sensor_sample_t* sample);

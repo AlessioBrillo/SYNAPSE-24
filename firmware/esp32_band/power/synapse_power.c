@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "synapse_power.h"
 #include "synapse_config.h"
+#include "synapse_adc1.h"
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
 #include "ina219.h"
 #endif
@@ -69,11 +70,8 @@ esp_err_t synapse_power_init(void) {
     g_voltage_divider = hw_cfg.bat_voltage_divider;
 
     // Initialize ADC oneshot unit
-    adc_oneshot_unit_init_cfg_t unit_cfg = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&unit_cfg, &g_adc_handle));
+    // ADC1 is shared with the ECG channel: borrow the single handle.
+    ESP_ERROR_CHECK(synapse_adc1_get(&g_adc_handle));
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .atten = ADC_ATTEN_DB_12,
@@ -314,10 +312,7 @@ esp_err_t synapse_power_deinit(void) {
         adc_cali_delete_scheme_curve_fitting(g_cali_handle);
         g_cali_handle = NULL;
     }
-    if (g_adc_handle) {
-        adc_oneshot_del_unit(g_adc_handle);
-        g_adc_handle = NULL;
-    }
+    g_adc_handle = NULL;  // borrowed from synapse_adc1, not ours to delete
 
     g_initialized = false;
     ESP_LOGI(TAG, "Power management deinitialized");

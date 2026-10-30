@@ -36,7 +36,7 @@ pods:
       ppg: 2                          # red + IR
       imu: 9
     # Normative sample rates. These match firmware/esp32_band/config/Kconfig
-    # (SYNAPSE_PPG_SAMPLE_RATE=0x02 -> 50 Hz, SYNAPSE_IMU_ACCEL_ODR_HZ=50)
+    # (SYNAPSE_PPG_SAMPLE_RATE=0x00 -> SPO2_SR 50 Hz, SYNAPSE_IMU_ACCEL_ODR_HZ=50)
     # and the host LSL outlets declared below. Do not change one without the
     # other two: that is what check_contract.py enforces.
     sampling_rate:
@@ -70,10 +70,10 @@ pods:
         ppg: "MAX30102"
         imu: "ICM-20948"
       ecg_config:
-        adc_pin: 36                    # ADC1_CH0
-        gpio_drdy: 4
-        lead_off_plus: 39
-        lead_off_minus: 34
+        adc_pin: 1                     # ADC1_CH0 = GPIO1 on the S3 (GPIO36 is octal PSRAM)
+        gpio_drdy: 15                  # lead-off (LO+ / LO- combined on the module's LO pin)
+        lead_off_plus: 15
+        lead_off_minus: null           # single combined line; GPIO34 is octal PSRAM
         vref_mv: 1100
         gain: 6.0                      # nominal AD8232 module gain — NOT verified for
                                        # generic clones; see gain_measured below
@@ -278,7 +278,7 @@ sync:
       sync_interval_s: 10.0
   acc_correlation_window_s: 30.0
   min_acc_correlation: 0.7
-  wired_sync_gpio: 27  # GPIO for hardwired Tier 1 sync marker (head_pod <-> forearm_hub)
+  wired_sync_gpio: 10  # GPIO for hardwired Tier 1 sync marker (head_pod <-> forearm_hub)
 
 # Power budget profiles (Architecture.md §55-62)
 power_budget:
