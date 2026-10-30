@@ -1,6 +1,6 @@
 /**
  * @file synapse_provisioning.c
- * @brief Provisioning implementation (NVS-backed, WiFi STA)
+ * @brief Provisioning implementation (NVS-backed, BLE-only)
  */
 
 #include <string.h>
@@ -33,13 +33,6 @@ esp_err_t synapse_provisioning_init(EventGroupHandle_t system_events) {
 }
 
 bool synapse_provisioning_is_complete(void) { return s_complete; }
-
-esp_err_t synapse_provisioning_connect_wifi(void) {
-    // MVP: WiFi connect deferred to future (requires creds via provisioning write).
-    // Return OK to allow normal operation without WiFi (BLE-only MVP).
-    ESP_LOGI(TAG, "WiFi connect deferred (BLE-only MVP)");
-    return ESP_OK;
-}
 
 void synapse_provisioning_process(void) { /* no background work for MVP */ }
 

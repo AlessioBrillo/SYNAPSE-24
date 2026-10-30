@@ -13,7 +13,7 @@
  * - Feature Stream (notify, <=10 Hz): compressed features only, no raw samples.
  *   Frame: [version: u8][sequence: u16 LE][payload...], payload little-endian.
  * - Device Config (read/write): opaque config blob.
- * - Provisioning (write/notify): CSR flow, WiFi, Cloud URL.
+ * - Provisioning (write/notify): CSR flow only (no direct device-to-cloud path).
  *
  * The research service (raw samples, separate UUID family) lives in
  * ble_research_service.c and is independent of this consumer service.
@@ -136,8 +136,7 @@ typedef struct {
 // ============================================================================
 typedef enum {
     SYNAPSE_PROV_CMD_NONE = 0,
-    SYNAPSE_PROV_CMD_WIFI_CREDENTIALS = 1,    // Write: SSID + PASS (plaintext over encrypted BLE)
-    SYNAPSE_PROV_CMD_CLOUD_URL = 2,           // Write: HTTPS URL
+    // 1, 2: reserved (removed Wi-Fi/cloud URL commands: the phone is the only canonical path, ADR-0014)
     SYNAPSE_PROV_CMD_REQUEST_CSR = 3,         // Write: trigger CSR generation
     SYNAPSE_PROV_CMD_CSR_RESPONSE = 4,        // Notify: CSR PEM data
     SYNAPSE_PROV_CMD_CERT_INSTALL = 5,        // Write: signed cert + CA chain
@@ -147,8 +146,7 @@ typedef enum {
 
 typedef enum {
     SYNAPSE_PROV_STATUS_IDLE = 0,
-    SYNAPSE_PROV_STATUS_WIFI_SET = 1,
-    SYNAPSE_PROV_STATUS_CLOUD_SET = 2,
+    // 1, 2: reserved
     SYNAPSE_PROV_STATUS_CSR_GENERATED = 3,
     SYNAPSE_PROV_STATUS_CERT_INSTALLED = 4,
     SYNAPSE_PROV_STATUS_COMMITTED = 5,

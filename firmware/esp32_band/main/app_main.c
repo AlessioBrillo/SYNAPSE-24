@@ -209,9 +209,6 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "Device provisioned, starting normal operation");
         synapse_ble_gatt_start_advertising_normal();
-
-        // Connect to WiFi and cloud
-        synapse_provisioning_connect_wifi();
     }
 #else
     // Provisioning is compiled out (band-core): the device is always

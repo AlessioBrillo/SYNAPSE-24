@@ -1,6 +1,6 @@
 /**
  * @file synapse_provisioning.h
- * @brief BLE Provisioning: WiFi + Cloud URL + mTLS cert (CSR flow)
+ * @brief BLE Provisioning: mTLS cert (CSR flow only)
  */
 
 #ifndef SYNAPSE_PROVISIONING_H
@@ -18,7 +18,6 @@ extern "C" {
 
 esp_err_t synapse_provisioning_init(EventGroupHandle_t system_events);
 bool synapse_provisioning_is_complete(void);
-esp_err_t synapse_provisioning_connect_wifi(void);
 void synapse_provisioning_process(void);
 esp_err_t synapse_provisioning_process_cmd(uint8_t cmd, const uint8_t *data, uint16_t len);
 esp_err_t synapse_provisioning_factory_reset(void);
