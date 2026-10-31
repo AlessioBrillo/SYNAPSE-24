@@ -244,6 +244,12 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_double_free.argtypes = []
     service.synapse_host_bench_notify_rejected.restype = ctypes.c_uint32
     service.synapse_host_bench_notify_rejected.argtypes = []
+    service.synapse_host_bench_submit_at.restype = None
+    service.synapse_host_bench_submit_at.argtypes = [ctypes.c_int, ctypes.c_int64]
+    service.synapse_host_bench_stale_samples.restype = ctypes.c_uint32
+    service.synapse_host_bench_stale_samples.argtypes = []
+    service.synapse_host_bench_open.restype = None
+    service.synapse_host_bench_open.argtypes = []
 
 
 def _stream_values(frames: list[tuple[RawHeader, np.ndarray]]) -> dict[int, int]:
@@ -563,3 +569,60 @@ def test_the_stack_rejects_oversized_notifications(service: ctypes.CDLL) -> None
     assert service.synapse_host_bench_notify_rejected() > 0, "oversized frames not counted"
     assert service.synapse_host_bench_dropped_frames() > 0
     assert service.synapse_host_bench_double_free() == 0
+
+
+# ---------------------------------------------------------------------------
+# MVP-1.3 PR-C: timestamp bookkeeping.
+# ---------------------------------------------------------------------------
+
+_SENSOR_ECG = 0
+_SENSOR_PPG = 1
+
+
+def test_a_sample_older_than_another_streams_last_is_not_dropped(service: ctypes.CDLL) -> None:
+    """A PPG sample stamped before the newest ECG sample is not stale.
+
+    The coordinator drains ECG before PPG/IMU, so this is routine. The old check
+    compared against the last sample of ANY stream and dropped it silently.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    service.synapse_host_bench_submit_at(_SENSOR_ECG, 10_000_000)
+    for i in range(8):  # the PPG flush threshold
+        service.synapse_host_bench_submit_at(_SENSOR_PPG, 1_000_000 + i * 20_000)
+
+    streams = {header.stream for header, _ in _decoded_frames(service)}
+    assert RawStream.PPG in streams, "PPG samples older than the last ECG sample were dropped"
+    assert service.synapse_host_bench_stale_samples() == 0
+
+
+def test_a_sensor_going_backwards_is_counted_not_silently_dropped(service: ctypes.CDLL) -> None:
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    service.synapse_host_bench_submit_at(_SENSOR_PPG, 2_000_000)
+    service.synapse_host_bench_submit_at(_SENSOR_PPG, 1_000_000)
+    assert service.synapse_host_bench_stale_samples() == 1
+
+
+def test_the_wrap_witness_does_not_survive_a_reconnect(service: ctypes.CDLL) -> None:
+    """A frame sent before a reconnect must not flag a timestamp wrap after it.
+
+    The first frame after the reconnect would otherwise look like a 32-bit wrap.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    for i in range(50):  # the ECG flush threshold, stamped just below 2**32
+        service.synapse_host_bench_submit_at(_SENSOR_ECG, 0xFFFE0000 + i * 2000)
+    before = _decoded_frames(service)
+    assert before, "no frame before the reconnect"
+    assert not before[0][0].ts_epoch_wrapped
+
+    service.synapse_host_bench_open()  # reconnect: same device clock, now past 2**32
+    for i in range(50):
+        service.synapse_host_bench_submit_at(_SENSOR_ECG, (1 << 32) + 100 + i * 2000)
+    after = _decoded_frames(service)
+    assert after, "no frame after the reconnect"
+    assert not after[0][0].ts_epoch_wrapped, "stale wrap witness survived the reconnect"

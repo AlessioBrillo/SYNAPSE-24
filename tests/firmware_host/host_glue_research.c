@@ -321,6 +321,34 @@ int synapse_host_bench_run(int mode, int ecg_samples)
     return g_capture_count;
 }
 
+/** Submit one sample of @p type (SENSOR_TYPE_*) at an explicit device time. */
+void synapse_host_bench_submit_at(int type, int64_t timestamp_us)
+{
+    sensor_sample_t s;
+    memset(&s, 0, sizeof(s));
+    s.type = (sensor_type_t)type;
+    s.timestamp_us = timestamp_us;
+    s.data.ecg.voltage_mv = 0.5f;
+    s.data.ppg.red = 90000.0f;
+    s.data.ppg.ir = 105000.0f;
+    synapse_research_service_submit(&s);
+}
+
+uint32_t synapse_host_bench_stale_samples(void)
+{
+    return synapse_research_service_stale_samples();
+}
+
+/** Connect and subscribe every biosignal stream, without submitting anything. */
+void synapse_host_bench_open(void)
+{
+    g_capture_count = 0;
+    synapse_research_service_on_connect(7);
+    synapse_research_service_set_mtu(g_bench_mtu);
+    synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_ECG, true);
+    synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_PPG, true);
+}
+
 /** Subscribe path variant: only ECG, routed through handle_subscribe. */
 int synapse_host_bench_run_subscribe_ecg(void)
 {

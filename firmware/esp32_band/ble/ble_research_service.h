@@ -127,7 +127,12 @@ typedef struct {
     uint16_t conn_handle;
     uint16_t mtu;
     uint32_t epoch_wraps;              /**< 32-bit ts counter wrap count       */
-    int64_t last_sample_us;
+    /* Newest accepted timestamp PER sensor type: the sensors are drained one
+     * after the other, so a PPG/IMU sample stamped inside the same batch as a
+     * later ECG sample is older than "the last sample of any stream" without
+     * being stale. Only a sample older than its own stream's last is stale. */
+    int64_t last_sample_us[4];
+    uint32_t stale_samples;            /**< samples older than their own stream's last */
     synapse_research_stream_t streams[8];
     size_t stream_count;
     uint32_t dropped_frames;           /**< notifications the stack refused    */
@@ -228,6 +233,9 @@ void synapse_research_service_set_mtu(uint16_t mtu);
 
 /** @brief Samples dropped because a stream ring was full (diagnostics). */
 uint32_t synapse_research_service_ring_overflow(void);
+
+/** @brief Samples rejected for going backwards in their own stream (diagnostics). */
+uint32_t synapse_research_service_stale_samples(void);
 
 /** @brief 1 Hz power-telemetry samples skipped (diagnostics). */
 uint32_t synapse_research_service_power_dropped(void);

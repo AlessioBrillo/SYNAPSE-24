@@ -102,6 +102,12 @@ static int sync_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
     (void)arg;
 
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        // t3 ("pod_send") is the moment the reply LEAVES, i.e. this read. Stamping it
+        // at the write (as before) made it equal to t2, so the host's t4 absorbed the
+        // whole write->read gap (a connection interval or more) as asymmetric delay
+        // and biased the offset by half of it.
+        int64_t send_us = esp_timer_get_time();
+        memcpy(s_sync_response + 12, &send_us, sizeof(int64_t));
         int rc = os_mbuf_append(ctxt->om, s_sync_response, sizeof(s_sync_response));
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
@@ -117,8 +123,8 @@ static int sync_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         int64_t recv_us = esp_timer_get_time();
         memcpy(s_sync_response, req, sizeof(uint32_t));  // echo the sequence
         memcpy(s_sync_response + 4, &recv_us, sizeof(int64_t));
-        int64_t send_us = esp_timer_get_time();
-        memcpy(s_sync_response + 12, &send_us, sizeof(int64_t));
+        // pod_send is filled in by the read that returns this response.
+        memcpy(s_sync_response + 12, &recv_us, sizeof(int64_t));
         return 0;
     }
 
@@ -511,14 +517,19 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         return;
     }
 
-    int64_t now_us = sample->timestamp_us;
-    if (now_us < s_research.last_sample_us) {
-        return;  // stale sample, esp_timer is monotonic
+    if ((size_t)sample->type >= sizeof(s_research.last_sample_us) / sizeof(s_research.last_sample_us[0])) {
+        return;
     }
-    if ((uint32_t)now_us < (uint32_t)s_research.last_sample_us) {
+    int64_t now_us = sample->timestamp_us;
+    int64_t *last_us = &s_research.last_sample_us[sample->type];
+    if (now_us < *last_us) {
+        s_research.stale_samples++;  // esp_timer is monotonic: this sensor went backwards
+        return;
+    }
+    if ((uint32_t)now_us < (uint32_t)*last_us) {
         s_research.epoch_wraps++;
     }
-    s_research.last_sample_us = now_us;
+    *last_us = now_us;
 
     switch (sample->type) {
     case SENSOR_TYPE_ECG: {
@@ -665,6 +676,11 @@ void synapse_research_service_on_connect(uint16_t conn_handle)
         s_research.streams[i].sequence = 0;
         s_research.streams[i].pending = 0;
         s_research.streams[i].dropped_pending = 0;
+        // The wrap witness compares against the previous frame of THIS link: a
+        // frame sent before the reconnect must not make the first frame after
+        // it look like a counter wrap.
+        s_research.streams[i].has_flushed = false;
+        s_research.streams[i].last_flushed_ts_low = 0;
     }
     ESP_LOGI(TAG, "connected (handle %u)", conn_handle);
 }
@@ -756,6 +772,11 @@ uint32_t synapse_research_service_ring_overflow(void)
     return s_research.ring_overflow;
 }
 
+uint32_t synapse_research_service_stale_samples(void)
+{
+    return s_research.stale_samples;
+}
+
 uint32_t synapse_research_service_power_dropped(void)
 {
     return s_research.power_dropped;
@@ -766,4 +787,11 @@ void synapse_research_service_reset_counters(void)
     s_research.dropped_frames = 0;
     s_research.ring_overflow = 0;
     s_research.power_dropped = 0;
+    s_research.stale_samples = 0;
+    // The per-sensor monotonic witnesses restart with the counters (bench / new
+    // session): a clock restarted from zero must not read as "going backwards".
+    s_research.epoch_wraps = 0;
+    for (size_t i = 0; i < sizeof(s_research.last_sample_us) / sizeof(s_research.last_sample_us[0]); i++) {
+        s_research.last_sample_us[i] = 0;
+    }
 }

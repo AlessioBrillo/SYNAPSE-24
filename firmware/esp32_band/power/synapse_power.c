@@ -26,6 +26,7 @@ static const char *TAG = "SYNAPSE_POWER";
 
 static synapse_power_status_t g_status = {0};
 static adc_oneshot_unit_handle_t g_adc_handle = NULL;
+static uint16_t battery_mv_unchecked(void);
 static adc_cali_handle_t g_cali_handle = NULL;
 static adc_channel_t g_bat_adc_channel = ADC_CHANNEL_3; // ADC1 CH3 = GPIO4 on ESP32-S3
 static float g_voltage_divider = 2.0f;
@@ -122,8 +123,9 @@ esp_err_t synapse_power_init(void) {
     g_status.can_afford_tier2 = true;
     g_status.charging = false;
     
-    // Initial voltage read
-    uint16_t mv = synapse_power_read_battery_mv();
+    // Initial voltage read (g_initialized is still false here: use the unchecked
+    // read, or the first reading is always 0 V)
+    uint16_t mv = battery_mv_unchecked();
     g_status.voltage_v = mv / 1000.0f;
     g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
     g_status.estimated_remaining_h = g_status.battery_remaining_mah / (hw_cfg.t0_avg_mw / 3.7f);
@@ -136,15 +138,24 @@ esp_err_t synapse_power_init(void) {
 
 void synapse_power_tick(void) {
     if (!g_initialized) return;
+
+    // The main loop calls this every 10 ms, but the battery averaging (64 ADC
+    // reads), the INA219 read, the coulomb counter and the POWER stream are 1 Hz
+    // affairs: ungated, the stream ran at 100 Hz (~2.8 kB/s against a 64 B/s budget).
+    static int64_t last_run_us = 0;
+    int64_t run_us = esp_timer_get_time();
+    if (last_run_us != 0 && (run_us - last_run_us) < 1000000) return;
+    last_run_us = run_us;
     
     // Read battery voltage
-    uint16_t mv = synapse_power_read_battery_mv();
+    uint16_t mv = battery_mv_unchecked();
     float voltage_v = mv / 1000.0f;
     
     // Low-pass filter
     g_status.voltage_v = 0.9f * g_status.voltage_v + 0.1f * voltage_v;
     g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
     
+    bool current_measured = false;
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
     // Measured current replaces the tier-model estimate (Architecture.md §55-62:
     // the budget is validated against what the pod actually draws, and the
@@ -154,6 +165,7 @@ void synapse_power_tick(void) {
         if (ina219_read_once(&meas) == ESP_OK) {
             g_status.voltage_v = meas.bus_voltage_v;
             g_status.current_ma = meas.current_a * 1000.0f;  // A -> mA
+            current_measured = true;
             g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
             if (g_telemetry_sink != NULL) {
                 g_telemetry_sink(g_status.voltage_v * 1000.0f, g_status.current_ma,
@@ -170,7 +182,9 @@ void synapse_power_tick(void) {
     float current_mw = hw_cfg.t0_avg_mw;  // Default Tier 0
     // In a full implementation, would get current tier from acquisition FSM
     
-    g_status.current_ma = (current_mw / g_status.voltage_v);  // mA    
+    if (!current_measured) {
+        g_status.current_ma = (current_mw / g_status.voltage_v);  // mA, tier model
+    }    
     // Update remaining capacity (simple coulomb counting)
     static int64_t last_tick = 0;
     int64_t now = esp_timer_get_time();
@@ -281,8 +295,8 @@ void synapse_power_set_charging(bool charging) {
     ESP_LOGI(TAG, "Charging: %s", charging ? "YES" : "NO");
 }
 
-uint16_t synapse_power_read_battery_mv(void) {
-    if (!g_initialized || !g_adc_handle) return 0;
+static uint16_t battery_mv_unchecked(void) {
+    if (!g_adc_handle) return 0;
 
     int adc_raw = 0;
     const int samples = 64;
@@ -303,6 +317,10 @@ uint16_t synapse_power_read_battery_mv(void) {
         voltage_mv = (acc * 3300) / 4095; // fallback raw scaling
     }
     return (uint16_t)(voltage_mv * g_voltage_divider);
+}
+
+uint16_t synapse_power_read_battery_mv(void) {
+    return g_initialized ? battery_mv_unchecked() : 0;
 }
 
 esp_err_t synapse_power_deinit(void) {

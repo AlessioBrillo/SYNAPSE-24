@@ -298,8 +298,22 @@ void app_main(void)
         // Process BLE events
         synapse_ble_gatt_process_events();
 
-        // Power management tick
+        // Power management tick (self-limited to 1 Hz)
         synapse_power_tick();
+
+        // Battery Service / feature frame: report the measured level. A reading
+        // outside a single-cell LiPo range means the divider is not connected
+        // (smoke kit on USB): keep the previous value instead of publishing noise.
+        {
+            static uint8_t s_last_batt_pct = 0xFF;
+            synapse_power_status_t pst;
+            if (synapse_power_get_status(&pst) == ESP_OK &&
+                pst.voltage_v >= 3.0f && pst.voltage_v <= 4.4f &&
+                pst.battery_level_pct != s_last_batt_pct) {
+                s_last_batt_pct = pst.battery_level_pct;
+                synapse_ble_gatt_battery_changed(pst.battery_level_pct, pst.charging);
+            }
+        }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }

@@ -14,7 +14,17 @@ typedef struct {
     adc_cali_handle_t cali_handle;
     bool initialized;
     bool lead_off_detected;
+    float midrail_mv;     // DC bias removed from every sample
+    bool midrail_ready;
+    int cal_n;            // samples accumulated by the start-up calibration
+    double cal_sum_mv;
 } ecg_ad8232_ctx_t;
+
+// The AD8232 output sits on a ~1.65 V bias (REFOUT = Vcc/2) with the ECG riding
+// on top. Averaging the first second of an ECG (zero-mean at these time scales)
+// measures that bias; dividing the raw ADC voltage by the gain without removing
+// it gave ~275 mV, which the research stream clamped to full scale.
+#define ECG_MIDRAIL_CAL_SAMPLES 500
 
 static ecg_ad8232_ctx_t s_ctx = {};
 
@@ -24,6 +34,10 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     s_ctx.config = *config;
     s_ctx.initialized = false;
     s_ctx.lead_off_detected = false;
+    s_ctx.cal_n = 0;
+    s_ctx.cal_sum_mv = 0.0;
+    s_ctx.midrail_mv = config->midrail_mv;
+    s_ctx.midrail_ready = config->midrail_mv > 0.0f;
     s_ctx.adc_handle = NULL;
     s_ctx.cali_handle = NULL;
 
@@ -102,13 +116,24 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
     } else {
         voltage_mv = (raw * 3300) / 4095;
     }
-    float ecg_mv = (float)voltage_mv / s_ctx.config.gain;
-
     if (s_ctx.config.gpio_drdy >= 0) {
         s_ctx.lead_off_detected = (gpio_get_level((gpio_num_t)s_ctx.config.gpio_drdy) == 1);
     }
 
-    sample->data.ecg.voltage_mv = ecg_mv;
+    // Lead-off is reported, not used to gate the samples: with the LO pin left
+    // unwired (pull-up) it would read "off" forever and silence the stream.
+    if (!s_ctx.midrail_ready) {
+        s_ctx.cal_sum_mv += (double)voltage_mv;
+        if (++s_ctx.cal_n < ECG_MIDRAIL_CAL_SAMPLES) {
+            return ESP_ERR_NOT_FOUND;  // calibrating: no sample yet (counted by the scheduler)
+        }
+        s_ctx.midrail_mv = (float)(s_ctx.cal_sum_mv / (double)s_ctx.cal_n);
+        s_ctx.midrail_ready = true;
+        ESP_LOGI(TAG, "AD8232 mid-rail calibrated: %.1f mV", s_ctx.midrail_mv);
+    }
+
+    float gain = s_ctx.config.gain > 0.0f ? s_ctx.config.gain : 1.0f;
+    sample->data.ecg.voltage_mv = ((float)voltage_mv - s_ctx.midrail_mv) / gain;
     return ESP_OK;
 }
 
