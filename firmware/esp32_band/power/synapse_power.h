@@ -112,6 +112,10 @@ typedef void (*synapse_power_telemetry_sink_t)(float voltage_mv, float current_m
  */
 void synapse_power_set_telemetry_sink(synapse_power_telemetry_sink_t sink);
 
+/** Called (at most once per change, from the 1 Hz tick) with a plausible measured battery level. */
+typedef void (*synapse_power_battery_sink_t)(uint8_t level_pct, bool charging);
+void synapse_power_set_battery_sink(synapse_power_battery_sink_t sink);
+
 /**
  * @brief True when an INA219 is present, answering, and reporting sane values.
  *

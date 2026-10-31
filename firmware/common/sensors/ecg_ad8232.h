@@ -16,6 +16,7 @@ typedef struct {
     float vref_mv;        // ADC reference voltage in mV (default 1100 for ESP32)
     float gain;           // AD8232 gain (default 6.0 for standard config)
     void* adc_handle;     // Optional shared adc_oneshot_unit_handle_t (not owned); NULL = create own
+    float midrail_mv;     // AD8232 output bias (REFOUT, ~Vcc/2) in mV; <= 0 = measure it at start-up
 } ecg_ad8232_config_t;
 
 esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config);

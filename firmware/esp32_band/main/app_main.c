@@ -189,6 +189,7 @@ void app_main(void)
     //      stream. The power module stays BLE-agnostic: the wiring happens
     //      here (Architecture.md §23-31 decoupled pod/hub).
     synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
+    synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed);
 
     // 12c. Wired sync (GPIO 27) as HUB output: the forearm hub is the tier
     //      reference for a second pod. The driver ships now so the two-pod
@@ -298,8 +299,9 @@ void app_main(void)
         // Process BLE events
         synapse_ble_gatt_process_events();
 
-        // Power management tick
+        // Power management tick (self-limited to 1 Hz)
         synapse_power_tick();
+
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }

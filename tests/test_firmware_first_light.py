@@ -228,7 +228,8 @@ def test_edge_ai_is_off_until_its_arena_bug_is_fixed() -> None:
 
 def test_a_failed_read_is_counted_not_pushed_as_a_sample() -> None:
     task = _src(SCHEDULER).split("void sensor_task_fn", 1)[1]
-    assert "config->read(&sample, config->user_ctx) != ESP_OK" in task
+    assert "esp_err_t rd = config->read(&sample, config->user_ctx);" in task
+    assert "if (rd != ESP_OK)" in task
     assert "read_errors[config->type]++" in task
     # the sequence number is consumed only by a delivered sample
     assert task.index("read_errors[config->type]++") < task.index("sample_counts[config->type]++")
