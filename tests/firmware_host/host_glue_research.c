@@ -339,6 +339,11 @@ uint32_t synapse_host_bench_stale_samples(void)
     return synapse_research_service_stale_samples();
 }
 
+uint32_t synapse_host_bench_epoch_wraps(void)
+{
+    return synapse_research_service_epoch_wraps();
+}
+
 /** Connect and subscribe every biosignal stream, without submitting anything. */
 void synapse_host_bench_open(void)
 {

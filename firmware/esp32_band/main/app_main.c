@@ -189,6 +189,7 @@ void app_main(void)
     //      stream. The power module stays BLE-agnostic: the wiring happens
     //      here (Architecture.md §23-31 decoupled pod/hub).
     synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
+    synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed);
 
     // 12c. Wired sync (GPIO 27) as HUB output: the forearm hub is the tier
     //      reference for a second pod. The driver ships now so the two-pod
@@ -301,19 +302,6 @@ void app_main(void)
         // Power management tick (self-limited to 1 Hz)
         synapse_power_tick();
 
-        // Battery Service / feature frame: report the measured level. A reading
-        // outside a single-cell LiPo range means the divider is not connected
-        // (smoke kit on USB): keep the previous value instead of publishing noise.
-        {
-            static uint8_t s_last_batt_pct = 0xFF;
-            synapse_power_status_t pst;
-            if (synapse_power_get_status(&pst) == ESP_OK &&
-                pst.voltage_v >= 3.0f && pst.voltage_v <= 4.4f &&
-                pst.battery_level_pct != s_last_batt_pct) {
-                s_last_batt_pct = pst.battery_level_pct;
-                synapse_ble_gatt_battery_changed(pst.battery_level_pct, pst.charging);
-            }
-        }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }

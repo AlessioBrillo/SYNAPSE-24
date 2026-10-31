@@ -68,8 +68,10 @@ def test_the_ecg_driver_removes_the_ad8232_bias_before_dividing_by_the_gain() ->
     # the bias is measured over the first samples; those reads deliver nothing
     assert "ECG_MIDRAIL_CAL_SAMPLES" in body
     assert "return ESP_ERR_NOT_FOUND" in body
-    # an explicit bias skips the calibration
+    # an explicit bias skips the calibration and the tracking
     assert "config->midrail_mv > 0.0f" in _code(ECG)
+    # otherwise the bias keeps being tracked: a start-up with the electrodes off recovers
+    assert "ECG_MIDRAIL_TRACK_ALPHA" in body
 
 
 def test_the_ecg_stream_is_not_gated_on_the_lead_off_pin() -> None:
@@ -83,7 +85,7 @@ def test_the_ecg_stream_is_not_gated_on_the_lead_off_pin() -> None:
 
 def test_the_power_tick_runs_at_one_hertz_not_at_the_main_loop_rate() -> None:
     body = _function(_code(POWER), "void synapse_power_tick(void)")
-    gate = body.index("(run_us - last_run_us) < 1000000")
+    gate = body.index("(run_us - g_last_tick_us) < 1000000")
     # the gate comes before any ADC read or telemetry emission
     assert gate < body.index("battery_mv_unchecked()")
     assert gate < body.index("g_telemetry_sink(")
@@ -92,7 +94,9 @@ def test_the_power_tick_runs_at_one_hertz_not_at_the_main_loop_rate() -> None:
 def test_the_measured_current_is_not_overwritten_by_the_tier_model() -> None:
     body = _function(_code(POWER), "void synapse_power_tick(void)")
     assert "current_measured = true" in body
-    assert re.search(r"if \(!current_measured\) \{\s*g_status\.current_ma = \(current_mw", body)
+    assert re.search(
+        r"if \(!current_measured\) \{[^}]*g_status\.current_ma = \(current_mw / model_v\)", body
+    )
 
 
 def test_the_first_battery_reading_is_taken_before_init_completes() -> None:
@@ -107,10 +111,20 @@ def test_the_first_battery_reading_is_taken_before_init_completes() -> None:
 
 
 def test_the_measured_battery_level_reaches_the_ble_service() -> None:
-    main = _code(APP_MAIN)
-    assert "synapse_ble_gatt_battery_changed(" in main
+    # the power module owns the policy; app_main only wires the sink
+    assert "synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed)" in _code(APP_MAIN)
+    tick = _function(_code(POWER), "void synapse_power_tick(void)")
     # a missing divider (USB-powered kit) must not publish noise
-    assert "pst.voltage_v >= 3.0f && pst.voltage_v <= 4.4f" in main
+    assert "g_status.voltage_v >= 3.0f && g_status.voltage_v <= 4.4f" in tick
+    assert "g_battery_sink(" in tick
+
+
+def test_a_missing_battery_divider_does_not_decay_the_voltage_to_zero() -> None:
+    tick = _function(_code(POWER), "void synapse_power_tick(void)")
+    assert "if (mv > 0)" in tick
+    # the tier-model current never divides by an unmeasured (zero) voltage
+    assert "g_status.voltage_v > 1.0f ? g_status.voltage_v : 3.7f" in tick
+    assert "g_last_tick_us = 0;" in _function(_code(POWER), "esp_err_t synapse_power_deinit(void)")
 
 
 # --- clock sync ---------------------------------------------------------------
@@ -125,6 +139,15 @@ def test_the_sync_reply_is_stamped_when_it_leaves_not_when_the_request_arrives()
     assert "s_sync_response + 12" in read_branch
     write_branch = body[body.index("BLE_GATT_ACCESS_OP_WRITE_CHR") :]
     assert "send_us = esp_timer_get_time()" not in write_branch
+    # a read with no request pending returns the zeroed buffer, not a half-made reply
+    assert "if (s_sync_valid)" in read_branch
+    assert "s_sync_valid = true" in write_branch
+
+
+def test_an_empty_poll_is_not_counted_as_a_read_error() -> None:
+    sched = (COMMON / "scheduler" / "sensor_scheduler.cpp").read_text(encoding="utf-8")
+    task = sched.split("void sensor_task_fn", 1)[1]
+    assert "rd != ESP_ERR_NOT_FOUND" in task
 
 
 # --- Heart Rate RR unit -------------------------------------------------------

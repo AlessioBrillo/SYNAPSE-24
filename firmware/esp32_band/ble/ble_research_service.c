@@ -65,6 +65,7 @@ static uint16_t s_hdl_sync;
 
 // Clock-sync response staged by the write path and read back by the host.
 static uint8_t s_sync_response[SYNAPSE_SYNC_RESPONSE_SIZE];
+static bool s_sync_valid;
 
 // Notification staging buffer (one frame at a time).
 static uint8_t s_notify_buf[SYNAPSE_RAW_FRAME_MAX_PAYLOAD];
@@ -106,8 +107,13 @@ static int sync_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         // at the write (as before) made it equal to t2, so the host's t4 absorbed the
         // whole write->read gap (a connection interval or more) as asymmetric delay
         // and biased the offset by half of it.
-        int64_t send_us = esp_timer_get_time();
-        memcpy(s_sync_response + 12, &send_us, sizeof(int64_t));
+        // GATT access callbacks all run in the NimBLE host task, so this buffer is never
+        // touched concurrently by the write below. A read with no request pending
+        // returns the zeroed buffer untouched.
+        if (s_sync_valid) {
+            int64_t send_us = esp_timer_get_time();
+            memcpy(s_sync_response + 12, &send_us, sizeof(int64_t));
+        }
         int rc = os_mbuf_append(ctxt->om, s_sync_response, sizeof(s_sync_response));
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
@@ -125,6 +131,7 @@ static int sync_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         memcpy(s_sync_response + 4, &recv_us, sizeof(int64_t));
         // pod_send is filled in by the read that returns this response.
         memcpy(s_sync_response + 12, &recv_us, sizeof(int64_t));
+        s_sync_valid = true;
         return 0;
     }
 
@@ -526,8 +533,11 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         s_research.stale_samples++;  // esp_timer is monotonic: this sensor went backwards
         return;
     }
-    if ((uint32_t)now_us < (uint32_t)*last_us) {
-        s_research.epoch_wraps++;
+    // The counter is shared by every stream: count a wrap when the newest timestamp
+    // of ANY stream crosses a 2^32 boundary, so ECG+PPG+IMU crossing it is one wrap.
+    if (now_us > s_research.newest_sample_us) {
+        s_research.epoch_wraps += (uint32_t)((now_us >> 32) - (s_research.newest_sample_us >> 32));
+        s_research.newest_sample_us = now_us;
     }
     *last_us = now_us;
 
@@ -772,6 +782,11 @@ uint32_t synapse_research_service_ring_overflow(void)
     return s_research.ring_overflow;
 }
 
+uint32_t synapse_research_service_epoch_wraps(void)
+{
+    return s_research.epoch_wraps;
+}
+
 uint32_t synapse_research_service_stale_samples(void)
 {
     return s_research.stale_samples;
@@ -791,6 +806,7 @@ void synapse_research_service_reset_counters(void)
     // The per-sensor monotonic witnesses restart with the counters (bench / new
     // session): a clock restarted from zero must not read as "going backwards".
     s_research.epoch_wraps = 0;
+    s_research.newest_sample_us = 0;
     for (size_t i = 0; i < sizeof(s_research.last_sample_us) / sizeof(s_research.last_sample_us[0]); i++) {
         s_research.last_sample_us[i] = 0;
     }

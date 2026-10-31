@@ -250,6 +250,8 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_stale_samples.argtypes = []
     service.synapse_host_bench_open.restype = None
     service.synapse_host_bench_open.argtypes = []
+    service.synapse_host_bench_epoch_wraps.restype = ctypes.c_uint32
+    service.synapse_host_bench_epoch_wraps.argtypes = []
 
 
 def _stream_values(frames: list[tuple[RawHeader, np.ndarray]]) -> dict[int, int]:
@@ -626,3 +628,18 @@ def test_the_wrap_witness_does_not_survive_a_reconnect(service: ctypes.CDLL) -> 
     after = _decoded_frames(service)
     assert after, "no frame after the reconnect"
     assert not after[0][0].ts_epoch_wrapped, "stale wrap witness survived the reconnect"
+
+
+def test_one_counter_wrap_is_counted_once_however_many_streams_cross_it(
+    service: ctypes.CDLL,
+) -> None:
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    below, above = 0xFFFFF000, (1 << 32) + 10
+    for sensor in (_SENSOR_ECG, _SENSOR_PPG):
+        service.synapse_host_bench_submit_at(sensor, below)
+    assert service.synapse_host_bench_epoch_wraps() == 0
+    for sensor in (_SENSOR_ECG, _SENSOR_PPG):  # both streams cross the same 2**32 boundary
+        service.synapse_host_bench_submit_at(sensor, above)
+    assert service.synapse_host_bench_epoch_wraps() == 1

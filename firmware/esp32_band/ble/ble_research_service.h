@@ -133,6 +133,7 @@ typedef struct {
      * being stale. Only a sample older than its own stream's last is stale. */
     int64_t last_sample_us[4];
     uint32_t stale_samples;            /**< samples older than their own stream's last */
+    int64_t newest_sample_us;          /**< newest timestamp of any stream: counts each wrap once */
     synapse_research_stream_t streams[8];
     size_t stream_count;
     uint32_t dropped_frames;           /**< notifications the stack refused    */
@@ -236,6 +237,9 @@ uint32_t synapse_research_service_ring_overflow(void);
 
 /** @brief Samples rejected for going backwards in their own stream (diagnostics). */
 uint32_t synapse_research_service_stale_samples(void);
+
+/** @brief Wraps of the 32-bit microsecond counter seen so far (one per wrap, not per stream). */
+uint32_t synapse_research_service_epoch_wraps(void);
 
 /** @brief 1 Hz power-telemetry samples skipped (diagnostics). */
 uint32_t synapse_research_service_power_dropped(void);
