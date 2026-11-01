@@ -71,12 +71,94 @@ static const ble_uuid128_t CFG_UUID =
 static const ble_uuid128_t PROV_UUID =
     SYNAPSE_CONTRACT_UUID_CONSUMER_PROVISIONING_INIT;
 
+// Consumer contract v2: NEW characteristics on the same service. v1 above is frozen
+// (Averyn pins contracts/gatt_v1.json by sha256), so a v1 client never sees these.
+static const ble_uuid128_t FEAT2_UUID = SYNAPSE_CONTRACT_UUID_CONSUMER_V2_FEATURE_INIT;
+static const ble_uuid128_t STATUS_UUID = SYNAPSE_CONTRACT_UUID_CONSUMER_V2_STATUS_INIT;
+static const ble_uuid128_t META_UUID = SYNAPSE_CONTRACT_UUID_CONSUMER_V2_STREAM_METADATA_INIT;
+static const ble_uuid128_t CTL_UUID = SYNAPSE_CONTRACT_UUID_CONSUMER_V2_CONTROL_POINT_INIT;
+static uint16_t s_feat2_handle = 0;
+static uint16_t s_status_handle = 0;
+static bool s_feat2_subscribed = false;
+static bool s_status_subscribed = false;
+static uint16_t s_feat2_seq = 0;
+static uint8_t s_feat2_rate_hz = SYNAPSE_CONTRACT_V2_FEATURE_RATE_HZ;
+static synapse_ble_status_provider_t s_status_provider = NULL;
+static synapse_ble_transmit_handler_t s_transmit_handler = NULL;
+// The 100 default in s_batt_level is a placeholder, not a measurement: v2 reports
+// the level only once the power module has actually provided one.
+static bool s_batt_known = false;
+static bool s_batt_charging = false;
+
 // --- characteristic access callbacks -----------------------------------------
 
 // Feature stream: notify-only, never read.
 static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     return BLE_ATT_ERR_UNLIKELY;
+}
+
+// --- consumer contract v2 ----------------------------------------------------------------
+
+static int feat2_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)ctxt; (void)arg;
+    return BLE_ATT_ERR_UNLIKELY;  // notify-only
+}
+
+static size_t build_status(uint8_t *buf, size_t cap) {
+    synapse_status_v2_t st;
+    memset(&st, 0, sizeof(st));
+    if (s_status_provider != NULL) {
+        s_status_provider(&st);
+    }
+    st.mtu = g_mtu;  // negotiated here, not by the application
+    return synapse_status_v2_encode(&st, buf, cap);
+}
+
+static int status_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+    uint8_t buf[SYNAPSE_CONTRACT_V2_STATUS_BYTES];
+    size_t n = build_status(buf, sizeof(buf));
+    if (n == 0) return BLE_ATT_ERR_INSUFFICIENT_RES;
+    return os_mbuf_append(ctxt->om, buf, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+static int meta_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+    uint8_t buf[1 + SYNAPSE_CONTRACT_V2_STREAM_COUNT * SYNAPSE_CONTRACT_V2_META_ENTRY_BYTES];
+    size_t n = synapse_stream_metadata_encode(buf, sizeof(buf));
+    if (n == 0) return BLE_ATT_ERR_INSUFFICIENT_RES;
+    return os_mbuf_append(ctxt->om, buf, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+static void ctl_set_transmitting(bool on, void *ctx) {
+    (void)ctx;
+    if (s_transmit_handler != NULL) s_transmit_handler(on);
+}
+
+static void ctl_set_feature_rate(uint8_t hz, void *ctx) {
+    (void)ctx;
+    s_feat2_rate_hz = hz;  // validated 1..SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ by the parser
+}
+
+static int ctl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn; (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
+    uint8_t req[8];
+    uint16_t len = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, req, sizeof(req), &len) != 0) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    synapse_control_ops_t ops = {
+        .set_transmitting = ctl_set_transmitting,
+        .set_feature_rate = ctl_set_feature_rate,
+        .ctx = NULL,
+    };
+    int err = synapse_control_apply(req, len, &ops);
+    // ATT application errors live in 0x80..0x9F: the contract error code rides in the low bits.
+    return err == 0 ? 0 : (0x80 + err);
 }
 
 // Heart Rate Measurement (0x2A37): readable (last value) + notify.
@@ -333,6 +415,28 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
                 .val_handle = &s_prov_handle,
                 .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
             },
+            {
+                .uuid = &FEAT2_UUID.u,
+                .access_cb = feat2_access,
+                .val_handle = &s_feat2_handle,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = &STATUS_UUID.u,
+                .access_cb = status_access,
+                .val_handle = &s_status_handle,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                .uuid = &META_UUID.u,
+                .access_cb = meta_access,
+                .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
+                .uuid = &CTL_UUID.u,
+                .access_cb = ctl_access,
+                .flags = BLE_GATT_CHR_F_WRITE,
+            },
             {0},
         },
     },
@@ -367,6 +471,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         g_prov_subscribed = false;
         s_hr_subscribed = false;
         s_batt_subscribed = false;
+        s_feat2_subscribed = false;
+        s_status_subscribed = false;
+        s_feat2_seq = 0;  // a new session starts a new sequence
+        s_feat2_rate_hz = SYNAPSE_CONTRACT_V2_FEATURE_RATE_HZ;
         synapse_research_service_on_disconnect();
 #if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
@@ -384,6 +492,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             g_feat_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_prov_handle) {
             g_prov_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == s_feat2_handle) {
+            s_feat2_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == s_status_handle) {
+            s_status_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_hr_handle) {
             s_hr_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_batt_handle) {
@@ -643,6 +755,8 @@ void synapse_ble_gatt_set_device_info(const char *m, const char *model, const ch
 
 void synapse_ble_gatt_update_battery(uint8_t level, bool charging) {
     s_batt_level = level;
+    s_batt_known = true;
+    s_batt_charging = charging;
     if (s_batt_notify_pending && g_connected && g_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
         synapse_ble_gatt_notify_battery(level, charging);
     }
@@ -698,4 +812,58 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
     }
     s_last_notify_ms = now_ms;
     return ESP_OK;
+}
+
+static esp_err_t notify_flat(uint16_t handle, const uint8_t *buf, size_t n) {
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)n);
+    if (om == NULL) return ESP_ERR_NO_MEM;
+    return ble_gatts_notify_custom(g_conn_handle, handle, om) == 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec) {
+    static uint32_t s_last_ms = 0;
+    if (rec == NULL) return ESP_ERR_INVALID_ARG;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now_ms - s_last_ms < 1000u / s_feat2_rate_hz) return ESP_OK;
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (!s_feat2_subscribed || s_feat2_handle == 0) return ESP_OK;  // nothing subscribed
+    if (g_mtu < SYNAPSE_CONTRACT_V2_FEATURE_BYTES + 3u) return ESP_ERR_INVALID_SIZE;
+
+    rec->sequence = s_feat2_seq;
+    if (s_batt_known) {
+        rec->battery_pct = s_batt_level;
+        if (s_batt_charging) rec->flags |= SYNAPSE_V2_FLAG_CHARGING;
+    }
+    uint8_t buf[SYNAPSE_CONTRACT_V2_FEATURE_BYTES];
+    size_t n = synapse_feature_v2_encode(rec, buf, sizeof(buf));
+    if (n == 0) return ESP_FAIL;
+    esp_err_t rc = notify_flat(s_feat2_handle, buf, n);
+    if (rc == ESP_OK) {
+        s_feat2_seq++;  // consumed only by a frame that was actually queued: no phantom gap
+        s_last_ms = now_ms;
+    }
+    return rc;
+}
+
+esp_err_t synapse_ble_gatt_push_status(void) {
+    static uint32_t s_last_ms = 0;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now_ms - s_last_ms < 1000u) return ESP_OK;
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (!s_status_subscribed || s_status_handle == 0) return ESP_OK;
+    if (g_mtu < SYNAPSE_CONTRACT_V2_STATUS_BYTES + 3u) return ESP_ERR_INVALID_SIZE;
+    uint8_t buf[SYNAPSE_CONTRACT_V2_STATUS_BYTES];
+    size_t n = build_status(buf, sizeof(buf));
+    if (n == 0) return ESP_FAIL;
+    esp_err_t rc = notify_flat(s_status_handle, buf, n);
+    if (rc == ESP_OK) s_last_ms = now_ms;
+    return rc;
+}
+
+void synapse_ble_gatt_set_status_provider(synapse_ble_status_provider_t provider) {
+    s_status_provider = provider;
+}
+
+void synapse_ble_gatt_set_transmit_handler(synapse_ble_transmit_handler_t handler) {
+    s_transmit_handler = handler;
 }

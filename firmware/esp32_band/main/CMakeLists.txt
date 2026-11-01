@@ -12,7 +12,9 @@ set(SYNAPSE_MAIN_REQUIRES
     fit provisioning ota
     # app_main.c reads the MAC from the eFuse and the OTA state from the
     # app_update component: both are required explicitly.
-    app_update)
+    app_update
+    # esp_timer_get_time() for the v2 feature timestamp and the status uptime
+    esp_timer)
 set(SYNAPSE_MAIN_PRIV_REQUIRES bt nvs_flash)
 
 if(EXISTS "${IDF_PATH}/components/efuse")

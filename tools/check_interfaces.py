@@ -16,6 +16,7 @@ checker at all — see tools/check_contract.py and tests/test_contract_checker.p
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -33,10 +34,13 @@ WORKER_SCRIPT = DEFAULT_ROOT / "worker" / "hrv_worker.py"
 SCHEMAS_DIR = DEFAULT_ROOT / "contracts" / "schemas"
 
 GATT_CONTRACT = DEFAULT_ROOT / "contracts" / "gatt_v1.json"
+GATT_CONTRACT_V2 = DEFAULT_ROOT / "contracts" / "gatt_v2.json"
 HARDWARE_YAML = DEFAULT_ROOT / "config" / "hardware.yaml"
-FIRMWARE_RESEARCH_SERVICE = (
-    DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "ble_research_service.c"
-)
+
+# sha256 of contracts/gatt_v1.json (LF endings) as Averyn pinned it. v1 is frozen: add v2
+# characteristics, never edit v1. Bump this only together with a new contract version and
+# the consumers' re-pin, never to make this check pass.
+FROZEN_V1_SHA256 = "0c6b9e38fccbf5510ea82741ed5b40c2b2338ce08fe47a7e5655f75a6b0688a9"
 TRANSPORT_PY = DEFAULT_ROOT / "sdk" / "python" / "synapse_device" / "transport.py"
 CONTRACTS_PY = DEFAULT_ROOT / "src" / "synapse24" / "contracts_generated.py"
 CONTRACT_H = DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "synapse_contract_generated.h"
@@ -45,12 +49,10 @@ CONTRACT_H = DEFAULT_ROOT / "firmware" / "esp32_band" / "ble" / "synapse_contrac
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
-# NimBLE 128-bit UUIDs are stored little-endian: the first init byte is the
-# LAST byte of the canonical UUID string.
-_LEADING_BYTE_RE = re.compile(r"BLE_UUID128_INIT\s*\(\s*0x([0-9a-fA-F]{2})")
-# The generated contract header declares the same bytes as a macro list; its
-# first byte is the same little-endian leading byte.
-_GENERATED_LEADING_BYTE_RE = re.compile(r"_BYTES\s*\\?\s*0x([0-9a-fA-F]{2})")
+# The generated contract header carries every UUID as a full canonical string
+# (`#define SYNAPSE_CONTRACT_UUID_<NAME>_STR "..."`): that is what the firmware is compared with,
+# whole, not by one byte.
+_HEADER_UUID_RE = re.compile(r'_STR\s+"([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})"')
 
 # C macro name -> expected descriptor field id.
 DEV_FIELD_MACROS = (
@@ -282,10 +284,6 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
     gatt = _load_json(gatt_contract)
     reference = _research_service_uuids(gatt)
 
-    def _firmware_leading_bytes(text: str) -> set[str]:
-        """First init byte of each BLE_UUID128_INIT, as two lowercase hex digits."""
-        return {m.group(1).lower() for m in _LEADING_BYTE_RE.finditer(text)}
-
     # Text sources: hardware manifest + host transport + the generated contract
     # artifacts (all carry the canonical UUID strings).
     for label, path in (
@@ -294,6 +292,7 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
         ("src/synapse24/contracts_generated.py", CONTRACTS_PY),
     ):
         if not path.is_file():
+            report.fail(f"GATT UUID source {label} is missing: it cannot be checked")
             continue
         uuids = _uuid_strings(path.read_text(encoding="utf-8")) & reference
         missing = reference - uuids
@@ -303,23 +302,55 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
                 f"{sorted(missing)}"
             )
 
-    # Firmware source: the UUID bytes live in the generated header (the
-    # firmware carries no second copy); compare the leading (least-significant)
-    # byte of each canonical UUID against the init bytes of the header.
-    firmware_text = ""
-    for path in (FIRMWARE_RESEARCH_SERVICE, CONTRACT_H):
-        if path.is_file():
-            firmware_text += path.read_text(encoding="utf-8") + "\n"
-    if firmware_text:
-        fw_bytes = _firmware_leading_bytes(firmware_text)
-        fw_bytes |= {m.group(1).lower() for m in _GENERATED_LEADING_BYTE_RE.finditer(firmware_text)}
-        missing = [u for u in sorted(reference) if u[-2:] not in fw_bytes]
+    # Firmware: the UUIDs live only in the generated header (the sources carry no second copy),
+    # so the whole canonical string of every research UUID must be there.
+    if not CONTRACT_H.is_file():
+        report.fail(f"{CONTRACT_H} is missing: the firmware UUIDs cannot be checked")
+        return
+    in_header = {u.lower() for u in _HEADER_UUID_RE.findall(CONTRACT_H.read_text(encoding="utf-8"))}
+    missing = sorted(reference - in_header)
+    if missing:
+        report.fail(
+            "GATT research-service UUID drift in the firmware contract header "
+            f"(synapse_contract_generated.h): canonical UUIDs missing: {missing}"
+        )
+
+
+def check_gatt_v2_consistent(report: Report, gatt_v2: Path, gatt_v1: Path) -> None:
+    """Consumer contract v2: its UUIDs reach every consumer, and v1 stays frozen."""
+    if not gatt_v2.is_file():
+        report.fail(f"{gatt_v2} is missing: run tools/generate_contracts.py")
+        return
+    v2 = _load_json(gatt_v2)
+
+    v1_sha = hashlib.sha256(gatt_v1.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    if v1_sha != FROZEN_V1_SHA256:
+        report.fail(
+            "contracts/gatt_v1.json changed (sha256 "
+            f"{v1_sha[:12]}..., pinned {FROZEN_V1_SHA256[:12]}...): v1 is frozen, "
+            "add a v2 characteristic instead"
+        )
+    if v2.get("v1_frozen", {}).get("sha256") != FROZEN_V1_SHA256:
+        report.fail("gatt_v2.json does not record the frozen v1 sha256: regenerate it")
+
+    new = {u.lower() for u in v2["characteristics"].values()}
+    v1_chars = _load_json(gatt_v1)["services"]
+    taken = {u.lower() for u in v1_chars["feature_stream"]["characteristics"].values()}
+    taken |= {u.lower() for u in v1_chars["research"]["characteristics"].values()}
+    if len(new) != len(v2["characteristics"]) or new & taken:
+        report.fail("a v2 characteristic UUID is duplicated or reuses a v1 UUID")
+
+    for label, path in (
+        ("synapse_contract_generated.h", CONTRACT_H),
+        ("src/synapse24/contracts_generated.py", CONTRACTS_PY),
+        ("config/hardware.yaml", HARDWARE_YAML),
+    ):
+        if not path.is_file():
+            report.fail(f"{label} is missing: the v2 UUIDs cannot be checked")
+            continue
+        missing = sorted(new - {u.lower() for u in _uuid_strings(path.read_text(encoding="utf-8"))})
         if missing:
-            report.fail(
-                "GATT research-service UUID drift in the firmware BLE sources "
-                "(ble_research_service.c + synapse_contract_generated.h): canonical "
-                f"UUIDs missing (by trailing byte): {missing}"
-            )
+            report.fail(f"consumer v2 UUID drift in {label}: missing {missing}")
 
 
 def check_bleak_isolated(report: Report) -> None:
@@ -382,6 +413,7 @@ def check_field_ids_consistent(
         check_export_uses_the_canonical_writer(report, export_script, export_module, descriptor)
     else:
         check_export_script_field_ids(report, export_script, descriptor)
+    check_worker_field_ids(report, worker_script, descriptor)
     check_worker_uses_the_canonical_reader(report, worker_script)
 
 
@@ -437,6 +469,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=GATT_CONTRACT,
         help="Path to contracts/gatt_v1.json",
     )
+    parser.add_argument(
+        "--gatt-contract-v2",
+        type=Path,
+        default=GATT_CONTRACT_V2,
+        help="Path to contracts/gatt_v2.json",
+    )
     return parser
 
 
@@ -467,6 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     check_schemas_valid(report, args.schemas_dir)
 
     check_gatt_uuids_consistent(report, args.gatt_contract)
+    check_gatt_v2_consistent(report, args.gatt_contract_v2, args.gatt_contract)
 
     check_bleak_isolated(report)
 

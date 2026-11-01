@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -32,6 +33,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "config" / "hardware.yaml"
 FIT_DESCRIPTOR = ROOT / "contracts" / "fit_developer_fields.json"
+GATT_V1 = ROOT / "contracts" / "gatt_v1.json"
+GATT_V2 = ROOT / "contracts" / "gatt_v2.json"
 C_HEADER = ROOT / "firmware" / "esp32_band" / "ble" / "synapse_contract_generated.h"
 PY_MODULE = ROOT / "src" / "synapse24" / "contracts_generated.py"
 
@@ -50,6 +53,96 @@ def _uuid_to_le_bytes(uuid: str) -> list[int]:
     """
     raw = bytes.fromhex(uuid.replace("-", ""))
     return list(reversed(raw))
+
+
+_TYPE_SIZE = {"u8": 1, "u16": 2, "u32": 4, "i16": 2}
+
+
+def _layout(fields: list[dict[str, Any]], declared_bytes: int, what: str) -> list[dict[str, Any]]:
+    """Resolve offsets and sizes; the declared total must match the field sum."""
+    out: list[dict[str, Any]] = []
+    offset = 0
+    for field in fields:
+        ftype = str(field["type"])
+        if ftype not in _TYPE_SIZE:
+            raise SystemExit(f"{MANIFEST}: {what}: unknown type {ftype!r}")
+        entry: dict[str, Any] = {
+            "name": str(field["name"]),
+            "type": ftype,
+            "offset": offset,
+            "size": _TYPE_SIZE[ftype],
+        }
+        if "na" in field:
+            entry["na"] = int(field["na"])
+        out.append(entry)
+        offset += _TYPE_SIZE[ftype]
+    if offset != declared_bytes:
+        raise SystemExit(
+            f"{MANIFEST}: {what}: fields add up to {offset} bytes, declared {declared_bytes}"
+        )
+    return out
+
+
+def _v2_values(
+    manifest: dict[str, Any], rates: dict[str, int], stream_ids: dict[str, int]
+) -> dict[str, Any]:
+    """The consumer contract v2 (layouts, units, stream metadata, control point)."""
+    v2 = (manifest.get("ble") or {}).get("consumer_v2") or {}
+    if not v2:
+        raise SystemExit(f"{MANIFEST}: no ble.consumer_v2 declared")
+    feature = v2["feature"]
+    status = v2["status"]
+    meta = v2["stream_metadata"]
+    units = {str(k): int(v) for k, v in meta["units"].items()}
+    entry_layout = _layout(meta["entry_fields"], int(meta["entry_bytes"]), "stream_metadata entry")
+
+    streams = []
+    for name, spec in meta["streams"].items():
+        rate = spec["rate"]
+        rate_hz = int(rates[rate]) if isinstance(rate, str) else int(rate)
+        streams.append(
+            {
+                "name": str(name),
+                "stream_id": int(stream_ids[str(name)]),
+                "format": int(spec["format"]),
+                "channels": int(spec["channels"]),
+                "unit": str(spec["unit"]),
+                "unit_code": units[str(spec["unit"])],
+                "rate_hz": rate_hz,
+                "unit_scale": int(spec["unit_scale"]),
+            }
+        )
+    control = v2["control_point"]
+    return {
+        "uuids": {
+            "CONSUMER_V2_FEATURE": str(v2["feature_uuid"]).lower(),
+            "CONSUMER_V2_STATUS": str(v2["status_uuid"]).lower(),
+            "CONSUMER_V2_STREAM_METADATA": str(v2["stream_metadata_uuid"]).lower(),
+            "CONSUMER_V2_CONTROL_POINT": str(v2["control_point_uuid"]).lower(),
+        },
+        "feature": {
+            "version": int(feature["version"]),
+            "bytes": int(feature["bytes"]),
+            "rate_hz": int(v2["feature_rate_hz"]),
+            "rate_max_hz": int(v2["feature_rate_max_hz"]),
+            "fields": _layout(feature["fields"], int(feature["bytes"]), "feature"),
+        },
+        "status": {
+            "version": int(status["version"]),
+            "bytes": int(status["bytes"]),
+            "fields": _layout(status["fields"], int(status["bytes"]), "status"),
+        },
+        "stream_metadata": {
+            "entry_bytes": int(meta["entry_bytes"]),
+            "entry_fields": entry_layout,
+            "units": units,
+            "streams": streams,
+        },
+        "control_point": {
+            "opcodes": {str(k): int(v) for k, v in control["opcodes"].items()},
+            "errors": {str(k): int(v) for k, v in control["errors"].items()},
+        },
+    }
 
 
 def _load_manifest() -> dict[str, Any]:
@@ -96,7 +189,15 @@ def _contract_values() -> dict[str, Any]:
     with FIT_DESCRIPTOR.open(encoding="utf-8") as handle:
         fit_fields = json.load(handle)["fields"]
 
+    v2 = _v2_values(
+        manifest,
+        {str(k): int(v) for k, v in rates.items()},
+        {str(k): int(v) for k, v in stream_ids.items()},
+    )
+    uuids.update(v2["uuids"])
+
     return {
+        "v2": v2,
         "uuids": uuids,
         "stream_ids": {str(k): int(v) for k, v in stream_ids.items()},
         "rates": {str(k): int(v) for k, v in rates.items()},
@@ -138,8 +239,46 @@ def _render_c(values: dict[str, Any]) -> str:
     lines += ["", "/* Normative sample rates (Hz). */"]
     for name, value in sorted(values["rates"].items()):
         lines.append(f"#define SYNAPSE_CONTRACT_RATE_{name.upper()}_HZ {value}")
+    lines += _render_c_v2(values["v2"])
     lines += ["", ""]
     return "\n".join(lines)
+
+
+def _render_c_v2(v2: dict[str, Any]) -> list[str]:
+    """Consumer contract v2: sizes, field offsets, sentinels, opcodes, stream table."""
+    lines = ["", "/* Consumer contract v2 (config/hardware.yaml ble.consumer_v2). */"]
+    feat, stat, meta, ctl = v2["feature"], v2["status"], v2["stream_metadata"], v2["control_point"]
+    lines += [
+        f"#define SYNAPSE_CONTRACT_V2_FEATURE_VERSION {feat['version']}",
+        f"#define SYNAPSE_CONTRACT_V2_FEATURE_BYTES {feat['bytes']}",
+        f"#define SYNAPSE_CONTRACT_V2_FEATURE_RATE_HZ {feat['rate_hz']}",
+        f"#define SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ {feat['rate_max_hz']}",
+        f"#define SYNAPSE_CONTRACT_V2_STATUS_VERSION {stat['version']}",
+        f"#define SYNAPSE_CONTRACT_V2_STATUS_BYTES {stat['bytes']}",
+        f"#define SYNAPSE_CONTRACT_V2_META_ENTRY_BYTES {meta['entry_bytes']}",
+    ]
+    for prefix, layout in (("FEATURE", feat["fields"]), ("STATUS", stat["fields"])):
+        for field in layout:
+            name = field["name"].upper()
+            lines.append(f"#define SYNAPSE_CONTRACT_V2_{prefix}_OFF_{name} {field['offset']}")
+            if "na" in field:
+                lines.append(f"#define SYNAPSE_CONTRACT_V2_{prefix}_NA_{name} 0x{field['na']:X}")
+    for name, value in sorted(ctl["opcodes"].items()):
+        lines.append(f"#define SYNAPSE_CONTRACT_V2_OP_{name.upper()} {value}")
+    for name, value in sorted(ctl["errors"].items()):
+        lines.append(f"#define SYNAPSE_CONTRACT_V2_ERR_{name.upper()} {value}")
+    streams = meta["streams"]
+    lines.append(f"#define SYNAPSE_CONTRACT_V2_STREAM_COUNT {len(streams)}")
+    lines.append(
+        "/* {stream_id, format, channels, unit, rate_hz, unit_scale} per metadata entry. */"
+    )
+    lines.append("#define SYNAPSE_CONTRACT_V2_STREAM_TABLE \\")
+    rows = [
+        f"    {{0x{s['stream_id']:02X}, {s['format']}, {s['channels']}, {s['unit_code']}, {s['rate_hz']}, {s['unit_scale']}}}"
+        for s in streams
+    ]
+    lines.append(", \\\n".join(rows))
+    return lines
 
 
 def _render_python(values: dict[str, Any]) -> str:
@@ -194,6 +333,41 @@ def _render_python(values: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _v1_sha256() -> str:
+    """sha256 of contracts/gatt_v1.json with LF endings (the pin Averyn stores)."""
+    data = GATT_V1.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _render_gatt_v2(values: dict[str, Any]) -> str:
+    """contracts/gatt_v2.json: the consumer contract v2, for clients that read JSON."""
+    v2 = values["v2"]
+    doc = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Synapse Band consumer GATT contract v2",
+        "version": "2.0",
+        "description": (
+            "GENERATED by tools/generate_contracts.py from config/hardware.yaml (ble.consumer_v2): "
+            "do not edit. New characteristics on the same consumer service as v1; v1 is frozen "
+            "(see v1_frozen) and a v1 client never sees them. A field equal to its `na` value is "
+            "not available and must be read as null, never as a measurement."
+        ),
+        "v1_frozen": {"file": "contracts/gatt_v1.json", "sha256": _v1_sha256()},
+        "service": values["uuids"]["CONSUMER_SERVICE"],
+        "characteristics": {
+            "feature": values["uuids"]["CONSUMER_V2_FEATURE"],
+            "status": values["uuids"]["CONSUMER_V2_STATUS"],
+            "stream_metadata": values["uuids"]["CONSUMER_V2_STREAM_METADATA"],
+            "control_point": values["uuids"]["CONSUMER_V2_CONTROL_POINT"],
+        },
+        "feature": v2["feature"],
+        "status": v2["status"],
+        "stream_metadata": v2["stream_metadata"],
+        "control_point": v2["control_point"],
+    }
+    return json.dumps(doc, indent=2) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -204,7 +378,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     values = _contract_values()
-    artifacts = {C_HEADER: _render_c(values), PY_MODULE: _render_python(values)}
+    artifacts = {
+        C_HEADER: _render_c(values),
+        PY_MODULE: _render_python(values),
+        GATT_V2: _render_gatt_v2(values),
+    }
 
     if args.check:
         drift: list[str] = []

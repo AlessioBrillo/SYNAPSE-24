@@ -58,6 +58,7 @@ extern "C" {
 // contract has a single source of truth, the firmware only includes it.
 // ============================================================================
 #include "synapse_contract_generated.h"
+#include "synapse_consumer_v2.h"
 
 #define SYNAPSE_CUSTOM_SERVICE_UUID128 \
     {SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_BYTES}  // f9e08ffd-...
@@ -118,8 +119,12 @@ typedef struct __attribute__((packed)) {
 } synapse_feature_stream_t;
 
 #define SYNAPSE_FEATURE_STREAM_SIZE sizeof(synapse_feature_stream_t)
-// Size = 26 bytes, fits in any negotiated MTU >= 29 (MTU-3). Default MTU 23
-// still works: the sender must respect MTU-3 before notifying.
+// Size = 23 bytes (it was documented as 26, which was never true), so it needs an ATT MTU >= 26.
+// The default MTU 23 leaves 20 bytes: the sender must respect MTU-3 before notifying.
+// The layout is frozen: Averyn pins contracts/gatt_v1.json and its golden vectors.
+#ifndef __cplusplus
+_Static_assert(sizeof(synapse_feature_stream_t) == 23, "feature stream v1 is 23 bytes on the wire");
+#endif
 
 // ============================================================================
 // Device Config (Protobuf encoded, read/write)
@@ -266,6 +271,28 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
                                          uint8_t ppg_sqi, uint8_t ppg_map,
                                          uint8_t ecg_quality, uint8_t stress_level,
                                          uint8_t motion_level, int16_t temperature);
+
+/**
+ * @brief Consumer contract v2: notify a feature frame (config/hardware.yaml ble.consumer_v2).
+ *
+ * The caller fills what it measured and leaves the rest at the NA sentinel
+ * (synapse_feature_v2_init_na). The sequence, the battery level and the charging
+ * flag are set here. Rate-limited to the rate negotiated through the control point
+ * (default 1 Hz); silently dropped when nothing is subscribed; refused with
+ * ESP_ERR_INVALID_SIZE when the ATT MTU cannot carry the frame.
+ */
+esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec);
+
+/** @brief Notify the status record (at most 1 Hz, only when subscribed). */
+esp_err_t synapse_ble_gatt_push_status(void);
+
+/** Fills the parts of the status record only the application knows (the MTU is added here). */
+typedef void (*synapse_ble_status_provider_t)(synapse_status_v2_t *out);
+void synapse_ble_gatt_set_status_provider(synapse_ble_status_provider_t provider);
+
+/** Called when a client writes start/stop on the control point. */
+typedef void (*synapse_ble_transmit_handler_t)(bool on);
+void synapse_ble_gatt_set_transmit_handler(synapse_ble_transmit_handler_t handler);
 
 /**
  * @brief Send provisioning notification
