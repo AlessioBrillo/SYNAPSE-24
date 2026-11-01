@@ -324,6 +324,7 @@
     ]
   },
   "control_point": {
+    "description": "start/stop gate the raw research streams; feature and status keep flowing and report the state; a new connection starts running",
     "opcodes": {
       "start": 1,
       "stop": 2,

@@ -59,6 +59,16 @@ static EventGroupHandle_t s_system_events;
 // (sensor health, counters, whether the raw streams run) is provided from here.
 static bool s_transmitting = true;
 
+// 0.0..1.0 -> 0..254. 255 is the "not available" sentinel of these fields, so a perfect
+// signal must not be able to reach it (it used to: 1.0 * 255), and an out-of-range or NaN
+// input must not wrap the cast.
+static uint8_t unit_to_u8(float v)
+{
+    if (!(v > 0.0f)) return 0;  // also catches NaN
+    if (v >= 1.0f) return 254;
+    return (uint8_t)(v * 254.0f + 0.5f);
+}
+
 static void on_transmit_request(bool on)
 {
     s_transmitting = on;
@@ -294,8 +304,8 @@ void app_main(void)
                 // 0 bpm is not a legal Heart Rate Measurement Value, so a
                 // zero reading is reported as "invalid" instead.
                 hr_bpm = (ppg.hr_bpm > 0.0f) ? (uint16_t)ppg.hr_bpm : 0xFFFF;
-                ppg_sqi = (uint8_t)(ppg.sqi * 255.0f);
-                ppg_map = (uint8_t)(ppg.motion_artifact_prob * 255.0f);
+                ppg_sqi = unit_to_u8(ppg.sqi);
+                ppg_map = unit_to_u8(ppg.motion_artifact_prob);
             }
 
             (void)synapse_ble_gatt_push_feature(

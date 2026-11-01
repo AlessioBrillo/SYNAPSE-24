@@ -321,6 +321,9 @@ def check_gatt_v2_consistent(report: Report, gatt_v2: Path, gatt_v1: Path) -> No
     if not gatt_v2.is_file():
         report.fail(f"{gatt_v2} is missing: run tools/generate_contracts.py")
         return
+    if not gatt_v1.is_file():
+        report.fail(f"{gatt_v1} is missing: the frozen v1 contract cannot be checked")
+        return
     v2 = _load_json(gatt_v2)
 
     v1_sha = hashlib.sha256(gatt_v1.read_bytes().replace(b"\r\n", b"\n")).hexdigest()

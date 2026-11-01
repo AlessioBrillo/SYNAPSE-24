@@ -141,3 +141,39 @@ def test_the_build_files_know_about_the_new_sources() -> None:
     assert "synapse_consumer_v2.c" in _src(BAND / "ble" / "CMakeLists.txt")
     assert "esp_timer" in _src(BAND / "main" / "CMakeLists.txt")
     assert "synapse_consumer_v2.c" in _src(ROOT / "scripts" / "gcc_probe.py")
+
+
+def test_the_mtu_is_per_connection_and_the_device_asks_for_a_larger_one() -> None:
+    code = _code(GATT)
+    connect = code[code.index("case BLE_GAP_EVENT_CONNECT:") :]
+    connect = connect[: connect.index("case BLE_GAP_EVENT_DISCONNECT:")]
+    assert "g_mtu = 23" in connect  # never the previous peer's MTU
+    assert "ble_gattc_exchange_mtu(g_conn_handle" in connect
+    disconnect = code[code.index("case BLE_GAP_EVENT_DISCONNECT:") :]
+    disconnect = disconnect[: disconnect.index("case BLE_GAP_EVENT_SUBSCRIBE:")]
+    assert "g_mtu = 23" in disconnect
+
+
+def test_a_new_session_starts_with_the_raw_streams_running() -> None:
+    code = _code(GATT)
+    disconnect = code[code.index("case BLE_GAP_EVENT_DISCONNECT:") :]
+    disconnect = disconnect[: disconnect.index("case BLE_GAP_EVENT_SUBSCRIBE:")]
+    assert "s_transmit_handler(true)" in disconnect
+
+
+def test_a_too_small_mtu_is_reported_once_not_swallowed() -> None:
+    code = _code(GATT)
+    body = code[code.index("esp_err_t synapse_ble_gatt_push_feature_v2(") :]
+    body = body[: body.index("esp_err_t synapse_ble_gatt_push_status(")]
+    assert "s_mtu_warned" in body
+    assert "ESP_LOGW(BLE_TAG" in body
+
+
+def test_a_perfect_signal_cannot_be_reported_as_not_available() -> None:
+    main = _code(APP_MAIN)
+    helper = main[main.index("static uint8_t unit_to_u8(") :]
+    helper = helper[: helper.index("\n}\n")]
+    assert "return 254" in helper  # 255 is the NA sentinel
+    assert "!(v > 0.0f)" in helper  # NaN and negatives
+    assert "* 255.0f" not in main
+    assert "ppg_sqi = unit_to_u8(ppg.sqi)" in main

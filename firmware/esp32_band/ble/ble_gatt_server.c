@@ -88,6 +88,7 @@ static synapse_ble_transmit_handler_t s_transmit_handler = NULL;
 // The 100 default in s_batt_level is a placeholder, not a measurement: v2 reports
 // the level only once the power module has actually provided one.
 static bool s_batt_known = false;
+static bool s_mtu_warned = false;  // one warning per connection when the MTU cannot carry v2
 static bool s_batt_charging = false;
 
 // --- characteristic access callbacks -----------------------------------------
@@ -453,10 +454,16 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
             g_feat_seq = 0;
+            g_mtu = 23;  // the default until this link negotiates its own: never the previous peer's
+            s_mtu_warned = false;
             // The research service owns its own connection handle: without
             // this the raw stream path had BLE_HS_CONN_HANDLE_NONE forever
             // and silently transmitted nothing (Fase 1, bloccante B1).
             synapse_research_service_on_connect(event->connect.conn_handle);
+            // Ask for a larger ATT MTU ourselves: a central that does not (Android needs an
+            // explicit request) would leave the 26/32-byte v2 frames and the raw streams stuck at
+            // the 20-byte default. A central that also asks gets BLE_HS_EALREADY: harmless.
+            (void)ble_gattc_exchange_mtu(g_conn_handle, NULL, NULL);
             ESP_LOGI(BLE_TAG, "Connected handle=%d", g_conn_handle);
         } else {
             ESP_LOGW(BLE_TAG, "Connection failed: %d", event->connect.status);
@@ -474,6 +481,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         s_feat2_subscribed = false;
         s_status_subscribed = false;
         s_feat2_seq = 0;  // a new session starts a new sequence
+        g_mtu = 23;
+        s_mtu_warned = false;
+        // A Stop written by one client must not silence the raw streams for the next one.
+        if (s_transmit_handler != NULL) s_transmit_handler(true);
         s_feat2_rate_hz = SYNAPSE_CONTRACT_V2_FEATURE_RATE_HZ;
         synapse_research_service_on_disconnect();
 #if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
@@ -827,7 +838,15 @@ esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec) {
     if (now_ms - s_last_ms < 1000u / s_feat2_rate_hz) return ESP_OK;
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
     if (!s_feat2_subscribed || s_feat2_handle == 0) return ESP_OK;  // nothing subscribed
-    if (g_mtu < SYNAPSE_CONTRACT_V2_FEATURE_BYTES + 3u) return ESP_ERR_INVALID_SIZE;
+    if (g_mtu < SYNAPSE_CONTRACT_V2_FEATURE_BYTES + 3u) {
+        if (!s_mtu_warned) {
+            s_mtu_warned = true;
+            ESP_LOGW(BLE_TAG, "ATT MTU %u cannot carry the v2 feature frame (%u B + 3 needed): "
+                              "the client must negotiate a larger MTU",
+                     (unsigned)g_mtu, (unsigned)SYNAPSE_CONTRACT_V2_FEATURE_BYTES);
+        }
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     rec->sequence = s_feat2_seq;
     if (s_batt_known) {

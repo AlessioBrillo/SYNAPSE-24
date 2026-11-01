@@ -113,6 +113,12 @@ def _v2_values(
             }
         )
     control = v2["control_point"]
+    errors = {str(k): int(v) for k, v in control["errors"].items()}
+    # The error code travels as an ATT application error (0x80 + code, window 0x80..0x9F).
+    if any(not 0 < code <= 0x1F for code in errors.values()):
+        raise SystemExit(
+            f"{MANIFEST}: control_point errors must be in 1..31 (ATT application window)"
+        )
     return {
         "uuids": {
             "CONSUMER_V2_FEATURE": str(v2["feature_uuid"]).lower(),
@@ -139,8 +145,9 @@ def _v2_values(
             "streams": streams,
         },
         "control_point": {
+            "description": str(control.get("description", "")),
             "opcodes": {str(k): int(v) for k, v in control["opcodes"].items()},
-            "errors": {str(k): int(v) for k, v in control["errors"].items()},
+            "errors": errors,
         },
     }
 

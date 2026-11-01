@@ -204,15 +204,18 @@ ble:
       bytes: 26
       fields:
         - {name: version, type: u8}
-        - {name: flags, type: u8}                       # bit0 charging, bit1 lead_off, bit2 transmitting, bit3 clock_wrapped
+        # flags: bit0 charging, bit1 lead_off, bit2 transmitting, bit3 clock_wrapped.
+        # Band v1 firmware populates charging and transmitting; lead_off and clock_wrapped are
+        # reserved (always 0) until the lead-off input is trustworthy and t_dev_ms wraps.
+        - {name: flags, type: u8}
         - {name: sequence, type: u16}
         - {name: t_dev_ms, type: u32}                   # device uptime, ms
         - {name: heart_rate_bpm, type: u16, na: 0xFFFF}
         - {name: rr_last, type: u16, na: 0xFFFF}        # 1/1024 s (Bluetooth RR unit)
         - {name: rr_count, type: u8, na: 0xFF}          # RR intervals since the previous frame
-        - {name: ppg_sqi, type: u8, na: 0xFF}           # 0..255 = 0.0..1.0
-        - {name: ecg_quality, type: u8, na: 0xFF}       # 0..255 = 0.0..1.0
-        - {name: motion_level, type: u8, na: 0xFF}      # 0..255 = 0.0..1.0
+        - {name: ppg_sqi, type: u8, na: 0xFF}           # 0..254 = 0.0..1.0 (255 is NA, never a value)
+        - {name: ecg_quality, type: u8, na: 0xFF}       # 0..254 = 0.0..1.0
+        - {name: motion_level, type: u8, na: 0xFF}      # 0..254 = 0.0..1.0
         - {name: stress_level, type: u8}                # 0 baseline, 1 stress, 2 artifact, 3 unknown
         - {name: battery_pct, type: u8, na: 0xFF}
         - {name: temperature_c100, type: i16, na: 0x7FFF}   # 0.01 degC
@@ -255,6 +258,10 @@ ble:
         mag:   {format: 2, channels: 3, unit: cut,     unit_scale: 100,  rate: imu}
         power: {format: 3, channels: 4, unit: milli,   unit_scale: 1,    rate: 1}
     control_point:                   # write with response: [opcode u8][args...]
+      # start/stop gate the RAW research streams only; the feature and status frames keep flowing
+      # and report the state in their `transmitting` flag, so a UI can show "paused". A new
+      # connection always starts with the streams running.
+      description: "start/stop gate the raw research streams; feature and status keep flowing and report the state; a new connection starts running"
       opcodes: {start: 1, stop: 2, set_feature_rate: 3}
       errors: {bad_opcode: 1, bad_length: 2, bad_argument: 3}
   # Standard GATT services exposed alongside (nRF Connect / LightBlue usable).

@@ -352,3 +352,40 @@ def test_the_v1_feature_frame_is_23_bytes_as_compiled(tmp_path: Path) -> None:
     lib.host_sizeof_feature_v1.restype = ctypes.c_size_t
     manifest = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
     assert lib.host_sizeof_feature_v1() == manifest["ble"]["feature_stream"]["payload_bytes"] == 23
+
+
+# --- the SDK encoder refuses what the wire cannot carry ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"heart_rate_bpm": 0xFFFF}, "sentinel"),  # a real value equal to NA would decode as None
+        ({"ppg_sqi": 255}, "sentinel"),
+        ({"sequence": 70000}, "outside"),
+        ({"sequence": -1}, "outside"),
+        ({"battery_pct": 300}, "outside"),
+        ({"temperature_c100": 40000}, "outside"),
+        ({"not_a_field": 1}, "unknown"),
+        ({"version": 1}, "version"),
+    ],
+)
+def test_the_sdk_encoder_raises_its_own_error_for_an_invalid_record(
+    values: dict[str, int], message: str
+) -> None:
+    with pytest.raises(consumer.ConsumerCodecError, match=message):
+        consumer.encode_feature(values)
+
+
+def test_the_sdk_control_encoder_enforces_the_firmware_rate_range() -> None:
+    for rate in (0, 6, 300):
+        with pytest.raises(consumer.ConsumerCodecError, match="outside"):
+            consumer.encode_control("set_feature_rate", rate)
+    assert consumer.encode_control("set_feature_rate", 5) == bytes([3, 5])
+    doc = json.loads(GATT_V2.read_text(encoding="utf-8"))
+    assert doc["feature"]["rate_max_hz"] == consumer.FEATURE_RATE_MAX_HZ
+
+
+def test_the_control_point_errors_fit_the_att_application_window() -> None:
+    errors = json.loads(GATT_V2.read_text(encoding="utf-8"))["control_point"]["errors"]
+    assert all(0 < code <= 0x1F for code in errors.values())  # 0x80 + code stays in 0x80..0x9F

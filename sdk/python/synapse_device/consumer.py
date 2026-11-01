@@ -113,8 +113,38 @@ def decode_status(frame: bytes) -> dict[str, int | None]:
     return _decode(bytes(frame), STATUS_FIELDS, STATUS_BYTES, STATUS_VERSION, "status")
 
 
+_RANGE: Final = {
+    "B": (0, 0xFF),
+    "H": (0, 0xFFFF),
+    "I": (0, 0xFFFFFFFF),
+    "h": (-0x8000, 0x7FFF),
+}
+FEATURE_RATE_MAX_HZ: Final = 5
+
+
 def encode_feature(values: dict[str, int | None]) -> bytes:
-    """Encode a record; ``None`` (or a missing optional field) becomes its sentinel."""
+    """Encode a record; ``None`` (or a missing optional field) becomes its sentinel.
+
+    Raises ``ConsumerCodecError`` for an unknown field, a value outside its type, or a real
+    value equal to the field's "not available" sentinel (it would decode back as ``None``).
+    """
+    known = {f.name: f for f in FEATURE_FIELDS}
+    unknown = sorted(set(values) - set(known))
+    if unknown:
+        raise ConsumerCodecError(f"feature: unknown field(s) {unknown}")
+    if values.get("version") not in (None, FEATURE_VERSION):
+        raise ConsumerCodecError(f"feature: this codec writes version {FEATURE_VERSION} only")
+    for name, value in values.items():
+        if value is None or name == "version":
+            continue
+        field = known[name]
+        low, high = _RANGE[field.fmt]
+        if not low <= value <= high:
+            raise ConsumerCodecError(f"feature: {name}={value} is outside {low}..{high}")
+        if field.na is not None and value == field.na:
+            raise ConsumerCodecError(
+                f"feature: {name}={value} is the 'not available' sentinel; pass None"
+            )
     buf = bytearray(FEATURE_BYTES)
     for field in FEATURE_FIELDS:
         value = values.get(field.name)
@@ -171,6 +201,10 @@ def encode_control(op: str, arg: int | None = None) -> bytes:
     if op == "set_feature_rate":
         if arg is None:
             raise ConsumerCodecError("set_feature_rate needs a rate in Hz")
+        if not 1 <= arg <= FEATURE_RATE_MAX_HZ:
+            raise ConsumerCodecError(
+                f"set_feature_rate: {arg} Hz is outside 1..{FEATURE_RATE_MAX_HZ}"
+            )
         return bytes((_OPCODES[op], arg))
     if arg is not None:
         raise ConsumerCodecError(f"{op} takes no argument")

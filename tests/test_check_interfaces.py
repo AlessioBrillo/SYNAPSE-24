@@ -319,3 +319,9 @@ def test_the_worker_field_ids_are_part_of_the_consistency_check(tmp_path: Path) 
     assert any("worker/hrv_worker.py field IDs diverge" in f for f in report.failures), (
         report.failures
     )
+
+
+def test_a_missing_v1_contract_is_a_failure_not_a_traceback(tmp_path: Path) -> None:
+    report = ci.Report()
+    ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, tmp_path / "absent.json")
+    assert any("is missing" in f for f in report.failures), report.failures
