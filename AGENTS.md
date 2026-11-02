@@ -29,4 +29,11 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   sources that changed in this increment compile cleanly against the ESP-IDF toolchain
   when memory allows, and the host C gate (tests/firmware_host) proves them on CI.
   When the Docker host has sufficient RAM, `ci-local` should exit 0 end to end.
+- **Running the gate on this Windows host (MVP-1.3):** one `run_gate_locally.sh` run is killed when memory is low, so
+  run it in pieces (each light step, the suite in chunks of 10 test files with `--cov-append`, then
+  `coverage report --fail-under=80`, the SDK suite, `scripts/gcc_probe.py`). Windows Application Control intermittently
+  blocks the DLLs the C host tests compile: those tests then **skip**, and a skip is not a pass. The script does not
+  fail on them (a skip is not a failure), so the host C gate step runs with `-rs` and prints the reason of every skip:
+  **zero skips are expected there**, and any "OS policy blocked" / "host policy blocked" line means rerun those tests in
+  the gate's Linux container before calling the gate green. Details: `docs/increments/MVP1_3_FIRST_LIGHT.md`.
 - Done / merge-ready means this gate is green on the final tree. See `~/.agents/CI.md`.

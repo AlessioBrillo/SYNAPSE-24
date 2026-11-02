@@ -93,7 +93,8 @@ claim (Roadmap, README).
 
 ## Cosa NON include (per decisione esplicita)
 
-- **Provisioning GATT** (servizio di pairing) — MVP-1.3.
+- **Provisioning GATT** (servizio di pairing) — era MVP-1.3; il numero e' passato al first-light
+  della band (`MVP1_3_FIRST_LIGHT.md`) e il provisioning (solo CSR) slitta a **MVP-1.4**.
 - **OTA / aggiornamento firmware** — dopo G1.
 - **FIT on-device** — MVP-1.4 (l'output di `record` resta l'XDF).
 - **UI Averyn** — piano dedicato.
