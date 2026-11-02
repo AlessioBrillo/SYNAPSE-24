@@ -71,7 +71,7 @@ _CLAIM_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         # The roadmap's own phase list: "Phase 0 \u2014 Foundations ... \u2705 COMPLETE" while the
         # artifact says partial. The older patterns only knew the results headings.
-        re.compile(r"Phase 0\s*\u2014\s*Foundations[^\n]*(?:\u2705|COMPLETE)"),
+        re.compile(r"Phase 0\s*[-\u2013\u2014]\s*Foundations[^\n]*\u2705\s*\**\s*COMPLETE"),
         "the Phase 0 line of the roadmap claims it is COMPLETE",
     ),
     (

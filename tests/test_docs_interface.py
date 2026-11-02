@@ -1,17 +1,20 @@
 """The Averyn interface document says what the code does (MVP-1.3 PR-F2).
 
 The previous version described a flow that does not exist (Averyn importing sessions from the Data
-Plane as ``synapse-data-plane``, pages that were never built, a WebSocket query token the server
+Plane under its own source label, pages that were never built, a WebSocket query token the server
 refuses). A document that other teams build against is part of the contract, so it is checked
-against the running application and the files it names.
+against the running application, the contract files and the numbers it quotes.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "contracts" / "AVERYN_INTERFACE.md"
@@ -21,17 +24,25 @@ def _text() -> str:
     return DOC.read_text(encoding="utf-8")
 
 
-def test_every_endpoint_in_the_table_exists_in_the_application() -> None:
+def _documented_endpoints() -> set[tuple[str, str]]:
+    rows = re.findall(r"^\| `(/[^`]*)` \| (GET|POST) \|", _text(), re.MULTILINE)
+    return {("/api/v1" + path, method.lower()) for path, method in rows}
+
+
+def test_the_endpoint_table_and_the_application_list_the_same_v1_routes() -> None:
     pytest.importorskip("fastapi")
     from backend.main import app
 
-    paths = app.openapi()["paths"]
-    rows = re.findall(r"^\| `(/[^`]*)` \| (GET|POST) \|", _text(), re.MULTILINE)
-    assert len(rows) == 6, rows
-    for path, method in rows:
-        full = "/api/v1" + path
-        assert full in paths, f"{full} is documented but the application has no such route"
-        assert method.lower() in paths[full], f"{method} {full} is documented but not served"
+    served = {
+        (path, method)
+        for path, item in app.openapi()["paths"].items()
+        if path.startswith("/api/v1/")
+        for method in item
+    }
+    documented = _documented_endpoints()
+    assert documented, "the endpoint table could not be parsed"
+    assert documented - served == set(), "documented but not served"
+    assert served - documented == set(), "served but not documented"
 
 
 def test_every_contract_file_the_document_names_exists() -> None:
@@ -48,6 +59,20 @@ def test_every_contract_file_the_document_names_exists() -> None:
         assert (ROOT / name).is_file(), f"the document names {name}, which does not exist"
 
 
+def test_the_numbers_the_document_quotes_match_the_contracts() -> None:
+    text = _text()
+    manifest = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+    v2 = json.loads((ROOT / "contracts" / "gatt_v2.json").read_text(encoding="utf-8"))
+    v1_bytes = (ROOT / "contracts" / "gatt_v1.json").read_bytes().replace(b"\r\n", b"\n")
+    sha = hashlib.sha256(v1_bytes).hexdigest()
+
+    assert f"**{manifest['ble']['feature_stream']['payload_bytes']} byte**" in text  # the v1 frame
+    assert f"Feature v2* (notify, {v2['feature']['bytes']} B)" in text
+    assert f"Status* (read + notify, {v2['status']['bytes']} B)" in text
+    assert f"{v2['feature']['bytes'] + 3}" in text  # the MTU the v2 feature needs (frame + 3)
+    assert f"`{sha[:8]}…{sha[-4:]}`" in text, "the pinned sha256 quoted in the document is stale"
+
+
 @pytest.mark.parametrize(
     "stale",
     [
@@ -62,15 +87,35 @@ def test_the_document_no_longer_makes_the_claims_the_code_contradicts(stale: str
     assert stale not in _text()
 
 
-def test_the_document_states_the_things_that_are_true_now() -> None:
+def test_the_security_statements_hold_in_the_application() -> None:
+    """The document says the 501 stubs are behind the token, and that a query token is refused."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from backend import main as main_module
+    from backend.main import app
+
     text = _text()
-    for needle in (
-        'new WebSocket(url, ["bearer", token])',
-        "**404**",
-        "**501**",
-        "23 byte",
-        "non chiama mai il Data Plane",
-        "0=W 1=N1 2=N2 3=N3 4=REM",
-        "secondi Unix",
-    ):
-        assert needle in text, f"the document lost: {needle}"
+    assert "401" in text
+    assert "prima di arrivare al 501" in text
+    assert "token in query (`?token=`) è rifiutato" in text
+    import os
+
+    os.environ["SYNAPSE_API_TOKEN"] = "doc-check"
+    try:
+        main_module._reset_services()
+        client = TestClient(app)
+        assert client.get("/api/live/pod-1").status_code == 401  # token before 501
+        assert (
+            client.get("/api/live/pod-1", headers={"Authorization": "Bearer doc-check"}).status_code
+            == 501
+        )
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/ws/live?token=doc-check"),
+        ):
+            pass
+    finally:
+        os.environ.pop("SYNAPSE_API_TOKEN", None)
+        main_module._reset_services()

@@ -37,7 +37,7 @@ Base path: `/api/v1`. Gli errori sono HTTP veri: una sessione inesistente è **4
 | `/jobs/types` | GET | Tipi di job supportati dal worker. |
 | `/jobs/run` | POST | Esegue inline un job su un file della directory delle sessioni. |
 
-Altri percorsi: `/api/health` (liveness, aperta), `/api/status` (n. sessioni; `current_tier` è `null` in modalità solo-software), `/api/config` (manifest hardware), `/live` (pagina del viewer) e `/ws/live`. `/api/live/*`, `/api/control/*` rispondono **501**: richiedono un dispositivo.
+Altri percorsi: `/api/health` (liveness, aperta), `/api/status` (n. sessioni; `current_tier` è `null` in modalità solo-software), `/api/config` (manifest hardware), `/live` (pagina del viewer) e `/ws/live`. `/api/live/*`, `/api/control/*` rispondono **501**: richiedono un dispositivo. Anche queste sono dietro il token: con `SYNAPSE_API_TOKEN` impostata una chiamata senza credenziale riceve **401** prima di arrivare al 501.
 
 Corpo di `POST /api/v1/jobs/run`:
 
