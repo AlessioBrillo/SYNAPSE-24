@@ -149,9 +149,9 @@ I (xxx) SYNAPSE_BAND: Entering main loop
 ```
 
 If you see `ESP_ERR_NOT_FOUND` from the PPG or IMU driver, the I²C bus is wrong:
-the Band firmware hard-codes **SDA = GPIO 8, SCL = GPIO 9** (ESP32-S3 has no
-usable GPIO 21–25 on octal-PSRAM modules — do not use the classic ESP32 21/22
-pair).
+the Band firmware hard-codes **SDA = GPIO 8, SCL = GPIO 9** (GPIO 22–25 do not
+exist on the ESP32-S3 and GPIO 26–37 are flash/PSRAM on the N8R8 — do not use
+the classic ESP32 21/22 pair).
 
 ## 6. Partition table
 
