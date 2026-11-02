@@ -28,14 +28,20 @@ octal-PSRAM S3 modules.
 
 | Signal | GPIO |
 |---|---|
-| AD8232 OUTPUT | 36 (ADC1_CH0) |
-| AD8232 LO+ / LO− | 39 / 34 |
+| AD8232 OUTPUT | **1** (ADC1_CH0) |
+| AD8232 LO+ (lead-off) | **15** (optional, see below) |
+| Battery divider (optional) | **4** (ADC1_CH3) |
 | MAX30102 + ICM-20948 + INA219 SDA | **8** |
 | MAX30102 + ICM-20948 + INA219 SCL | **9** |
 | MAX30102 INT | 5 |
 | ICM-20948 INT | 6 |
+| Wired sync (two-pod bench only) | **10** |
 | All VCC | 3V3 |
 | All GND | GND |
+
+> **GPIO 26-37 are not usable on the DevKitC-1 N8R8**: 26-32 are the SPI flash and 33-37 the octal PSRAM. Earlier revisions of this document put signals on GPIO 27, 34 and 36; do not wire those.
+> The pin map is `config/hardware.yaml` / `firmware/esp32_band/config/Kconfig`;
+> `tests/test_firmware_first_light.py` fails if two functions share a pin or one lands on 26-37.
 
 **INA219 goes in series with the rig's supply, not on a tap.** The monitor
 measures the current through its shunt: battery+ → INA219 `VIN+`, INA219
@@ -55,11 +61,13 @@ Electrodes: RA (red) proximal near the elbow, LA (yellow) distal near the
 wrist, RL (green) on a bony prominence as reference. Clean the skin with
 alcohol; a wet electrode is the difference between a clean QRS and noise.
 
-> **`ecg_config.gpio_drdy: 4` in `hardware.yaml` is optional.** The driver
-> uses it as the lead-off sense pin. If your AD8232 clone has no DRDY/LO pin
-> free on GPIO 4, leave it unconnected (the internal pull-up then reads as
-> "lead-off" permanently — noisy logs, but no effect on streaming), or set
-> `gpio_drdy: -1` in `config/hardware.yaml`. Do not rewire the I²C bus over it.
+> **`ecg_config.gpio_drdy: 15` in `hardware.yaml` is optional.** The driver
+> uses it as the lead-off sense pin (LO+; the AD8232 breakouts expose LO+ and
+> LO− separately, OR them through two diodes if you want both). If your clone
+> has no LO pin, leave GPIO 15 unconnected: the internal pull-up then reads as
+> "lead-off" permanently — noisy logs, but no effect on streaming, because the
+> ECG stream is deliberately not gated on it. Or set `gpio_drdy: -1`.
+> It used to be GPIO 4, which is also the battery-divider input: do not share them.
 
 ## 1. Build and flash
 
@@ -154,10 +162,11 @@ for €0:
    the two recordings via `PodClockModel`/`ACC cross-correlation` and record
    the residual. **≤10 ms over 30 min PASSES** the sync precondition for the
    Cerelog order.
-4. The wired-sync line (GPIO 27 between the pods) is driven by the hub-side
+4. The wired-sync line (GPIO 10 between the pods; it was GPIO 27 before the
+   N8R8 flash/PSRAM pins were ruled out) is driven by the hub-side
    driver already compiled into band-core, but *emitting* the pulse is a G2
    feature (real head pod, second body site): for the bench measurement above
-   leave GPIO 27 unconnected.
+   leave GPIO 10 unconnected.
 
 Write the residual into `gate_report.json` under `sync.pod_pair_residual_ms`
 — `PROCUREMENT.md` treats the pod↔pod number, not pod↔host, as the evidence

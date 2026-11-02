@@ -26,14 +26,17 @@ Complete step-by-step guide to build, flash, and validate the Tier 0 forearm hub
 | Signal | GPIO | ESP32-S3 Pin | Notes |
 |--------|------|--------------|-------|
 | ECG ADC | 1 (ADC1_CH0) | GPIO1 | AD8232 output |
-| ECG DRDY | 4 | GPIO4 | AD8232 data ready |
-| ECG LO+ | 39 | GPIO39 | Lead-off detect + |
-| ECG LO- | 34 | GPIO34 | Lead-off detect - |
-| I2C SDA | 21 | GPIO21 | Shared PPG + IMU |
-| I2C SCL | 22 | GPIO22 | Shared PPG + IMU |
+| ECG lead-off | 15 | GPIO15 | AD8232 LO+ (optional; unwired reads "lead-off", harmless) |
+| Battery divider | 4 (ADC1_CH3) | GPIO4 | optional; was shared with the lead-off input |
+| I2C SDA | 8 | GPIO8 | Shared PPG + IMU + INA219 |
+| I2C SCL | 9 | GPIO9 | Shared PPG + IMU + INA219 |
 | PPG INT | 5 | GPIO5 | MAX30102 interrupt |
 | IMU INT | 6 | GPIO6 | ICM-20948 interrupt |
-| Wired Sync | 27 | GPIO27 | Hub→Head pod (GPIO 21 = I2C SDA reserved) |
+| Wired Sync | 10 | GPIO10 | Hub→Head pod (two-pod bench only) |
+
+> **GPIO 26-37 are not usable on the DevKitC-1 N8R8**: 26-32 are the SPI flash and 33-37 the octal PSRAM. Earlier revisions of this document put signals on GPIO 27, 34 and 36; do not wire those.
+> This table and the diagram below follow `config/hardware.yaml`; I2C is 8/9 (21/22 do not exist usable on
+> octal-PSRAM S3 modules), which `docs/hardware/BRINGUP_SOP.md` §0 and `tools/check_contract.py` also assert.
 | BLE Antenna | — | Keep clear | No metal near PCB antenna |
 
 ---
@@ -52,17 +55,17 @@ Complete step-by-step guide to build, flash, and validate the Tier 0 forearm hub
 │                        └──┬──┘             └───┬───┘      └──┬──┘  │
 │                           │                     │             │    │
 │  GPIO1 (ADC) ◄────────────┘                     │             │    │
-│  GPIO4 (DRDY) ◄─────────────────────────────────┘             │    │
-│  GPIO39 (LO+) ◄───────────────────────────────────────────────┘    │
-│  GPIO34 (LO-) ◄────────────────────────────────────────────────────│
+│  GPIO15 (LO+) ◄─────────────────────────────────┘             │    │
+│  GPIO4 (bat) ◄───────────────────────────────────────────────┘    │
+│  (LO-: n/c) ◄────────────────────────────────────────────────────│
 │                           │                     │             │    │
-│  GPIO21 (SDA) ◄───────────┼─────────────────────┼─────────────┘    │
-│  GPIO22 (SCL) ◄───────────┼─────────────────────┼──────────────────│
+│  GPIO8 (SDA)  ◄───────────┼─────────────────────┼─────────────┘    │
+│  GPIO9 (SCL)  ◄───────────┼─────────────────────┼──────────────────│
 │                           │                     │                  │
 │  GPIO5 (INT)  ◄───────────┘                     │                  │
 │  GPIO6 (INT)  ◄─────────────────────────────────┘                  │
 │                                                                  │
-│  GPIO27 ──► Wired Sync to Head Pod (future Tier 1)              │
+│  GPIO10 ──► Wired Sync to Head Pod (future Tier 1)              │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -210,10 +213,10 @@ OVERALL: PASS
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | BLE won't connect | Wrong MAC / not advertising | Scan with `bleak` scanner; check `SYNAPSE_FOREARM_BLE` |
-| No ECG data | AD8232 wiring / lead-off | Check GPIO1/4/39/34; verify electrode contact |
+| No ECG data | AD8232 wiring / electrode contact | Check GPIO1 (output); the signal is bias-calibrated over the first second, so a flat trace right after boot is normal; verify electrode contact |
 | PPG all zeros | I2C address / power | Confirm MAX30102 @0x57 on I2C0; check 3.3V supply |
 | IMU not found | ICM-20948 address / INT | Verify 0x68 on I2C0; GPIO6 interrupt |
-| Sync drift >10ms | BLE congestion / no markers | Reduce BLE interval; check wired sync GPIO27 |
+| Sync drift >10ms | BLE congestion / no markers | Reduce BLE interval; check wired sync GPIO10 |
 | Firmware build fails | ESP-IDF version mismatch | Use ESP-IDF v5.3+; `idf.py fullclean && idf.py build` |
 | `triage_features_compute_live` returns `INVALID_SIZE` | 4 s IMU window not full yet | Wait ~4 s after boot; check IMU task calls `triage_features_push_imu` |
 | `triage_features_init` returns `INVALID_ARG` | IMU/PPG rate != 50 Hz | Features are defined at 50 Hz (`triage_dsp.h`); fix the sensor config |

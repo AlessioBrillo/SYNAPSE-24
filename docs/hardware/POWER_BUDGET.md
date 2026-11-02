@@ -27,11 +27,13 @@ appears — README, PROCUREMENT, BRINGUP_SOP.
 | Block | Profile | Estimated current | Basis |
 |---|---|---|---|
 | ESP32-S3, CPU active + BLE connected | continuous, ~2.4 kB/s sustained, MTU 247 + DLE | 60–100 mA | typical S3 active+radio figures; the radio, not the analogue, dominates — Architecture.md §55-62 says exactly this |
-| MAX30102 | red+IR, LED current 0x1F (≈51 mA), 411 µs pulse @50 Hz, ~2 % duty per LED | 4–7 mA | LED peak × duty + AFE |
+| MAX30102 | red+IR, LED current 0x1F (≈6.2 mA: the register is 0.2 mA per step), 411 µs pulse @50 Hz, ~2 % duty per LED | ≤4–7 mA (upper bound; see note) | LED peak × duty + AFE |
 | ICM-20948 | 9-axis @50 Hz | 2–3 mA | datasheet all-axis-active current |
 | AD8232 | analog front-end | 0.5–1 mA | datasheet |
 | INA219 | continuous bus+shunt conversion | 0.5–1 mA | datasheet |
 | **Total** | | **≈70–115 mA → 250–425 mW** | |
+
+> **Correction (MVP-1.3 audit).** The MAX30102 row used 51 mA for LED current `0x1F`; the LED current register is 0.2 mA per step, so `0x1F` is ≈6.2 mA and the LED contributes ~0.1 mA on average at this duty. The row's 4-7 mA is therefore a conservative *upper bound*, and so is the total, until the bench measurement of BRINGUP_SOP §4a replaces the estimate. Nothing here has been measured on a board.
 
 **Budget-KIT envelope: 150–600 mW (≈40–160 mA @3.7 V).** A measurement
 outside the envelope fails the row and demands an explanation (a forgotten
