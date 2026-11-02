@@ -52,8 +52,8 @@
       "type": "object",
       "required": ["sqi", "map", "ecg_quality", "window_s", "source"],
       "properties": {
-        "sqi": {"type": "integer", "minimum": 0, "maximum": 255},
-        "map": {"type": "integer", "minimum": 0, "maximum": 255},
+        "sqi": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
+        "map": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
         "ecg_quality": {"type": ["integer", "null"], "minimum": 0, "maximum": 255},
         "window_s": {"type": "number", "minimum": 0},
         "per_channel": {"type": "array"},
@@ -65,10 +65,10 @@
       "type": "object",
       "required": ["sleep_stage", "confidence", "epoch_s", "source", "input_modality"],
       "properties": {
-        "sleep_stage": {"type": "integer", "minimum": 0, "maximum": 4},
-        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "sleep_stage": {"type": ["integer", "null"], "enum": [0, 1, 2, 3, 4, 255, null]},
+        "confidence": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
         "epoch_s": {"type": "number", "minimum": 0},
-        "hypnogram": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 4}},
+        "hypnogram": {"type": "array", "items": {"type": "integer", "enum": [0, 1, 2, 3, 4, 255]}},
         "input_modality": {"type": "string", "enum": ["eeg"]},
         "aux_channels_used": {"type": "array", "items": {"type": "string"}},
         "source": {"type": "string"}

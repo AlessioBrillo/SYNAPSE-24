@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from synapse24.utils import write_xdf  # noqa: E402
 from worker.hrv_worker import (  # noqa: E402
+    FIT_TO_UNIX_OFFSET_S,
     dispatch,
     run_sleep_staging,
     run_sqi_report,
@@ -151,7 +152,13 @@ def test_sqi_report_golden(tmp_path: Path) -> None:
     p = result.payload
     assert p["window_s"] == 3.0
     assert p["per_channel"] == [
-        {"window_start": i, "sqi": 200, "map": 50, "ecg_quality": 220} for i in range(4)
+        {
+            "window_start": i + FIT_TO_UNIX_OFFSET_S,  # Unix seconds, like every other source
+            "sqi": 200,
+            "map": 50,
+            "ecg_quality": 220,
+        }
+        for i in range(4)
     ]
     assert result.algorithm_version == "sqi-report-py-v1"
 

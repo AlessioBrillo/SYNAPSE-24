@@ -150,6 +150,36 @@ def check_worker_field_ids(report: Report, path: Path, descriptor: dict[str, Any
         )
 
 
+# ADR-0014: the five sleep classes. The descriptor, the firmware header and the SDK doc must all
+# say the same thing about what 0..4 mean (they used to say three different things).
+CANONICAL_SLEEP_STAGES = {"0": "W", "1": "N1", "2": "N2", "3": "N3", "4": "REM"}
+_SLEEP_STAGE_TEXT_RE = re.compile(
+    r"0\s*=\s*W\w*\W+1\s*=\s*N1\W+2\s*=\s*N2\W+3\s*=\s*N3\W+4\s*=\s*REM"
+)
+
+
+def check_sleep_stage_semantics(
+    report: Report, descriptor: dict[str, Any], firmware_header: Path, sdk_fit_module: Path
+) -> None:
+    """The meaning of synapse_sleep_stage's values must agree in the descriptor, firmware, SDK."""
+    field = next((f for f in descriptor["fields"] if f["name"] == "synapse_sleep_stage"), None)
+    if field is None:
+        report.fail("descriptor has no synapse_sleep_stage field")
+        return
+    enum = {str(k): str(v) for k, v in (field.get("enum") or {}).items()}
+    if enum != CANONICAL_SLEEP_STAGES:
+        report.fail(
+            f"synapse_sleep_stage enum is {enum}, expected {CANONICAL_SLEEP_STAGES} (ADR-0014)"
+        )
+    if field.get("invalid") != 255:
+        report.fail("synapse_sleep_stage must use 255 as its 'not available' value")
+    for label, path in (("firmware fit_writer.h", firmware_header), ("sdk fit.py", sdk_fit_module)):
+        if not path.is_file():
+            report.fail(f"{label} is missing: the sleep-stage meaning cannot be checked")
+        elif not _SLEEP_STAGE_TEXT_RE.search(path.read_text(encoding="utf-8")):
+            report.fail(f"{label} does not state 0=W 1=N1 2=N2 3=N3 4=REM for synapse_sleep_stage")
+
+
 def check_sdk_field_table(report: Report, path: Path, descriptor: dict[str, Any]) -> None:
     """The SDK's developer-field table must match the canonical descriptor.
 
@@ -495,6 +525,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if descriptor is not None:
         check_descriptor_valid(report, args.fit_descriptor)
+        check_sleep_stage_semantics(
+            report, descriptor, args.firmware_fit_header, args.sdk_fit_module
+        )
         check_field_ids_consistent(
             report,
             args.firmware_fit_header,

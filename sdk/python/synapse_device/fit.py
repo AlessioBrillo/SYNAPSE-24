@@ -36,7 +36,7 @@ field id         type     meaning
 1                uint8    ``synapse_sqi`` (0-255)
 2                uint8    ``synapse_map`` (0-255, motion artifact probability)
 3                uint8    ``synapse_ecg_quality`` (0-255)
-4                uint8    ``synapse_sleep_stage`` (0=wake 1=light 2=deep 3=rem 4=unknown)
+4                uint8    ``synapse_sleep_stage`` (0=W 1=N1 2=N2 3=N3 4=REM, 255=not available)
 5                uint16   ``synapse_rmssd`` (ms, 0xFFFF = invalid)
 6                uint16   ``synapse_sdnn`` (ms, 0xFFFF = invalid)
 7                uint16   ``synapse_lf_hf`` (ratio x100, 0xFFFF = invalid)
