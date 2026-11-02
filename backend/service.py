@@ -202,8 +202,10 @@ class DataPlaneService:
     def display_path(self, path: str | Path) -> str:
         """A path as a client may see it: relative to the sessions dir, never absolute.
 
-        A file outside the sessions dir (an extra data root) is shown by name only: the
-        server's directory layout is not part of the API.
+        The catalog only indexes the sessions dir, so every session path is inside it. The
+        by-name fallback exists for a symlink that resolves elsewhere: showing the server's
+        directory layout is worse than showing a name. (Files under ``SYNAPSE_DATA_ROOTS`` are
+        reached by a client that already knows their path; the API never hands them out.)
         """
         p = Path(path)
         try:

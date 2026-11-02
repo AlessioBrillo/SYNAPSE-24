@@ -187,15 +187,25 @@ def _not_found(what: str) -> Any:
     return HTTPException(status_code=404, detail=what)
 
 
+def _not_implemented(what: str) -> Any:
+    """HTTP 501: the feature needs a device this deployment does not have."""
+    return HTTPException(status_code=501, detail=what)
+
+
+def _bind_host() -> str:
+    """Host the server binds to: loopback unless ``SYNAPSE_API_HOST`` says otherwise."""
+    return os.environ.get(HOST_ENV, "127.0.0.1")
+
+
 def _read_hardware_config() -> dict[str, Any]:
     """Read ``config/hardware.yaml`` (blocking; called from a worker thread)."""
     import yaml
 
     hw = _HARDWARE_YAML
-    if hw.exists():
-        with hw.open(encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {}
-    return {"error": "hardware manifest not found"}
+    if not hw.exists():
+        raise FileNotFoundError("hardware manifest not found")
+    with hw.open(encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
 
 
 def _register_legacy_endpoints(application: Any) -> None:
@@ -245,23 +255,22 @@ def _register_legacy_endpoints(application: Any) -> None:
 
     @application.get("/api/live/{pod_id}", dependencies=_auth_dependencies())
     async def get_live_data(pod_id: str, duration_s: float = 10.0) -> dict[str, Any]:
-        return {
-            "error": "live streaming requires hardware / LSL relay; not available in software-only mode",
-            "pod_id": pod_id,
-        }
+        raise _not_implemented("live streaming requires hardware / an LSL relay (see /ws/live)")
 
     @application.post("/api/control/tier", dependencies=_auth_dependencies())
     async def control_tier() -> dict[str, Any]:
-        return {"error": "tier control requires hardware; not available in software-only mode"}
+        raise _not_implemented("tier control requires hardware")
 
     @application.post("/api/control/record", dependencies=_auth_dependencies())
     async def control_recording() -> dict[str, Any]:
-        return {"error": "recording requires hardware; not available in software-only mode"}
+        raise _not_implemented("recording requires hardware")
 
     @application.get("/api/config", dependencies=_auth_dependencies())
     async def get_config() -> dict[str, Any]:
-        cfg = await run_in_threadpool(_read_hardware_config)
-        return cfg
+        try:
+            return await run_in_threadpool(_read_hardware_config)
+        except FileNotFoundError as exc:
+            raise _not_found(str(exc)) from exc
 
 
 def _register_data_plane_endpoints(application: Any) -> None:
@@ -358,8 +367,9 @@ def _register_websocket(application: Any) -> None:
                     p.strip()
                     for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
                 ]
-                if len(offered) == 2 and offered[0] == "bearer":
-                    provided, subprotocol = offered[1], "bearer"
+                if "bearer" in offered[:-1]:
+                    # ["bearer", token] anywhere in the list: other protocols may be offered too.
+                    provided, subprotocol = offered[offered.index("bearer") + 1], "bearer"
             if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
                 await websocket.close(code=1008, reason="unauthorized")
                 return
@@ -426,4 +436,4 @@ if _FASTAPI_AVAILABLE:
         import uvicorn
 
         # Loopback unless asked otherwise: with no token configured the API is open.
-        uvicorn.run(app, host=os.environ.get(HOST_ENV, "127.0.0.1"), port=8000)
+        uvicorn.run(app, host=_bind_host(), port=8000)

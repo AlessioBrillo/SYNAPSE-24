@@ -18,10 +18,10 @@ COPY src ./src
 COPY sdk/python ./sdk/python
 RUN pip install --no-cache-dir -e ./sdk/python && pip install --no-cache-dir -e .
 
-# The HTTP server is not part of the package's runtime dependencies (fastapi/uvicorn are in
+# The HTTP server is not part of the package's runtime dependencies (fastapi/uvicorn live in
 # backend/requirements.txt only): without this the CMD below fails with "uvicorn: not found".
-# Keep these two pins equal to backend/requirements.txt (tests/test_backend_hardening.py checks).
-RUN pip install --no-cache-dir "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0"
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Application code.
 COPY backend ./backend
@@ -29,5 +29,10 @@ COPY worker ./worker
 COPY config ./config
 
 EXPOSE 8000
+
+# Inside the container the server must listen on every interface for the port mapping to work;
+# who can reach it from outside is decided by the published port (docker-compose.yml maps
+# 127.0.0.1:8000 only). Started directly on a host it binds to loopback (SYNAPSE_API_HOST unset).
+ENV SYNAPSE_API_HOST=0.0.0.0
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

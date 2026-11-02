@@ -163,18 +163,70 @@ def test_the_hardware_manifest_is_found_from_any_working_directory(
     assert "ble" in config
 
 
-def test_the_server_binds_to_loopback_unless_told_otherwise() -> None:
-    source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
-    call = source[source.index("uvicorn.run(") :].splitlines()[0]
-    assert "0.0.0.0" not in call  # noqa: S104 - asserting its absence
-    assert 'os.environ.get(HOST_ENV, "127.0.0.1")' in call
-    assert main_module.HOST_ENV == "SYNAPSE_API_HOST"
+def test_the_server_binds_to_loopback_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SYNAPSE_API_HOST", raising=False)
+    assert main_module._bind_host() == "127.0.0.1"
+    monkeypatch.setenv("SYNAPSE_API_HOST", "10.0.0.5")
+    assert main_module._bind_host() == "10.0.0.5"
+    # started directly, the server asks _bind_host(): the default cannot be bypassed by a literal
+    assert "host=_bind_host()" in (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
 
 
-def test_the_image_installs_the_server_it_starts() -> None:
+def test_the_image_installs_the_server_from_requirements_and_binds_for_the_port_map() -> None:
     dockerfile = (ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
     requirements = (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8")
-    for package in ("fastapi", "uvicorn[standard]"):
-        pin = re.search(rf"^{re.escape(package)}(>=[\d.]+)", requirements, re.MULTILINE)
-        assert pin, f"{package} is not pinned in requirements.txt"
-        assert f'"{package}{pin.group(1)}"' in dockerfile, f"Dockerfile does not install {package}"
+    assert "pip install --no-cache-dir -r backend/requirements.txt" in dockerfile
+    assert "COPY backend/requirements.txt" in dockerfile
+    for package in ("fastapi", "uvicorn"):
+        assert re.search(rf"^{package}\b", requirements, re.MULTILINE), package
+    # inside the container the port mapping needs every interface; compose publishes loopback only
+    assert "ENV SYNAPSE_API_HOST=0.0.0.0" in dockerfile
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:8000:8000"' in compose
+
+
+# --- review follow-ups (PR #60) ------------------------------------------------------------------------------
+
+
+def test_the_websocket_accepts_the_bearer_pair_among_other_protocols(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNAPSE_API_TOKEN", "s3cr3t")
+    with client.websocket_connect("/ws/live", subprotocols=["v1.json", "bearer", "s3cr3t"]) as ws:
+        assert ws.accepted_subprotocol == "bearer"
+        assert ws.receive_json()["type"] == "status_update"
+
+
+def test_a_missing_manifest_is_a_404_not_a_200_with_an_error(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(main_module, "_HARDWARE_YAML", tmp_path / "absent.yaml")
+    response = client.get("/api/config")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("get", "/api/live/pod-1"), ("post", "/api/control/tier"), ("post", "/api/control/record")],
+)
+def test_features_that_need_a_device_answer_501(client: TestClient, method: str, path: str) -> None:
+    response = getattr(client, method)(path)
+    assert response.status_code == 501
+    assert "hardware" in response.json()["detail"] or "LSL" in response.json()["detail"]
+
+
+def test_a_job_response_does_not_carry_the_server_directory(
+    client: TestClient, tmp_path: Path
+) -> None:
+    session = next(
+        s for s in client.get("/api/v1/sessions").json()["sessions"] if s["format"] == "fit"
+    )
+    path = client.get(f"/api/v1/sessions/{session['session_id']}").json()["path"]
+    for job in ("sqi_report", "stress_daily", "hrv_trends"):
+        body = client.post(
+            "/api/v1/jobs/run", json={"computation_type": job, "file_path": path}
+        ).json()
+        assert str(tmp_path) not in str(body), job
