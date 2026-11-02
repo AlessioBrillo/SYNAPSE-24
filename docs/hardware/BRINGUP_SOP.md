@@ -162,8 +162,7 @@ for €0:
    the two recordings via `PodClockModel`/`ACC cross-correlation` and record
    the residual. **≤10 ms over 30 min PASSES** the sync precondition for the
    Cerelog order.
-4. The wired-sync line (GPIO 10 between the pods; it was GPIO 27 before the
-   N8R8 flash/PSRAM pins were ruled out) is driven by the hub-side
+4. The wired-sync line (GPIO 10 between the pods, not GPIO 27: a flash pin on the N8R8) is driven by the hub-side
    driver already compiled into band-core, but *emitting* the pulse is a G2
    feature (real head pod, second body site): for the bench measurement above
    leave GPIO 10 unconnected.

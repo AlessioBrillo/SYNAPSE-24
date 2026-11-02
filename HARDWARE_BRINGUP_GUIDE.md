@@ -33,41 +33,30 @@ Complete step-by-step guide to build, flash, and validate the Tier 0 forearm hub
 | PPG INT | 5 | GPIO5 | MAX30102 interrupt |
 | IMU INT | 6 | GPIO6 | ICM-20948 interrupt |
 | Wired Sync | 10 | GPIO10 | Hub→Head pod (two-pod bench only) |
+| BLE Antenna | — | Keep clear | No metal near PCB antenna |
+
 
 > **GPIO 26-37 are not usable on the DevKitC-1 N8R8**: 26-32 are the SPI flash and 33-37 the octal PSRAM. Earlier revisions of this document put signals on GPIO 27, 34 and 36; do not wire those.
-> This table and the diagram below follow `config/hardware.yaml`; I2C is 8/9 (21/22 do not exist usable on
-> octal-PSRAM S3 modules), which `docs/hardware/BRINGUP_SOP.md` §0 and `tools/check_contract.py` also assert.
-| BLE Antenna | — | Keep clear | No metal near PCB antenna |
+> This table and the diagram below follow `config/hardware.yaml`; I2C is 8/9 (GPIO 22-25 do not exist on the S3 and 26-37 are flash/PSRAM), which `docs/hardware/BRINGUP_SOP.md` §0 and `tools/check_contract.py` also assert.
 
 ---
 
 ## 3. Wiring Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        ESP32-S3 DevKitC-1                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  3V3 ─────────────────────┬─────────────────────┬─────────────┐ │
-│                           │                     │             │ │
-│                        ┌──┴──┐             ┌───┴───┐      ┌──┴──┐  │
-│                        │AD8232│             │MAX30102│      │ICM-20948│ │
-│                        └──┬──┘             └───┬───┘      └──┬──┘  │
-│                           │                     │             │    │
-│  GPIO1 (ADC) ◄────────────┘                     │             │    │
-│  GPIO15 (LO+) ◄─────────────────────────────────┘             │    │
-│  GPIO4 (bat) ◄───────────────────────────────────────────────┘    │
-│  (LO-: n/c) ◄────────────────────────────────────────────────────│
-│                           │                     │             │    │
-│  GPIO8 (SDA)  ◄───────────┼─────────────────────┼─────────────┘    │
-│  GPIO9 (SCL)  ◄───────────┼─────────────────────┼──────────────────│
-│                           │                     │                  │
-│  GPIO5 (INT)  ◄───────────┘                     │                  │
-│  GPIO6 (INT)  ◄─────────────────────────────────┘                  │
-│                                                                  │
-│  GPIO10 ──► Wired Sync to Head Pod (future Tier 1)              │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│ ESP32-S3 DevKitC-1 (N8R8)                                             │
+├───────────────────────────────────────────────────────────────────────┤
+│  GPIO1  (ADC1_CH0) ◄── AD8232 OUTPUT                                  │
+│  GPIO15            ◄── AD8232 LO+ (optional lead-off)                 │
+│  GPIO4  (ADC1_CH3) ◄── battery divider (optional)                     │
+│  GPIO8  (SDA)  ◄──►    MAX30102, ICM-20948, INA219 (shared bus)       │
+│  GPIO9  (SCL)  ◄──►    MAX30102, ICM-20948, INA219 (shared bus)       │
+│  GPIO5             ◄── MAX30102 INT                                   │
+│  GPIO6             ◄── ICM-20948 INT                                  │
+│  GPIO10            ──► wired sync to the head pod (two-pod bench)     │
+│  3V3 ──► VCC of every sensor        GND ──► GND of every sensor       │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 **Electrode Placement (Lead I equivalent):**

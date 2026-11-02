@@ -33,7 +33,7 @@ appears — README, PROCUREMENT, BRINGUP_SOP.
 | INA219 | continuous bus+shunt conversion | 0.5–1 mA | datasheet |
 | **Total** | | **≈70–115 mA → 250–425 mW** | |
 
-> **Correction (MVP-1.3 audit).** The MAX30102 row used 51 mA for LED current `0x1F`; the LED current register is 0.2 mA per step, so `0x1F` is ≈6.2 mA and the LED contributes ~0.1 mA on average at this duty. The row's 4-7 mA is therefore a conservative *upper bound*, and so is the total, until the bench measurement of BRINGUP_SOP §4a replaces the estimate. Nothing here has been measured on a board.
+> **Correction (MVP-1.3 audit).** The MAX30102 row used 51 mA for LED current `0x1F`; the LED current register is 0.2 mA per step, so `0x1F` is ≈6.2 mA and the LED contributes ~0.1 mA on average at this duty. The row's 4-7 mA is therefore a conservative *upper bound*, and so is the total, until the bench measurement of BRINGUP_SOP §4a replaces the estimate. A measurement *below* the range is therefore expected and is not a defect; the runtime figures derived from the envelope (PROCUREMENT.md) are pessimistic for the same reason. Nothing here has been measured on a board.
 
 **Budget-KIT envelope: 150–600 mW (≈40–160 mA @3.7 V).** A measurement
 outside the envelope fails the row and demands an explanation (a forgotten
