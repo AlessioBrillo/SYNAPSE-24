@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SYNAPSE-24 live</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1b1f24; --muted:#59636e; --line:#d0d7de;
+          --trace:#0b6bcb; --trace2:#c2410c; --trace3:#15803d; --loss:#d1242f; --panel:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d;
+            --trace:#58a6ff; --trace2:#f0883e; --trace3:#56d364; --loss:#ff7b72; --panel:#161b22; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
+         font:14px/1.4 system-ui, sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.sub { margin:0 0 12px; color:var(--muted); }
+  form { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  input, button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px;
+                  background:var(--panel); color:var(--fg); }
+  button { cursor:pointer; }
+  #state { padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:var(--panel);
+           margin-bottom:12px; }
+  #state.demo { border-color:var(--trace2); }
+  .card { border:1px solid var(--line); border-radius:6px; margin-bottom:12px; background:var(--panel); }
+  .card h2 { font-size:13px; margin:0; padding:6px 10px; border-bottom:1px solid var(--line);
+             display:flex; justify-content:space-between; gap:8px; }
+  .card h2 span { color:var(--muted); font-weight:400; }
+  canvas { display:block; width:100%; height:110px; }
+  #losses { margin:0; padding:8px 12px 8px 28px; max-height:140px; overflow:auto; }
+  #losses li { color:var(--loss); }
+  .empty { color:var(--muted); list-style:none; margin-left:-16px; }
+</style>
+</head>
+<body>
+<h1>SYNAPSE-24 live</h1>
+<p class="sub">Min/max envelope of the raw streams. A red tick is a loss, with its reason.</p>
+
+<form id="connect">
+  <input id="token" type="password" placeholder="API token (if one is set)" autocomplete="off">
+  <button type="submit">Connect</button>
+</form>
+<div id="state">Not connected.</div>
+<div id="plots"></div>
+<div class="card"><h2>Losses <span id="loss-count">0</span></h2><ul id="losses"><li class="empty">None.</li></ul></div>
+
+<script>
+"use strict";
+// Window of history shown per stream, in seconds, and the samples per second the envelope carries.
+const WINDOW_S = 10;
+const plots = new Map();       // stream name -> { canvas, ctx, unit, channels, cols: [{lo, hi, loss}] , perSec }
+let socket = null, lossCount = 0, frames = 0, startedAt = 0;
+
+const $ = (id) => document.getElementById(id);
+const COLORS = ["--trace", "--trace2", "--trace3"];
+
+function setState(text, demo) {
+  const el = $("state");
+  el.textContent = text;
+  el.classList.toggle("demo", !!demo);
+}
+
+function build(streams) {
+  const host = $("plots");
+  host.replaceChildren();
+  plots.clear();
+  for (const s of streams) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const title = document.createElement("h2");
+    const unit = document.createElement("span");
+    unit.textContent = s.unit + " · " + s.rate_hz + " Hz · " + s.channels + " ch";
+    title.append(s.name.toUpperCase(), unit);
+    const canvas = document.createElement("canvas");
+    card.append(title, canvas);
+    host.append(card);
+    plots.set(s.name, { canvas, ctx: canvas.getContext("2d"), unit: s.unit, channels: s.channels,
+                        cols: [], rate: s.rate_hz });
+  }
+}
+
+function addLoss(msg) {
+  lossCount += 1;
+  $("loss-count").textContent = String(lossCount);
+  const list = $("losses");
+  if (lossCount === 1) list.replaceChildren();
+  const li = document.createElement("li");
+  const what = msg.reason === "sequence_gap" ? msg.lost_frames + " frame(s)" : msg.lost_samples + " sample(s)";
+  li.textContent = msg.stream + ": " + msg.reason + " (" + what + ") at seq " + msg.sequence;
+  list.prepend(li);
+  const p = plots.get(msg.stream);
+  if (p) p.cols.push({ loss: true });
+}
+
+function addFrame(msg) {
+  frames += 1;
+  const p = plots.get(msg.stream);
+  if (!p) return;
+  for (let i = 0; i < msg.min.length; i++) p.cols.push({ lo: msg.min[i], hi: msg.max[i] });
+  // history length in columns: the envelope has min.length columns per frame of msg.n samples
+  const colsPerSec = (p.rate * msg.min.length) / msg.n;
+  const keep = Math.ceil(WINDOW_S * colsPerSec);
+  if (p.cols.length > keep) p.cols.splice(0, p.cols.length - keep);
+  p.keep = keep;
+}
+
+function draw(p) {
+  const { canvas, ctx } = p;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const data = p.cols.filter((c) => !c.loss);
+  if (!data.length) return;
+  for (let ch = 0; ch < p.channels; ch++) {
+    let lo = Infinity, hi = -Infinity;
+    for (const c of data) { lo = Math.min(lo, c.lo[ch]); hi = Math.max(hi, c.hi[ch]); }
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const top = (h * ch) / p.channels + 4, bottom = (h * (ch + 1)) / p.channels - 4;
+    const y = (v) => bottom - ((v - lo) / (hi - lo)) * (bottom - top);
+    ctx.strokeStyle = css.getPropertyValue(COLORS[ch % COLORS.length]);
+    ctx.lineWidth = 1;
+    const step = w / Math.max(p.keep || p.cols.length, 1);
+    p.cols.forEach((c, i) => {
+      const x = i * step;
+      if (c.loss) {
+        ctx.save(); ctx.strokeStyle = css.getPropertyValue("--loss");
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); ctx.restore();
+        return;
+      }
+      ctx.beginPath(); ctx.moveTo(x, y(c.lo[ch])); ctx.lineTo(x, y(c.hi[ch])); ctx.stroke();
+    });
+  }
+}
+
+function frameLoop() {
+  for (const p of plots.values()) draw(p);
+  requestAnimationFrame(frameLoop);
+}
+
+function connect(token) {
+  if (socket) {
+    // The old socket's late close event must not overwrite the state of the new connection.
+    socket.onmessage = socket.onclose = null;
+    socket.close();
+    socket = null;
+  }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  // A browser cannot set an Authorization header on a WebSocket: the token travels as the
+  // second item of the subprotocol list (never in the URL, which proxies log).
+  try {
+    socket = token ? new WebSocket(proto + "//" + location.host + "/ws/live", ["bearer", token])
+                   : new WebSocket(proto + "//" + location.host + "/ws/live");
+  } catch (err) {
+    // A token with a space, comma or non-ASCII character cannot be a subprotocol.
+    setState("Cannot connect: the token contains characters a WebSocket subprotocol cannot carry.");
+    return;
+  }
+  setState("Connecting…");
+  lossCount = 0; frames = 0; startedAt = performance.now();
+  $("loss-count").textContent = "0";
+  $("losses").replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: "None." }));
+  socket.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "hello") {
+      build(msg.streams);
+      if (msg.source === "off") {
+        setState("Connected, but no live source is configured. Start the server with SYNAPSE_LIVE_SOURCE=synthetic (demo) or ble:<address>.");
+      } else if (msg.demo) {
+        setState("DEMO — synthetic signals, not a device. Source: " + msg.source, true);
+      } else {
+        setState("Live from " + msg.source);
+      }
+    } else if (msg.type === "frame") addFrame(msg);
+    else if (msg.type === "loss") addLoss(msg);
+    else if (msg.type === "error") setState("Error: " + msg.error);
+    if (msg.type === "hello" && msg.error) setState("Error: " + msg.error);
+  };
+  socket.onclose = (ev) => setState(ev.code === 1008 ? "Refused: wrong or missing token." : "Disconnected.");
+}
+
+$("connect").addEventListener("submit", (ev) => { ev.preventDefault(); connect($("token").value.trim()); });
+requestAnimationFrame(frameLoop);
+</script>
+</body>
+</html>

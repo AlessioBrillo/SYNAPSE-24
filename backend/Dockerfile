@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend ./backend
 COPY worker ./worker
 COPY config ./config
+# gatt_v2.json: the live viewer's stream metadata; schemas/: the worker validates its payloads
+# against them (without the directory the validation is skipped silently).
+COPY contracts ./contracts
 
 EXPOSE 8000
 
