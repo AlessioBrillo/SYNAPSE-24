@@ -115,8 +115,9 @@ lives in the host pipeline, so the same job is never implemented twice.
 Invoking one of them prints where it moved and exits with code 2.
 `python -m synapse24.sessions`, `python -m synapse24.report` and
 `uv run python scripts/export_session_fit.py` remain available as equivalent
-entry points. `synapse record` currently records from the synthetic source
-only — BLE recording is not implemented yet.
+entry points. `synapse record` records from the synthetic source (`--source synthetic`, the
+default) or from a pod (`--source <ble-address>`, wall-anchored pod stamps); the
+BLE path has not been run against a band.
 
 There is exactly one encoder per format: `synapse_device.fit` (FIT) and
 `synapse_device.xdf_writer` (XDF). The host pipeline and the export script
