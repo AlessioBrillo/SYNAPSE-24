@@ -169,7 +169,7 @@ class DataPlaneService:
         return {
             "session_id": rec.session_id,
             "device_serial": rec.device_serial,
-            "path": rec.path,
+            "path": self.display_path(rec.path),
             "format": rec.format,
             "size_bytes": rec.size_bytes,
             "sha256": rec.sha256,
@@ -195,7 +195,21 @@ class DataPlaneService:
         cat = self.catalog()
         if cat is None or session_id not in cat.sessions:
             return None
-        return build_session_report(cat.sessions[session_id], jobs or {})
+        rep = build_session_report(cat.sessions[session_id], jobs or {})
+        rep["raw_ref"]["path"] = self.display_path(rep["raw_ref"]["path"])
+        return rep
+
+    def display_path(self, path: str | Path) -> str:
+        """A path as a client may see it: relative to the sessions dir, never absolute.
+
+        A file outside the sessions dir (an extra data root) is shown by name only: the
+        server's directory layout is not part of the API.
+        """
+        p = Path(path)
+        try:
+            return p.resolve().relative_to(self.sessions_dir.resolve()).as_posix()
+        except (OSError, ValueError):
+            return p.name
 
     # -- path containment -------------------------------------------------
 
@@ -229,7 +243,9 @@ class DataPlaneService:
         if file_path is None:
             return None
         try:
-            candidate = Path(file_path).expanduser().resolve()
+            raw = Path(file_path).expanduser()
+            # The API hands out paths relative to the sessions dir (display_path): accept them back.
+            candidate = (raw if raw.is_absolute() else self.sessions_dir / raw).resolve()
         except (OSError, RuntimeError, ValueError):
             return None
         for root in self.allowed_roots():

@@ -18,6 +18,11 @@ COPY src ./src
 COPY sdk/python ./sdk/python
 RUN pip install --no-cache-dir -e ./sdk/python && pip install --no-cache-dir -e .
 
+# The HTTP server is not part of the package's runtime dependencies (fastapi/uvicorn are in
+# backend/requirements.txt only): without this the CMD below fails with "uvicorn: not found".
+# Keep these two pins equal to backend/requirements.txt (tests/test_backend_hardening.py checks).
+RUN pip install --no-cache-dir "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0"
+
 # Application code.
 COPY backend ./backend
 COPY worker ./worker

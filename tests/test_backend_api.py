@@ -467,7 +467,9 @@ def test_job_run_returns_real_file_sha256(client: TestClient):
     """The job carries the real sha256 of the file content."""
     xdf = _session_by_format(client, "xdf")
     path = _session_path(client, xdf["session_id"])
-    expected = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    # the API hands out paths relative to the sessions dir
+    sessions_dir = Path(os.environ["SYNAPSE_SESSIONS_DIR"])
+    expected = hashlib.sha256((sessions_dir / path).read_bytes()).hexdigest()
 
     r = client.post(
         "/api/v1/jobs/run",

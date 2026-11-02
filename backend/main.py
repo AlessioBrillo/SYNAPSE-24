@@ -175,15 +175,27 @@ def _auth_dependencies() -> list[Any]:
     return [Depends(require_api_token)]
 
 
+#: The hardware manifest, located from this file and not from the working directory.
+_HARDWARE_YAML = Path(__file__).resolve().parents[1] / "config" / "hardware.yaml"
+
+#: Host the server binds to when started directly; override with SYNAPSE_API_HOST.
+HOST_ENV = "SYNAPSE_API_HOST"
+
+
+def _not_found(what: str) -> Any:
+    """A real HTTP 404 (these endpoints used to answer 200 with an ``error`` body)."""
+    return HTTPException(status_code=404, detail=what)
+
+
 def _read_hardware_config() -> dict[str, Any]:
     """Read ``config/hardware.yaml`` (blocking; called from a worker thread)."""
     import yaml
 
-    hw = Path("config/hardware.yaml")
+    hw = _HARDWARE_YAML
     if hw.exists():
         with hw.open(encoding="utf-8") as fh:
             return yaml.safe_load(fh) or {}
-    return {"error": "config/hardware.yaml not found"}
+    return {"error": "hardware manifest not found"}
 
 
 def _register_legacy_endpoints(application: Any) -> None:
@@ -205,9 +217,9 @@ def _register_legacy_endpoints(application: Any) -> None:
         cat = await run_in_threadpool(svc.catalog)
         n = len(cat.sessions) if cat else 0
         return {
-            "current_tier": "T0",
+            # The acquisition tier belongs to a live device; software-only mode has none.
+            "current_tier": None,
             "n_sessions": n,
-            "sessions_dir": str(svc.sessions_dir),
         }
 
     @application.get("/api/sync", dependencies=_auth_dependencies())
@@ -222,7 +234,7 @@ def _register_legacy_endpoints(application: Any) -> None:
         svc = _service()
         rec = await run_in_threadpool(svc.session, pod_id)
         if rec is None:
-            return {"error": "session not found"}
+            raise _not_found("session not found")
         return {
             "session_id": rec["session_id"],
             "format": rec["format"],
@@ -281,7 +293,7 @@ def _register_data_plane_endpoints(application: Any) -> None:
         svc = _service()
         rec = await run_in_threadpool(svc.session, session_id)
         if rec is None:
-            return {"error": f"session {session_id} not found"}
+            raise _not_found(f"session {session_id} not found")
         return rec
 
     @application.get("/api/v1/sessions/{session_id}/report", dependencies=_auth_dependencies())
@@ -289,7 +301,7 @@ def _register_data_plane_endpoints(application: Any) -> None:
         svc = _service()
         rep = await run_in_threadpool(svc.report, session_id)
         if rep is None:
-            return {"error": f"session {session_id} not found"}
+            raise _not_found(f"session {session_id} not found")
         return rep
 
     @application.get("/api/v1/metrics", dependencies=_auth_dependencies())
@@ -335,14 +347,23 @@ def _register_websocket(application: Any) -> None:
     @application.websocket("/ws/live")
     async def websocket_live(websocket: WebSocket) -> None:
         expected = _api_token()
+        subprotocol: str | None = None
         if expected:
-            # The token is read from the header only: a query string ends up
-            # in the access logs of every proxy in between.
+            # A browser cannot set an Authorization header on a WebSocket, and a query string
+            # ends up in every proxy's access log. The browser-safe channel is the
+            # subprotocol list: new WebSocket(url, ["bearer", token]).
             provided = _bearer_token(websocket.headers.get("authorization", ""))
+            if not provided:
+                offered = [
+                    p.strip()
+                    for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
+                ]
+                if len(offered) == 2 and offered[0] == "bearer":
+                    provided, subprotocol = offered[1], "bearer"
             if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
                 await websocket.close(code=1008, reason="unauthorized")
                 return
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         connected_clients_local.add(websocket)
         try:
             while True:
@@ -352,10 +373,7 @@ def _register_websocket(application: Any) -> None:
                 await websocket.send_json(
                     {
                         "type": "status_update",
-                        "data": {
-                            "n_sessions": len(cat.sessions) if cat else 0,
-                            "sessions_dir": str(svc.sessions_dir),
-                        },
+                        "data": {"n_sessions": len(cat.sessions) if cat else 0},
                     }
                 )
         except WebSocketDisconnect:
@@ -407,4 +425,5 @@ if _FASTAPI_AVAILABLE:
     if __name__ == "__main__":
         import uvicorn
 
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        # Loopback unless asked otherwise: with no token configured the API is open.
+        uvicorn.run(app, host=os.environ.get(HOST_ENV, "127.0.0.1"), port=8000)
