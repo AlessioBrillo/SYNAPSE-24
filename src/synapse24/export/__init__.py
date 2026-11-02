@@ -252,7 +252,7 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
         mask = (peak_times >= win_t0) & (peak_times < win_t1)
         window_peaks = r_peaks[mask]
         metrics = (
-            compute_hrv_metrics(window_peaks, int(round(fs)), window_duration_s=window_s)
+            compute_hrv_metrics(window_peaks, int(round(fs)), window_duration_s=win_t1 - win_t0)
             if len(window_peaks) >= 2
             else {}
         )

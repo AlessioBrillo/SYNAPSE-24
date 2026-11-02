@@ -70,6 +70,8 @@ def _events_from_jobs(job_results: dict[str, dict[str, Any]] | None) -> list[dic
         # Sleep stage transitions as events.
         prev = None
         for i, stage in enumerate(hypno):
+            if stage == 255:  # not available (contract value): not a stage, not a transition
+                continue
             if prev is not None and stage != prev:
                 events.append(
                     {

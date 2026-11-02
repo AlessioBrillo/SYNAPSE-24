@@ -13,6 +13,7 @@ Each test pins a defect the audit found and that the existing golden tests did n
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -247,3 +248,132 @@ def test_hrv_from_ppg_peaks_is_physiological() -> None:
 @pytest.mark.parametrize("signal", [np.zeros(500), np.array([1.0]), np.full(500, 7.0)])
 def test_the_ppg_detector_returns_nothing_for_a_flat_or_tiny_trace(signal: np.ndarray) -> None:
     assert len(detect_ppg_peaks(signal, 50)) == 0
+
+
+# --- review follow-ups (PR #59) -------------------------------------------------------------------
+
+
+def test_a_trailing_stress_episode_ends_at_the_last_window_not_the_last_label(
+    tmp_path: Path,
+) -> None:
+    # unknown, stress, stress: two labelled windows, but the episode ends at window index 2
+    fit = _fit(tmp_path, "tail.fit", [{FIELD_STRESS: v} for v in (3, 1, 1)])
+    result = run_stress_daily(_make_job(JobType.STRESS_DAILY, str(fit)), fit)
+    assert result.ok is True
+    assert result.payload["stress_episodes"] == [{"start": 1, "end": 2, "len": 2}]
+
+
+def test_a_value_outside_the_stress_enum_is_not_a_label(tmp_path: Path) -> None:
+    fit = _fit(tmp_path, "future.fit", [{FIELD_STRESS: v} for v in (0, 4, 4, 9)])
+    result = run_stress_daily(_make_job(JobType.STRESS_DAILY, str(fit)), fit)
+    assert result.ok is True
+    p = result.payload
+    assert p["n_records"] == 1
+    assert p["baseline_prob"] + p["stress_prob"] + p["artifact_prob"] == pytest.approx(1.0)
+    only_unexpected = _fit(tmp_path, "only.fit", [{FIELD_STRESS: 4}] * 3)
+    result = run_stress_daily(
+        _make_job(JobType.STRESS_DAILY, str(only_unexpected)), only_unexpected
+    )
+    assert result.ok is False
+    assert result.error is not None
+    assert "insufficient_data" in result.error
+
+
+def test_the_fit_offset_comes_from_the_sdk_constant() -> None:
+    from synapse_device.fit import FIT_EPOCH
+
+    assert (
+        datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=hrv_worker.FIT_TO_UNIX_OFFSET_S)
+        == FIT_EPOCH
+    )
+
+
+def test_a_record_without_a_timestamp_is_left_out_of_the_timed_payloads() -> None:
+    kept = hrv_worker._timed([{"timestamp": 10, "dev": {}}, {"timestamp": None, "dev": {}}])
+    assert [r["timestamp"] for r in kept] == [10]
+
+
+def test_an_unscored_epoch_carries_no_confidence() -> None:
+    class _Staging:
+        hypnogram = np.array([2, 9])
+        confidence = np.array([0.9, 0.8])
+
+    # mirrors the payload expression in run_sleep_staging
+    last = _Staging.hypnogram[-1]
+    confidence = float(_Staging.confidence[-1]) if _stage_code(last) != SLEEP_STAGE_NA else None
+    assert confidence is None
+    source = (ROOT / "worker" / "hrv_worker.py").read_text(encoding="utf-8")
+    assert "_stage_code(hypnogram[-1]) != SLEEP_STAGE_NA" in source
+
+
+def test_a_clipped_window_is_analysed_over_its_real_duration() -> None:
+    for path in (
+        ROOT / "worker" / "hrv_worker.py",
+        ROOT / "src" / "synapse24" / "export" / "__init__.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "window_duration_s=window_s" not in source, path.name
+    assert "window_duration_s=w1 - w0" in (ROOT / "worker" / "hrv_worker.py").read_text(
+        encoding="utf-8"
+    )
+    assert "window_duration_s=win_t1 - win_t0" in (
+        ROOT / "src" / "synapse24" / "export" / "__init__.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_an_unusable_sampling_rate_fails_the_job_instead_of_returning_nothing(
+    tmp_path: Path,
+) -> None:
+    from synapse24.utils import write_xdf
+
+    n = 200
+    t = np.arange(n) / 4.0  # a 4 Hz stream: below any cardiac-band filter
+    xdf = tmp_path / "slow.xdf"
+    write_xdf(
+        xdf,
+        streams=[
+            {
+                "data": np.sin(t).reshape(-1, 1),
+                "timestamps": t,
+                "info": {
+                    "name": "PPG",
+                    "type": "PPG",
+                    "nominal_srate": 4.0,
+                    "channel_count": 1,
+                    "channel_format": "double64",
+                    "source_id": "syn-test",
+                },
+            }
+        ],
+    )
+    result = run_hrv_trends(_make_job(JobType.HRV_TRENDS, str(xdf)), xdf)
+    assert result.ok is False
+    assert result.error is not None
+    assert "too low" in result.error
+
+
+def test_the_report_does_not_invent_a_transition_to_not_available() -> None:
+    from synapse24.report.report import _events_from_jobs
+
+    events = _events_from_jobs({"sleep_staging": {"hypnogram": [0, 255, 0, 2, 255, 2]}})
+    transitions = [(e["from"], e["to"]) for e in events if e["kind"] == "sleep_stage_transition"]
+    assert transitions == [(0, 2)]  # W -> N2 only: the unscored epochs are neither stage nor change
+
+
+def test_a_sleep_stage_line_that_still_says_wake_light_deep_is_rejected(tmp_path: Path) -> None:
+    stale = tmp_path / "fit.py"
+    text = ci.SDK_FIT_MODULE.read_text(encoding="utf-8")
+    stale.write_text(
+        text + "\n# synapse_sleep_stage: wake/light/deep (old meaning)\n", encoding="utf-8"
+    )
+    report = ci.Report()
+    ci.check_sleep_stage_semantics(report, _descriptor(), ci.FIRMWARE_FIT_HEADER, stale)
+    assert any("wake/light/deep" in f for f in report.failures), report.failures
+
+
+def test_the_mapping_in_another_fields_comment_does_not_satisfy_the_check(tmp_path: Path) -> None:
+    decoy = tmp_path / "fit_writer.h"
+    decoy.write_text("// some_other_field: 0=W, 1=N1, 2=N2, 3=N3, 4=REM\n", encoding="utf-8")
+    report = ci.Report()
+    ci.check_sleep_stage_semantics(report, _descriptor(), decoy, ci.SDK_FIT_MODULE)
+    assert any("firmware fit_writer.h" in f for f in report.failures), report.failures

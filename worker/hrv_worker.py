@@ -25,9 +25,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import struct
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,7 +37,7 @@ import numpy as np
 # project imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
-from synapse_device.fit import DEV_FIELDS, read_fit
+from synapse_device.fit import DEV_FIELDS, FIT_EPOCH, read_fit
 
 from synapse24.signal_quality.ecg import compute_hrv_metrics, detect_r_peaks_neurokit
 from synapse24.signal_quality.ppg import detect_ppg_peaks
@@ -123,9 +124,9 @@ SYNAPSE_DEV_FIELD_LF_HF = 7
 DEV_FIELD_INVALID_UINT8 = 255
 DEV_FIELD_INVALID_UINT16 = 0xFFFF
 
-# Seconds from the Unix epoch to the FIT epoch (1989-12-31T00:00:00Z). Every window_start
-# in a job payload is Unix seconds, whichever file it came from.
-FIT_TO_UNIX_OFFSET_S = 631_065_600
+# Seconds from the Unix epoch to the FIT epoch, taken from the SDK's own constant (one
+# definition). Every window_start in a job payload is Unix seconds, whichever file it came from.
+FIT_TO_UNIX_OFFSET_S = int((FIT_EPOCH - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds())
 
 # synapse_stress = 3 means "the triage did not run": a missing label, not a baseline.
 STRESS_UNKNOWN = 3
@@ -140,6 +141,11 @@ def _fit_to_unix(fit_ts: object) -> float | None:
     if isinstance(fit_ts, (int, float)):
         return float(fit_ts) + FIT_TO_UNIX_OFFSET_S
     return None
+
+
+def _timed(records: list[dict]) -> list[dict]:
+    """Keep the records that can be placed in time (a window_start must be a number)."""
+    return [r for r in records if _fit_to_unix(r["timestamp"]) is not None]
 
 
 def _stage_code(stage: int) -> int:
@@ -243,12 +249,17 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
 
     # int(fs) truncated 49.99 Hz to 49 (a 2 % error on every interval); round instead.
     fs_int = int(round(fs))
+    if fs_int < 8:
+        # The cardiac band tops out at 4-8 Hz: below this the filter itself is invalid, and
+        # an empty list would read as "no beats found" rather than "cannot analyse".
+        raise ValueError(f"sampling rate {fs:.2f} Hz is too low for peak detection")
     # The R-peak detector belongs to the ECG: on a PPG trace it returns plausible but
     # meaningless beats, so a PPG stream gets its own systolic-peak detector.
     detect = detect_r_peaks_neurokit if kind == "ECG" else detect_ppg_peaks
     try:
         r_peaks = detect(sig, fs_int)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - the detectors raise many types on short or flat input
+        logging.getLogger(__name__).warning("%s peak detection failed: %s", kind, exc)
         r_peaks = np.array([], dtype=np.int64)
 
     t0, t1 = float(ts[0]), float(ts[-1])
@@ -260,7 +271,7 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     for w0, w1 in window_bounds(t0, t1, window_s):
         mask = (peak_times >= w0) & (peak_times < w1)
         win = r_peaks[mask]
-        hrv = compute_hrv_metrics(win, fs_int, window_duration_s=window_s) if len(win) >= 2 else {}
+        hrv = compute_hrv_metrics(win, fs_int, window_duration_s=w1 - w0) if len(win) >= 2 else {}
         out.append(
             {
                 "window_start": w0,
@@ -357,7 +368,7 @@ def _valid_uint16(v: int | None) -> int | None:
 def run_hrv_trends(job: Job, file_path: Path) -> JobResult:
     """Compute HRV trends from a stored file."""
     if file_path.suffix.lower() == ".fit":
-        records = read_fit_developer_records(file_path)
+        records = _timed(read_fit_developer_records(file_path))
         # FIT records already carry rmssd/sdnn per window: pass them through.
         payload = {
             "windows": [
@@ -376,7 +387,15 @@ def run_hrv_trends(job: Job, file_path: Path) -> JobResult:
             "source": "fit-file",
         }
     else:
-        windows = read_xdf_hrv(file_path)
+        try:
+            windows = read_xdf_hrv(file_path)
+        except ValueError as exc:
+            return JobResult(
+                job_id=job.job_id,
+                ok=False,
+                error=f"hrv_trends: {exc}",
+                algorithm_version="hrv-trends-py-v1",
+            )
         payload = {"windows": windows, "source": "xdf-file"}
 
     return JobResult(
@@ -407,12 +426,14 @@ def run_stress_daily(job: Job, file_path: Path) -> JobResult:
     # 3 = "unknown": the triage did not run for that window. Counting it as a label
     # reported stress_level 0 (baseline) for a file with no labels at all. It keeps its
     # position (None) so it breaks a run of baseline/stress windows instead of bridging it.
-    labels = [None if l is None or l == STRESS_UNKNOWN else l for l in raw_labels]
+    # Only 0 baseline / 1 stress / 2 artifact are labels: 3 (unknown) and any value a newer
+    # firmware might add are not, so the three probabilities always sum to 1.
+    labels = [l if l in (0, 1, 2) else None for l in raw_labels]
     n = sum(1 for l in labels if l is not None)
     if n == 0:
         reason = (
-            "insufficient_data: every window is unknown (the triage did not run)"
-            if any(l == STRESS_UNKNOWN for l in raw_labels)
+            "insufficient_data: no window carries a stress label (unknown or unrecognised)"
+            if any(l is not None for l in raw_labels)
             else "no synapse_stress labels found in FIT file"
         )
         return JobResult(
@@ -459,7 +480,7 @@ def run_stress_daily(job: Job, file_path: Path) -> JobResult:
             stress_episodes.append({"start": start_idx, "end": i - 1, "len": run})
             run = 0
     if run:
-        stress_episodes.append({"start": start_idx, "end": n - 1, "len": run})
+        stress_episodes.append({"start": start_idx, "end": len(labels) - 1, "len": run})
 
     payload = {
         "stress_level": 1 if n_stress > n_baseline else 0,
@@ -496,7 +517,7 @@ def run_sqi_report(job: Job, file_path: Path) -> JobResult:
             algorithm_version="sqi-report-py-v1",
         )
 
-    records = read_fit_developer_records(file_path)
+    records = _timed(read_fit_developer_records(file_path))
     windows = []
     for r in records:
         windows.append(
@@ -580,7 +601,12 @@ def run_sleep_staging(job: Job, file_path: Path) -> JobResult:
     confidence = staging["confidence"]
     payload = {
         "sleep_stage": _stage_code(hypnogram[-1]) if len(hypnogram) else None,
-        "confidence": float(confidence[-1]) if len(confidence) else None,
+        # No confidence for an epoch with no stage: "80 % sure it is not available" means nothing.
+        "confidence": (
+            float(confidence[-1])
+            if len(confidence) and len(hypnogram) and _stage_code(hypnogram[-1]) != SLEEP_STAGE_NA
+            else None
+        ),
         "epoch_s": 30.0,
         "hypnogram": [_stage_code(s) for s in hypnogram],
         "input_modality": "eeg",

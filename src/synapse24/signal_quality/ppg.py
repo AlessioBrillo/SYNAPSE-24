@@ -212,6 +212,9 @@ def detect_ppg_peaks(
     The trace is band-passed to the cardiac band and peaks are taken at least 0.3 s apart
     (200 bpm), with a prominence tied to the signal's own spread. This is NOT the ECG
     R-peak detector: running that on a PPG trace returns plausible but meaningless beats.
+
+    There is no artifact rejection here: on a motion-corrupted segment it will still return
+    peaks. Gate the windows with the PPG SQI (``compute_ppg_sqi``) before trusting HRV.
     """
     sig = np.asarray(ppg_signal, dtype=np.float64)
     if sig.size < max(2, int(sampling_rate)) or float(np.ptp(sig)) <= 0.0:

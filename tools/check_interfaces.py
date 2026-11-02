@@ -158,6 +158,9 @@ _SLEEP_STAGE_TEXT_RE = re.compile(
 )
 
 
+_LEGACY_SLEEP_WORDS_RE = re.compile(r"\b(wake|light|deep)\b", re.IGNORECASE)
+
+
 def check_sleep_stage_semantics(
     report: Report, descriptor: dict[str, Any], firmware_header: Path, sdk_fit_module: Path
 ) -> None:
@@ -176,8 +179,14 @@ def check_sleep_stage_semantics(
     for label, path in (("firmware fit_writer.h", firmware_header), ("sdk fit.py", sdk_fit_module)):
         if not path.is_file():
             report.fail(f"{label} is missing: the sleep-stage meaning cannot be checked")
-        elif not _SLEEP_STAGE_TEXT_RE.search(path.read_text(encoding="utf-8")):
+            continue
+        # Only the lines that talk about the sleep stage count: the mapping elsewhere in the
+        # file (another field's comment) must not satisfy this check.
+        lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if "sleep_stage" in ln]
+        if not any(_SLEEP_STAGE_TEXT_RE.search(ln) for ln in lines):
             report.fail(f"{label} does not state 0=W 1=N1 2=N2 3=N3 4=REM for synapse_sleep_stage")
+        if any(_LEGACY_SLEEP_WORDS_RE.search(ln) for ln in lines):
+            report.fail(f"{label} still describes synapse_sleep_stage as wake/light/deep/unknown")
 
 
 def check_sdk_field_table(report: Report, path: Path, descriptor: dict[str, Any]) -> None:
