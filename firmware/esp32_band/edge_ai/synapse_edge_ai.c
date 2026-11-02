@@ -113,7 +113,7 @@ esp_err_t synapse_edge_ai_init(void) {
     // 50 Hz IMU/PPG; on other rates log and keep triage disabled rather than abort boot.
     synapse_hw_config_t hw_cfg;
     if (synapse_config_get(&hw_cfg) == ESP_OK) {
-        uint32_t ppg_hz = (hw_cfg.ppg_sample_rate == 0x02) ? 50 : 64;
+        uint32_t ppg_hz = synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate);
         if (triage_features_init((uint32_t)hw_cfg.imu_accel_odr_hz, ppg_hz) != ESP_OK) {
             ESP_LOGE(TAG, "Stress triage disabled: need 50 Hz IMU/PPG (have imu=%d ppg=%u)",
                      hw_cfg.imu_accel_odr_hz, (unsigned)ppg_hz);

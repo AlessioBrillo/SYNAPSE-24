@@ -49,7 +49,7 @@ typedef struct {
     uint8_t ppg_led_current_red;  // Red LED current register (0x00-0x3F)
     uint8_t ppg_led_current_ir;   // IR LED current register (0x00-0x3F)
     uint8_t ppg_led_current_green;// Green LED current register (0x00-0x3F)
-    uint8_t ppg_sample_rate;      // Sample rate register (0x02=50Hz, 0x03=64Hz)
+    uint8_t ppg_sample_rate;      // MAX30102 SPO2_SR code (datasheet): 0=50 1=100 2=200 3=400 4=800 5=1000 6=1600 7=3200 Hz
     uint8_t ppg_pulse_width;      // Pulse width register (0x03=411us)
     uint8_t ppg_adc_range;        // ADC range register (0x03=16384nA)
 
@@ -108,6 +108,12 @@ typedef struct {
     float map_max;                // Maximum Motion Artifact Probability (0.0-1.0)
     int required_consecutive_clean; // Consecutive clean windows to arm gate
 } synapse_hw_config_t;
+
+/** SPO2_SR code -> effective sample rate in Hz (0 for reserved codes). */
+static inline uint32_t synapse_ppg_rate_hz(uint8_t sr_code) {
+    static const uint16_t k_hz[8] = {50, 100, 200, 400, 800, 1000, 1600, 3200};
+    return sr_code < 8 ? k_hz[sr_code] : 0;
+}
 
 
 // ============================================================================

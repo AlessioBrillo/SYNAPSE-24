@@ -95,9 +95,19 @@ esp_err_t sensor_scheduler_register_sensor(sensor_scheduler_t* scheduler, const 
         config->init(config->user_ctx);
     }
 
-    scheduler->sensor_tasks[config->type] = *config->task_handle;
+    // task_handle is optional: the caller may spawn the task after registering
+    // and publish it via sensor_scheduler_set_task().
+    scheduler->sensor_tasks[config->type] = config->task_handle ? *config->task_handle : NULL;
     scheduler->rates_hz[config->type] = config->sampling_rate_hz;
     ESP_LOGI(TAG, "Registered sensor: %s (type=%d, rate=%" PRIu32 " Hz)", config->name, config->type, config->sampling_rate_hz);
+    return ESP_OK;
+}
+
+esp_err_t sensor_scheduler_set_task(sensor_scheduler_t* scheduler, sensor_type_t type, TaskHandle_t task) {
+    if (!scheduler || type >= SENSOR_SCHEDULER_MAX_SENSORS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    scheduler->sensor_tasks[type] = task;
     return ESP_OK;
 }
 
@@ -347,11 +357,14 @@ void sensor_task_fn(void* arg) {
 
         sample.timestamp_us = get_time_us();
         sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
-        sample.sequence = scheduler->sample_counts[config->type]++;
 
-        if (config->read) {
-            config->read(&sample, config->user_ctx);
+        // A failed or empty read must not become a sample: the previous values
+        // would be re-sent with a fresh timestamp (or zeros for a dead sensor).
+        if (config->read && config->read(&sample, config->user_ctx) != ESP_OK) {
+            scheduler->read_errors[config->type]++;
+            continue;
         }
+        sample.sequence = scheduler->sample_counts[config->type]++;
 
         sensor_ring_buffer_push(&scheduler->buffers[config->type], &sample);
     }

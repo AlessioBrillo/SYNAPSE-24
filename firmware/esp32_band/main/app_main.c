@@ -104,11 +104,14 @@ void app_main(void)
     // 5. Initialize signal quality module
     synapse_signal_quality_init();
 
-    // 6. Initialize Edge AI models (stress triage, motion classifier)
+    // 6. Initialize Edge AI models (stress triage, motion classifier).
+    //    ponytail: off until the interpreter/arena bug is fixed (see Kconfig help).
+#if defined(CONFIG_SYNAPSE_FEATURE_EDGE_AI)
     ret = synapse_edge_ai_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Edge AI init failed: %s", esp_err_to_name(ret));
     }
+#endif
 
     // 7. Initialize FIT writer (LittleFS). Gated by the Kconfig flag: the
     //    band-core build (sdkconfig.defaults.core) ships without FIT storage,
@@ -238,7 +241,9 @@ void app_main(void)
             ppg_quality_t ppg = {0};
             stress_triage_t stress = {0};
             (void)synapse_signal_quality_get_ppg(&ppg);
+#if defined(CONFIG_SYNAPSE_FEATURE_EDGE_AI)
             (void)synapse_edge_ai_get_latest_stress(&stress);
+#endif
 
             uint8_t stress_level = SYNAPSE_STRESS_UNKNOWN;
             if (stress.valid) {

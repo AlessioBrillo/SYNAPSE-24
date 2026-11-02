@@ -10,6 +10,7 @@ static const char* TAG = "ecg_ad8232";
 typedef struct {
     ecg_ad8232_config_t config;
     adc_oneshot_unit_handle_t adc_handle;
+    bool owns_adc;
     adc_cali_handle_t cali_handle;
     bool initialized;
     bool lead_off_detected;
@@ -26,14 +27,22 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     s_ctx.adc_handle = NULL;
     s_ctx.cali_handle = NULL;
 
-    adc_oneshot_unit_init_cfg_t unit_cfg = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_ctx.adc_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ADC oneshot init failed: %s", esp_err_to_name(err));
-        return err;
+    esp_err_t err = ESP_OK;
+    if (config->adc_handle) {
+        // ADC1 is shared with the battery channel: borrow, never delete.
+        s_ctx.adc_handle = (adc_oneshot_unit_handle_t)config->adc_handle;
+        s_ctx.owns_adc = false;
+    } else {
+        adc_oneshot_unit_init_cfg_t unit_cfg = {
+            .unit_id = ADC_UNIT_1,
+            .ulp_mode = ADC_ULP_MODE_DISABLE,
+        };
+        err = adc_oneshot_new_unit(&unit_cfg, &s_ctx.adc_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ADC oneshot init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        s_ctx.owns_adc = true;
     }
 
     adc_oneshot_chan_cfg_t chan_cfg = {
@@ -43,6 +52,10 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     err = adc_oneshot_config_channel(s_ctx.adc_handle, (adc_channel_t)config->adc_channel, &chan_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ADC channel config failed: %s", esp_err_to_name(err));
+        if (s_ctx.owns_adc) {
+            adc_oneshot_del_unit(s_ctx.adc_handle);
+        }
+        s_ctx.adc_handle = NULL;
         return err;
     }
 
@@ -105,10 +118,10 @@ esp_err_t ecg_ad8232_deinit(void* user_ctx) {
         adc_cali_delete_scheme_curve_fitting(s_ctx.cali_handle);
         s_ctx.cali_handle = NULL;
     }
-    if (s_ctx.adc_handle) {
+    if (s_ctx.adc_handle && s_ctx.owns_adc) {
         adc_oneshot_del_unit(s_ctx.adc_handle);
-        s_ctx.adc_handle = NULL;
     }
+    s_ctx.adc_handle = NULL;
     s_ctx.initialized = false;
     ESP_LOGI(TAG, "AD8232 ECG deinitialized");
     return ESP_OK;

@@ -11,8 +11,9 @@ extern "C" {
 #endif
 
 // Wired GPIO sync configuration (matches Python config/hardware_bringup.yaml)
-// GPIO 27 used for wired sync (I2C: SDA=GPIO 8, SCL=GPIO 9 on ESP32-S3)
-#define SYNAPSE_WIRED_SYNC_GPIO           27
+// GPIO 10 used for wired sync (I2C: SDA=GPIO 8, SCL=GPIO 9 on ESP32-S3).
+// Not GPIO 27: GPIO26-37 are SPI flash / octal PSRAM on the N8R8 module.
+#define SYNAPSE_WIRED_SYNC_GPIO           10
 #define SYNAPSE_WIRED_SYNC_PULSE_WIDTH_US 10
 #define SYNAPSE_WIRED_SYNC_PULL_UP        true
 

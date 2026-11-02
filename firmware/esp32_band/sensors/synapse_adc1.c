@@ -1,5 +1,7 @@
 #include "synapse_adc1.h"
 
+// ponytail: no lock and never released. Only called from the init path of the
+// main task (sensors, then power); add a mutex if that ever changes.
 static adc_oneshot_unit_handle_t s_adc1;
 
 esp_err_t synapse_adc1_get(adc_oneshot_unit_handle_t *out) {

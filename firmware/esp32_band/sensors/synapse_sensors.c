@@ -21,6 +21,7 @@
 #include "imu_icm20948.h"
 #include "gps_max_m10s.h"
 #include "temp_tmp117.h"
+#include "synapse_adc1.h"
 
 #if defined(CONFIG_SYNAPSE_FEATURE_GPS) || defined(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
 #define SYNAPSE_HAS_AUX_SENSORS 1
@@ -30,6 +31,14 @@ static const char *TAG = "SYNAPSE_SENSORS";
 
 static synapse_sensors_t g_sensors = {0};
 
+// The sensor tasks read their sensor_config_t for as long as they live, so the
+// configs (and handles) must have static storage duration.
+static sensor_config_t s_sensor_cfg[3];
+static TaskHandle_t s_sensor_task[3];
+// Bit n = sensor_type_t n initialised OK. A missing/dead sensor must not stop
+// the band from booting and advertising (fail-soft).
+static volatile uint8_t s_sensor_health;
+
 // Convert synapse_hw_config_t to sensor driver configs
 static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     // ECG
@@ -37,6 +46,12 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     g_sensors.ecg_config.gpio_drdy = hw_cfg->ecg_gpio_drdy;
     g_sensors.ecg_config.vref_mv = hw_cfg->ecg_vref_mv;
     g_sensors.ecg_config.gain = hw_cfg->ecg_gain;
+    adc_oneshot_unit_handle_t adc1 = NULL;
+    if (synapse_adc1_get(&adc1) == ESP_OK) {
+        g_sensors.ecg_config.adc_handle = adc1;
+    } else {
+        ESP_LOGE(TAG, "ADC1 unavailable: ECG will fail init (fail-soft)");
+    }
 
     // PPG
     g_sensors.ppg_config.i2c_port = (i2c_port_t)hw_cfg->ppg_i2c_port;
@@ -79,32 +94,75 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
 }
 
 // Scheduler-compatible wrappers (exact signature match, no casts)
-static void ecg_init_wrap(void *ctx) {
-    (void)ecg_ad8232_init((const ecg_ad8232_config_t *)ctx);
+static void note_init(sensor_type_t type, const char *name, esp_err_t err) {
+    if (err == ESP_OK) {
+        s_sensor_health |= (uint8_t)(1u << type);
+    } else {
+        s_sensor_health &= (uint8_t)~(1u << type);
+        ESP_LOGE(TAG, "%s init failed: %s (continuing without it)", name, esp_err_to_name(err));
+    }
 }
-static void ecg_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)ecg_ad8232_read(sample, ctx);
+static void ecg_init_wrap(void *ctx) {
+    note_init(SENSOR_TYPE_ECG, "ECG", ecg_ad8232_init((const ecg_ad8232_config_t *)ctx));
+}
+static esp_err_t ecg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return ecg_ad8232_read(sample, ctx);
 }
 static void ecg_deinit_wrap(void *ctx) {
     (void)ecg_ad8232_deinit(ctx);
 }
 static void ppg_init_wrap(void *ctx) {
-    (void)ppg_max30102_init((const ppg_max30102_config_t *)ctx);
+    note_init(SENSOR_TYPE_PPG, "PPG", ppg_max30102_init((const ppg_max30102_config_t *)ctx));
 }
-static void ppg_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)ppg_max30102_read(sample, ctx);
+static esp_err_t ppg_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return ppg_max30102_read(sample, ctx);
 }
 static void ppg_deinit_wrap(void *ctx) {
     (void)ppg_max30102_deinit(ctx);
 }
 static void imu_init_wrap(void *ctx) {
-    (void)imu_icm20948_init((const imu_icm20948_config_t *)ctx);
+    note_init(SENSOR_TYPE_IMU, "IMU", imu_icm20948_init((const imu_icm20948_config_t *)ctx));
 }
-static void imu_read_wrap(sensor_sample_t *sample, void *ctx) {
-    (void)imu_icm20948_read(sample, ctx);
+static esp_err_t imu_read_wrap(sensor_sample_t *sample, void *ctx) {
+    return imu_icm20948_read(sample, ctx);
 }
 static void imu_deinit_wrap(void *ctx) {
     (void)imu_icm20948_deinit(ctx);
+}
+
+// Register a sensor, then spawn its polling task. Registration comes first so
+// the task starts with the right rate; the task stays idle until the scheduler
+// is started (it checks scheduler->running).
+static esp_err_t register_and_spawn(int idx, const sensor_config_t *cfg, uint32_t stack, UBaseType_t prio) {
+    s_sensor_cfg[idx] = *cfg;
+    s_sensor_cfg[idx].task_handle = NULL;
+    esp_err_t err = sensor_scheduler_register_sensor(&g_sensors.scheduler, &s_sensor_cfg[idx]);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!(s_sensor_health & (1u << cfg->type))) {
+        // Init failed (reported by note_init): keep the band up without polling a dead sensor.
+        ESP_LOGW(TAG, "%s not initialised: no polling task", cfg->name);
+        return ESP_OK;
+    }
+    if (xTaskCreate(sensor_task_fn, cfg->name, stack, &s_sensor_cfg[idx], prio, &s_sensor_task[idx]) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create task for %s", cfg->name);
+        s_sensor_task[idx] = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return sensor_scheduler_set_task(&g_sensors.scheduler, cfg->type, s_sensor_task[idx]);
+}
+
+// A sensor that cannot be registered or spawned is reported and skipped: the
+// band must stay up and advertise (fail-soft), not reboot-loop.
+static void spawn_or_log(esp_err_t err, const char *name) {
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s disabled: %s", name, esp_err_to_name(err));
+    }
+}
+
+uint8_t synapse_sensors_health_mask(void) {
+    return s_sensor_health;
 }
 
 esp_err_t synapse_sensors_init(void) {
@@ -147,20 +205,20 @@ esp_err_t synapse_sensors_init(void) {
         .user_ctx = &g_sensors.ecg_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_sensors.scheduler, &ecg_sensor));
+    spawn_or_log(register_and_spawn(0, &ecg_sensor, 4096, SENSOR_TASK_PRIO_ECG), "ECG");
 
     // Register PPG sensor
     sensor_config_t ppg_sensor = {
         .type = SENSOR_TYPE_PPG,
         .name = "PPG_MAX30102",
-        .sampling_rate_hz = hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64,
+        .sampling_rate_hz = synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate),
         .init = ppg_init_wrap,
         .read = ppg_read_wrap,
         .deinit = ppg_deinit_wrap,
         .user_ctx = &g_sensors.ppg_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_sensors.scheduler, &ppg_sensor));
+    spawn_or_log(register_and_spawn(1, &ppg_sensor, 4096, SENSOR_TASK_PRIO_PPG), "PPG");
 
     // Register IMU sensor
     sensor_config_t imu_sensor = {
@@ -173,7 +231,7 @@ esp_err_t synapse_sensors_init(void) {
         .user_ctx = &g_sensors.imu_config,
         .task_handle = NULL
     };
-    ESP_ERROR_CHECK(sensor_scheduler_register_sensor(&g_sensors.scheduler, &imu_sensor));
+    spawn_or_log(register_and_spawn(2, &imu_sensor, 4096, SENSOR_TASK_PRIO_IMU), "IMU");
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Initialize GPS
@@ -197,17 +255,17 @@ esp_err_t synapse_sensors_init(void) {
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
  #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, GPS, Temp)",
-             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
  #else
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, GPS)",
-             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
  #endif
 #elif defined(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, Temp)",
-             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
 #else
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz) [band-core]",
-             hw_cfg.ppg_sample_rate == 0x02 ? 50 : 64, hw_cfg.imu_accel_odr_hz);
+             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
 #endif
     return ESP_OK;
 }
@@ -267,6 +325,15 @@ esp_err_t synapse_sensors_deinit(void) {
     // Deinitialize Temperature
     ESP_ERROR_CHECK(temp_tmp117_deinit());
 #endif
+
+    // The sensor tasks hold pointers into the scheduler: delete them first.
+    for (int i = 0; i < 3; i++) {
+        if (s_sensor_task[i]) {
+            vTaskDelete(s_sensor_task[i]);
+            s_sensor_task[i] = NULL;
+        }
+    }
+    s_sensor_health = 0;
 
     // Deinitialize sensor scheduler
     ESP_ERROR_CHECK(sensor_scheduler_deinit(&g_sensors.scheduler));

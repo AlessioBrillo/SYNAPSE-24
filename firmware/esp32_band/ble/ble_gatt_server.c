@@ -33,8 +33,14 @@ static bool g_prov_subscribed = false;
 static uint8_t g_feat_seq = 0;
 static uint16_t g_mtu = 23;
 
+// Value handles are filled by NimBLE (val_handle) when the host starts the GATT
+// server; they are 0 until then. ble_gatts_find_chr() returns an rc, not a handle.
 static uint16_t s_feat_handle = 0;
 static uint16_t s_prov_handle = 0;
+static uint16_t s_hr_handle = 0;
+static uint16_t s_batt_handle = 0;
+static bool s_hr_subscribed = false;
+static bool s_batt_subscribed = false;
 
 static uint8_t s_body_location = 1; // wrist
 static uint8_t s_batt_level = 100;
@@ -137,9 +143,7 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     // for a notification) sees the same measurement the notify path sends.
     s_last_hr_bpm = hr_bpm;
     s_last_rr_ms = rr_interval_ms;
-    uint16_t chr_handle = ble_gatts_find_chr(BLE_UUID16_DECLARE(0x180D),
-                                             BLE_UUID16_DECLARE(0x2A37), NULL, NULL);
-    if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
+    if (s_hr_handle == 0 || !s_hr_subscribed) return ESP_ERR_INVALID_STATE;
     // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
     uint8_t flags = 0x01; // 16-bit HR value
     if (rr_interval_ms != 0xFFFF) flags |= 0x10; // RR interval present
@@ -154,7 +158,7 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     }
     struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
     if (!om) return ESP_ERR_NO_MEM;
-    int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
+    int rc = ble_gatts_notify_custom(g_conn_handle, s_hr_handle, om);
     return rc == 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -184,12 +188,10 @@ esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging) {
     s_batt_level = level;
     s_batt_notify_pending = true;
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
-    uint16_t chr_handle = ble_gatts_find_chr(BLE_UUID16_DECLARE(0x180F),
-                                             BLE_UUID16_DECLARE(0x2A19), NULL, NULL);
-    if (chr_handle == 0) return ESP_ERR_INVALID_STATE;
+    if (s_batt_handle == 0 || !s_batt_subscribed) return ESP_ERR_INVALID_STATE;
     struct os_mbuf *om = ble_hs_mbuf_from_flat(&s_batt_level, 1);
     if (!om) return ESP_ERR_NO_MEM;
-    int rc = ble_gatts_notify_custom(g_conn_handle, chr_handle, om);
+    int rc = ble_gatts_notify_custom(g_conn_handle, s_batt_handle, om);
     return rc == 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -238,6 +240,7 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             {
                 .uuid = BLE_UUID16_DECLARE(0x2A37),
                 .access_cb = hr_access,
+                .val_handle = &s_hr_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
             {
@@ -255,6 +258,7 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             {
                 .uuid = BLE_UUID16_DECLARE(0x2A19),
                 .access_cb = batt_access,
+                .val_handle = &s_batt_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
             {0},
@@ -304,6 +308,7 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             {
                 .uuid = &FEAT_UUID.u,
                 .access_cb = feat_access,
+                .val_handle = &s_feat_handle,
                 .flags = BLE_GATT_CHR_F_NOTIFY,
             },
             {
@@ -314,6 +319,7 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             {
                 .uuid = &PROV_UUID.u,
                 .access_cb = prov_access,
+                .val_handle = &s_prov_handle,
                 .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
             },
             {0},
@@ -348,6 +354,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         g_feat_subscribed = false;
         g_prov_subscribed = false;
+        s_hr_subscribed = false;
+        s_batt_subscribed = false;
         synapse_research_service_on_disconnect();
 #if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
         if (!synapse_provisioning_is_complete()) synapse_ble_gatt_start_advertising_provisioning();
@@ -365,6 +373,14 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             g_feat_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_prov_handle) {
             g_prov_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == s_hr_handle) {
+            s_hr_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == s_batt_handle) {
+            s_batt_subscribed = event->subscribe.cur_notify;
+            if (s_batt_subscribed && s_batt_notify_pending) {
+                s_batt_notify_pending = false;
+                (void)synapse_ble_gatt_notify_battery(s_batt_level, false);
+            }
         }
         // Route research-service CCCDs to the raw stream table: a stream only
         // transmits once its characteristic has been subscribed.
@@ -531,9 +547,7 @@ esp_err_t synapse_ble_gatt_init(void) {
         return ESP_FAIL;
     }
 
-    s_feat_handle = ble_gatts_find_chr(&SYN_SVC_UUID.u, &FEAT_UUID.u, NULL, NULL);
-    s_prov_handle = ble_gatts_find_chr(&SYN_SVC_UUID.u, &PROV_UUID.u, NULL, NULL);
-    ESP_LOGI(BLE_TAG, "BLE GATT init OK (NimBLE) feat=%d prov=%d", s_feat_handle, s_prov_handle);
+    ESP_LOGI(BLE_TAG, "BLE GATT init OK (NimBLE)");
 
     // The Synapse Research Service MUST be registered before the host task
     // starts: NimBLE calls ble_gatts_start() automatically when the host
