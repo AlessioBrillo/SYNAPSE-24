@@ -19,7 +19,6 @@ Two rules make the export trustworthy:
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,6 +34,7 @@ from synapse_device.fit import (
 )
 
 from synapse24.signal_quality.ecg import compute_hrv_metrics, detect_r_peaks_neurokit
+from synapse24.utils.windows import window_bounds
 
 __all__ = [
     "ExportError",
@@ -245,15 +245,14 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     writer.write_developer_data_id()
     writer.write_field_descriptions()
 
-    n_windows = max(1, math.ceil(duration_s / window_s))
+    bounds = window_bounds(t0, t1, window_s)
+    n_windows = len(bounds)
     n_records = 0
-    for index in range(n_windows):
-        win_t0 = t0 + index * window_s
-        win_t1 = min(t0 + (index + 1) * window_s, t1)
+    for win_t0, win_t1 in bounds:
         mask = (peak_times >= win_t0) & (peak_times < win_t1)
         window_peaks = r_peaks[mask]
         metrics = (
-            compute_hrv_metrics(window_peaks, int(round(fs)), window_duration_s=window_s)
+            compute_hrv_metrics(window_peaks, int(round(fs)), window_duration_s=win_t1 - win_t0)
             if len(window_peaks) >= 2
             else {}
         )

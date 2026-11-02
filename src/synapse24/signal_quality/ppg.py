@@ -204,6 +204,30 @@ def compute_ppg_sqi(ppg_signal: npt.NDArray[np.float64], sampling_rate: int) -> 
     return float(np.clip(sqi, 0.0, 1.0))
 
 
+def detect_ppg_peaks(
+    ppg_signal: npt.NDArray[np.float64], sampling_rate: int
+) -> npt.NDArray[np.int64]:
+    """Systolic peak indices of a PPG trace.
+
+    The trace is band-passed to the cardiac band and peaks are taken at least 0.3 s apart
+    (200 bpm), with a prominence tied to the signal's own spread. This is NOT the ECG
+    R-peak detector: running that on a PPG trace returns plausible but meaningless beats.
+
+    There is no artifact rejection here: on a motion-corrupted segment it will still return
+    peaks. Gate the windows with the PPG SQI (``compute_ppg_sqi``) before trusting HRV.
+    """
+    sig = np.asarray(ppg_signal, dtype=np.float64)
+    if sig.size < max(2, int(sampling_rate)) or float(np.ptp(sig)) <= 0.0:
+        return np.array([], dtype=np.int64)
+    filtered = _bandpass_filter(sig, CARDIAC_BAND_LOW_HZ, CARDIAC_BAND_HIGH_HZ, sampling_rate)
+    peaks, _ = find_peaks(
+        filtered,
+        distance=max(1, int(sampling_rate * 0.3)),
+        prominence=0.3 * float(np.std(filtered)),
+    )
+    return np.asarray(peaks, dtype=np.int64)
+
+
 def _align_accel_to_ppg(
     accel_magnitude: npt.NDArray[np.float64] | None,
     n_ppg: int,
