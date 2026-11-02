@@ -35,6 +35,10 @@ SOURCES = [
         ["-Itests/firmware_host/stubs", "-Ifirmware/common/ble"],
     ),
     (
+        "firmware/esp32_band/ble/synapse_consumer_v2.c",
+        ["-Ifirmware/esp32_band/ble"],
+    ),
+    (
         "firmware/esp32_band/ble/ble_research_service.c",
         [
             "-Itests/firmware_host/stubs",

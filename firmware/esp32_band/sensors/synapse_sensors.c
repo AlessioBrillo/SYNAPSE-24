@@ -165,6 +165,14 @@ uint8_t synapse_sensors_health_mask(void) {
     return s_sensor_health;
 }
 
+uint32_t synapse_sensors_read_errors(void) {
+    uint32_t total = 0;
+    for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
+        total += g_sensors.scheduler.read_errors[i];
+    }
+    return total;
+}
+
 esp_err_t synapse_sensors_init(void) {
     if (g_sensors.initialized) {
         ESP_LOGW(TAG, "Already initialized");

@@ -230,3 +230,98 @@ def test_gatt_research_uuid_drift_is_detected(tmp_path: Path) -> None:
     report = ci.Report()
     ci.check_gatt_uuids_consistent(report, broken)
     assert any("UUID drift" in f for f in report.failures)
+
+
+# --- hardening: full-UUID comparison, strict sources, v2 and the frozen v1 --------------------
+
+
+def test_a_uuid_drift_in_a_middle_byte_is_detected_in_the_firmware_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old check compared one trailing byte: every research UUID shares a prefix."""
+    header = ci.CONTRACT_H.read_text(encoding="utf-8")
+    canonical = json.loads(ci.GATT_CONTRACT.read_text(encoding="utf-8"))["services"]["research"][
+        "characteristics"
+    ]["ECG"].lower()
+    drifted = canonical.replace("-4a7b-", "-4a7c-")
+    assert drifted != canonical
+    assert canonical in header
+    broken = tmp_path / "synapse_contract_generated.h"
+    broken.write_text(header.replace(canonical, drifted), encoding="utf-8")
+    monkeypatch.setattr(ci, "CONTRACT_H", broken)
+    report = ci.Report()
+    ci.check_gatt_uuids_consistent(report, ci.GATT_CONTRACT)
+    assert any("firmware contract header" in f for f in report.failures), report.failures
+
+
+def test_a_missing_uuid_source_is_a_failure_not_a_silent_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ci, "HARDWARE_YAML", tmp_path / "absent.yaml")
+    report = ci.Report()
+    ci.check_gatt_uuids_consistent(report, ci.GATT_CONTRACT)
+    assert any("is missing" in f for f in report.failures), report.failures
+
+
+def test_the_consumer_v2_contract_is_clean() -> None:
+    report = ci.Report()
+    ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, ci.GATT_CONTRACT)
+    assert not report.failures, "; ".join(report.failures)
+
+
+def test_editing_the_frozen_v1_contract_is_detected(tmp_path: Path) -> None:
+    edited = tmp_path / "gatt_v1.json"
+    data = json.loads(ci.GATT_CONTRACT.read_text(encoding="utf-8"))
+    data["description"] += " (edited)"
+    edited.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    report = ci.Report()
+    ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, edited)
+    assert any("frozen" in f for f in report.failures), report.failures
+
+
+def test_a_v2_uuid_missing_from_the_firmware_header_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v2_status = json.loads(ci.GATT_CONTRACT_V2.read_text(encoding="utf-8"))["characteristics"][
+        "status"
+    ]
+    header = ci.CONTRACT_H.read_text(encoding="utf-8")
+    assert v2_status in header
+    broken = tmp_path / "synapse_contract_generated.h"
+    broken.write_text(
+        header.replace(v2_status, "00000000-0000-4000-8000-000000000000"), encoding="utf-8"
+    )
+    monkeypatch.setattr(ci, "CONTRACT_H", broken)
+    report = ci.Report()
+    ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, ci.GATT_CONTRACT)
+    assert any("consumer v2 UUID drift" in f for f in report.failures), report.failures
+
+
+def test_the_worker_field_ids_are_part_of_the_consistency_check(tmp_path: Path) -> None:
+    """check_worker_field_ids used to exist but was never called."""
+    worker = tmp_path / "hrv_worker.py"
+    worker.write_text(
+        WORKER_SCRIPT.read_text(encoding="utf-8").replace(
+            "SYNAPSE_DEV_FIELD_SQI = 1", "SYNAPSE_DEV_FIELD_SQI = 9"
+        ),
+        encoding="utf-8",
+    )
+    report = ci.Report()
+    ci.check_field_ids_consistent(
+        report,
+        FIRMWARE_HEADER,
+        EXPORT_SCRIPT,
+        worker,
+        json.loads(FIT_DESCRIPTOR.read_text(encoding="utf-8")),
+        EXPORT_MODULE,
+        SDK_FIT_MODULE,
+    )
+    assert any("worker/hrv_worker.py field IDs diverge" in f for f in report.failures), (
+        report.failures
+    )
+
+
+def test_a_missing_v1_contract_is_a_failure_not_a_traceback(tmp_path: Path) -> None:
+    report = ci.Report()
+    ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, tmp_path / "absent.json")
+    assert any("is missing" in f for f in report.failures), report.failures

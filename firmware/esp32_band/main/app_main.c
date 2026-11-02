@@ -13,6 +13,7 @@
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_err.h"
 #include "esp_efuse.h"
 // The MAC helper lives in esp_mac.h (the esp_hw_support component) since
@@ -53,6 +54,40 @@ static synapse_wired_sync_t s_wired_sync = {0};
 #define ACQUISITION_RUNNING_BIT BIT3
 
 static EventGroupHandle_t s_system_events;
+
+// Consumer contract v2 glue. The BLE layer owns the wire format; what the band knows
+// (sensor health, counters, whether the raw streams run) is provided from here.
+static bool s_transmitting = true;
+
+// 0.0..1.0 -> 0..254. 255 is the "not available" sentinel of these fields, so a perfect
+// signal must not be able to reach it (it used to: 1.0 * 255), and an out-of-range or NaN
+// input must not wrap the cast.
+static uint8_t unit_to_u8(float v)
+{
+    if (!(v > 0.0f)) return 0;  // also catches NaN
+    if (v >= 1.0f) return 254;
+    return (uint8_t)(v * 254.0f + 0.5f);
+}
+
+static void on_transmit_request(bool on)
+{
+    s_transmitting = on;
+    (void)synapse_research_service_set_transmitting(on);
+}
+
+static void fill_status(synapse_status_v2_t *st)
+{
+    st->tier = 0;  // ponytail: the acquisition FSM does not expose its tier yet
+    st->sensor_health = synapse_sensors_health_mask();
+    st->flags = s_transmitting ? SYNAPSE_V2_STATUS_TRANSMITTING : 0;
+    st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
+    st->ring_overflow = synapse_research_service_ring_overflow();
+    st->stale_samples = synapse_research_service_stale_samples();
+    st->dropped_frames = synapse_research_service_dropped_frames();
+    st->read_errors = synapse_sensors_read_errors();
+    st->fw_build = 0;  // ponytail: no build hash is embedded yet; 0 = unknown
+}
 
 // Consumer feature stream (Averyn integration).
 // synapse_ble_gatt_push_feature() is rate-limited to 1 Hz internally; we call
@@ -131,6 +166,9 @@ void app_main(void)
         ESP_LOGE(TAG, "BLE GATT init failed: %s", esp_err_to_name(ret));
         return;
     }
+
+    synapse_ble_gatt_set_status_provider(fill_status);
+    synapse_ble_gatt_set_transmit_handler(on_transmit_request);
 
     // 8a. Device Information: serial derived from the public MAC so Averyn can
     //     bind device -> owner (serial printed on box/QR). HW rev from Kconfig.
@@ -266,8 +304,8 @@ void app_main(void)
                 // 0 bpm is not a legal Heart Rate Measurement Value, so a
                 // zero reading is reported as "invalid" instead.
                 hr_bpm = (ppg.hr_bpm > 0.0f) ? (uint16_t)ppg.hr_bpm : 0xFFFF;
-                ppg_sqi = (uint8_t)(ppg.sqi * 255.0f);
-                ppg_map = (uint8_t)(ppg.motion_artifact_prob * 255.0f);
+                ppg_sqi = unit_to_u8(ppg.sqi);
+                ppg_map = unit_to_u8(ppg.motion_artifact_prob);
             }
 
             (void)synapse_ble_gatt_push_feature(
@@ -280,6 +318,20 @@ void app_main(void)
                 0xFF,                       // motion_level (0xFF = not available)
                 0x7FFF                       // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
             );
+
+            // Consumer contract v2: the same measurements, with everything not measured
+            // left at its NA sentinel (a consumer reads null, never 0).
+            synapse_feature_v2_t v2;
+            synapse_feature_v2_init_na(&v2);
+            v2.t_dev_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            v2.heart_rate_bpm = hr_bpm;
+            v2.ppg_sqi = ppg_sqi;
+            v2.ecg_quality = ecg_quality;
+            v2.stress_level = stress_level;
+            v2.sensor_health = synapse_sensors_health_mask();
+            if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
+            (void)synapse_ble_gatt_push_feature_v2(&v2);
+            (void)synapse_ble_gatt_push_status();
         }
         // --------------------------------------------------------------------
 

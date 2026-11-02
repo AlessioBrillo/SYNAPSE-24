@@ -5,7 +5,7 @@
 #
 # The flag decides the heavy dependency (the Wi-Fi stack) inside the
 # provisioning component, not the presence of the component.
-idf_component_register(SRCS "ble_gatt_server.c" "ble_research_service.c"
+idf_component_register(SRCS "ble_gatt_server.c" "ble_research_service.c" "synapse_consumer_v2.c"
                        "../../common/ble/synapse_raw_frame.c"
                        INCLUDE_DIRS "." "../../common/ble"
                        REQUIRES bt nvs_flash provisioning config sensors esp_timer

@@ -1,0 +1,75 @@
+{
+  "description": "Golden vectors for the consumer contract v2 feature frame. `values` use null for 'not available'. Generated with synapse_device.consumer.encode_feature; the firmware encoder must produce the same bytes.",
+  "feature": [
+    {
+      "name": "all_not_available",
+      "values": {
+        "flags": 0,
+        "sequence": 0,
+        "t_dev_ms": 0,
+        "stress_level": 3,
+        "sport_type": 0,
+        "sensor_health": 0
+      },
+      "hex": "0200000000000000ffffffffffffffff03ffff7fffffffff0000"
+    },
+    {
+      "name": "typical_resting",
+      "values": {
+        "flags": 4,
+        "sequence": 42,
+        "t_dev_ms": 3600000,
+        "stress_level": 0,
+        "sport_type": 0,
+        "sensor_health": 7,
+        "heart_rate_bpm": 62,
+        "rr_last": 968,
+        "rr_count": 1,
+        "ppg_sqi": 230,
+        "ecg_quality": 200,
+        "motion_level": 12,
+        "battery_pct": 87,
+        "temperature_c100": 3345,
+        "rmssd_ms": 48,
+        "sdnn_ms": 61
+      },
+      "hex": "02042a0080ee36003e00c80301e6c80c0057110d30003d000007"
+    },
+    {
+      "name": "negative_temperature",
+      "values": {
+        "flags": 0,
+        "sequence": 0,
+        "t_dev_ms": 0,
+        "stress_level": 3,
+        "sport_type": 0,
+        "sensor_health": 0,
+        "temperature_c100": -1234,
+        "heart_rate_bpm": 0
+      },
+      "hex": "02000000000000000000ffffffffffff03ff2efbffffffff0000"
+    },
+    {
+      "name": "extremes",
+      "values": {
+        "flags": 15,
+        "sequence": 65535,
+        "t_dev_ms": 4294967295,
+        "stress_level": 2,
+        "sport_type": 4,
+        "sensor_health": 31,
+        "heart_rate_bpm": 300,
+        "rr_last": 65534,
+        "rr_count": 254,
+        "ppg_sqi": 254,
+        "ecg_quality": 254,
+        "motion_level": 254,
+        "battery_pct": 100,
+        "temperature_c100": 32766,
+        "rmssd_ms": 65534,
+        "sdnn_ms": 65534
+      },
+      "hex": "020fffffffffffff2c01fefffefefefe0264fe7ffefffeff041f"
+    }
+  ]
+}

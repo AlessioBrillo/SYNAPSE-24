@@ -48,6 +48,7 @@ def test_drift_is_detected(
     stale.write_text("# stale\n", encoding="utf-8")
     monkeypatch.setattr(gc, "PY_MODULE", stale)
     monkeypatch.setattr(gc, "C_HEADER", tmp_path / "synapse_contract_generated.h")
+    monkeypatch.setattr(gc, "GATT_V2", tmp_path / "gatt_v2.json")
 
     assert gc.main(["--check"]) == 1
     assert "CONTRACT DRIFT" in capsys.readouterr().err

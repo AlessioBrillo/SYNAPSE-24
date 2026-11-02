@@ -180,10 +180,90 @@ ble:
     characteristic_uuid: "db4307e5-6cb3-4152-a0e2-81c3921168e9"
     device_config_uuid: "bf68d647-0d02-479a-8d75-7964a51f332f"
     provisioning_uuid: "4e200cf1-94ac-4d63-a161-a03e5d3bb14a"
-    payload_bytes: 26
+    payload_bytes: 23   # sizeof(synapse_feature_stream_t); was documented as 26, never true
     version: 1
     rate_hz: 1
     rate_max_hz: 10
+  # --- Consumer contract v2 (visualization-first) --------------------------------
+  # Same consumer service as v1; NEW characteristics, so v1 stays byte-for-byte
+  # frozen (contracts/gatt_v1.json, pinned by sha256 in Averyn) and a v1 client
+  # simply never sees them. The layouts below are the single source of truth:
+  # tools/generate_contracts.py emits contracts/gatt_v2.json from them, the SDK
+  # codec and the firmware encoders are checked against it.
+  # Types: u8 u16 u32 i16 (little-endian). `na` is the "not available" sentinel:
+  # a sentinel is NEVER a measurement, consumers map it to null (not 0).
+  consumer_v2:
+    feature_uuid: "23443aaf-382c-4475-baf8-ea3c59ba1a82"
+    status_uuid: "fea798da-b114-47c9-8ec4-265bb358e741"
+    stream_metadata_uuid: "07458f36-0a8a-4ad0-8513-41279bb5d981"
+    control_point_uuid: "bc560345-f1e9-4bbf-98a7-e545c88c02a1"
+    feature_rate_hz: 1
+    feature_rate_max_hz: 5
+    feature:                         # notify, needs ATT MTU >= bytes + 3
+      version: 2
+      bytes: 26
+      fields:
+        - {name: version, type: u8}
+        # flags: bit0 charging, bit1 lead_off, bit2 transmitting, bit3 clock_wrapped.
+        # Band v1 firmware populates charging and transmitting; lead_off and clock_wrapped are
+        # reserved (always 0) until the lead-off input is trustworthy and t_dev_ms wraps.
+        - {name: flags, type: u8}
+        - {name: sequence, type: u16}
+        - {name: t_dev_ms, type: u32}                   # device uptime, ms
+        - {name: heart_rate_bpm, type: u16, na: 0xFFFF}
+        - {name: rr_last, type: u16, na: 0xFFFF}        # 1/1024 s (Bluetooth RR unit)
+        - {name: rr_count, type: u8, na: 0xFF}          # RR intervals since the previous frame
+        - {name: ppg_sqi, type: u8, na: 0xFF}           # 0..254 = 0.0..1.0 (255 is NA, never a value)
+        - {name: ecg_quality, type: u8, na: 0xFF}       # 0..254 = 0.0..1.0
+        - {name: motion_level, type: u8, na: 0xFF}      # 0..254 = 0.0..1.0
+        - {name: stress_level, type: u8}                # 0 baseline, 1 stress, 2 artifact, 3 unknown
+        - {name: battery_pct, type: u8, na: 0xFF}
+        - {name: temperature_c100, type: i16, na: 0x7FFF}   # 0.01 degC
+        - {name: rmssd_ms, type: u16, na: 0xFFFF}
+        - {name: sdnn_ms, type: u16, na: 0xFFFF}
+        - {name: sport_type, type: u8}
+        - {name: sensor_health, type: u8}               # bit0 ECG, bit1 PPG, bit2 IMU, bit3 TEMP, bit4 POWER
+    status:                          # read + notify on change
+      version: 1
+      bytes: 32
+      fields:
+        - {name: version, type: u8}
+        - {name: tier, type: u8}
+        - {name: sensor_health, type: u8}
+        - {name: flags, type: u8}                       # bit0 lead_off, bit1 transmitting, bit2 charging
+        - {name: mtu, type: u16}
+        - {name: uptime_s, type: u32}
+        - {name: epoch_wraps, type: u16}
+        - {name: ring_overflow, type: u32}
+        - {name: stale_samples, type: u32}
+        - {name: dropped_frames, type: u32}
+        - {name: read_errors, type: u32}
+        - {name: fw_build, type: u32}                   # first 4 bytes of the build hash, 0 = unknown
+    stream_metadata:                 # read: [count u8] + count * entry
+      entry_bytes: 8
+      entry_fields:
+        - {name: stream_id, type: u8}
+        - {name: format, type: u8}                      # raw_frame sample_format code
+        - {name: channels, type: u8}
+        - {name: unit, type: u8}                        # see units below
+        - {name: rate_hz, type: u16}
+        - {name: unit_scale, type: u16}                 # wire integer = physical value * unit_scale
+      units: {count: 0, uV: 1, mg: 2, mrad_s: 3, cut: 4, milli: 5}   # cut = 0.01 uT; milli = mV/mA/mW/%
+      streams:
+        # rate: a key of pods[].sampling_rate, or a literal Hz value (POWER is 1 Hz telemetry)
+        ecg:   {format: 2, channels: 1, unit: uV,      unit_scale: 1000, rate: ecg}
+        ppg:   {format: 3, channels: 2, unit: count,   unit_scale: 1,    rate: ppg}
+        acc:   {format: 2, channels: 3, unit: mg,      unit_scale: 1000, rate: imu}
+        gyro:  {format: 2, channels: 3, unit: mrad_s,  unit_scale: 1000, rate: imu}
+        mag:   {format: 2, channels: 3, unit: cut,     unit_scale: 100,  rate: imu}
+        power: {format: 3, channels: 4, unit: milli,   unit_scale: 1,    rate: 1}
+    control_point:                   # write with response: [opcode u8][args...]
+      # start/stop gate the RAW research streams only; the feature and status frames keep flowing
+      # and report the state in their `transmitting` flag, so a UI can show "paused". A new
+      # connection always starts with the streams running.
+      description: "start/stop gate the raw research streams; feature and status keep flowing and report the state; a new connection starts running"
+      opcodes: {start: 1, stop: 2, set_feature_rate: 3}
+      errors: {bad_opcode: 1, bad_length: 2, bad_argument: 3}
   # Standard GATT services exposed alongside (nRF Connect / LightBlue usable).
   standard_services:
     heart_rate: "180D"
