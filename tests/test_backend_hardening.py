@@ -44,6 +44,15 @@ def _first_session(client: TestClient) -> dict:
     return client.get("/api/v1/sessions").json()["sessions"][0]
 
 
+def _status_update(ws) -> dict:  # noqa: ANN001
+    """The first ``status_update`` (a hello comes before it)."""
+    for _ in range(5):
+        message = ws.receive_json()
+        if message["type"] == "status_update":
+            return message
+    raise AssertionError("no status_update received")
+
+
 # --- real 404s ---------------------------------------------------------------------------
 
 
@@ -116,8 +125,7 @@ def test_the_websocket_accepts_the_bearer_subprotocol(
     monkeypatch.setenv("SYNAPSE_API_TOKEN", "s3cr3t")
     with client.websocket_connect("/ws/live", subprotocols=["bearer", "s3cr3t"]) as ws:
         assert ws.accepted_subprotocol == "bearer"
-        message = ws.receive_json()
-    assert message["type"] == "status_update"
+        message = _status_update(ws)
     assert "sessions_dir" not in message["data"]
 
 
@@ -126,7 +134,7 @@ def test_the_websocket_still_accepts_the_authorization_header(
 ) -> None:
     monkeypatch.setenv("SYNAPSE_API_TOKEN", "s3cr3t")
     with client.websocket_connect("/ws/live", headers={"Authorization": "Bearer s3cr3t"}) as ws:
-        assert ws.receive_json()["type"] == "status_update"
+        assert _status_update(ws)["type"] == "status_update"
 
 
 @pytest.mark.parametrize(
@@ -196,7 +204,7 @@ def test_the_websocket_accepts_the_bearer_pair_among_other_protocols(
     monkeypatch.setenv("SYNAPSE_API_TOKEN", "s3cr3t")
     with client.websocket_connect("/ws/live", subprotocols=["v1.json", "bearer", "s3cr3t"]) as ws:
         assert ws.accepted_subprotocol == "bearer"
-        assert ws.receive_json()["type"] == "status_update"
+        assert _status_update(ws)["type"] == "status_update"
 
 
 def test_a_missing_manifest_is_a_404_not_a_200_with_an_error(

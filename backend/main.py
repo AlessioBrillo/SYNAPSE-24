@@ -46,6 +46,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from backend.live import SOURCE_ENV, LiveHub, make_source  # noqa: E402
 from backend.service import DataPlaneService, JobRunRequest, JobRunResponse  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,7 @@ try:  # fastapi/uvicorn are runtime deps, not dev deps
         WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware  # noqa: F401
+    from fastapi.responses import HTMLResponse  # noqa: F401
     from starlette.concurrency import run_in_threadpool  # noqa: F401
 except ImportError:  # pragma: no cover - dev environment without fastapi
     Depends = None  # type: ignore[assignment,misc]
@@ -71,6 +73,7 @@ except ImportError:  # pragma: no cover - dev environment without fastapi
     WebSocket = None  # type: ignore[assignment,misc]
     WebSocketDisconnect = Exception  # type: ignore[assignment,misc]
     CORSMiddleware = None  # type: ignore[assignment,misc]
+    HTMLResponse = None  # type: ignore[assignment,misc]
     run_in_threadpool = None  # type: ignore[assignment]
     _FASTAPI_AVAILABLE = False
 
@@ -109,9 +112,30 @@ def _service() -> DataPlaneService:
     return svc
 
 
+#: The live hub, built on the first WebSocket client from ``SYNAPSE_LIVE_SOURCE``.
+_hubs: dict[str, LiveHub] = {}
+
+#: The local viewer page (static, no data of its own: the data arrives over /ws/live).
+_LIVE_PAGE = Path(__file__).resolve().parent / "static" / "live.html"
+
+
+def _live_hub() -> LiveHub:
+    """The shared hub; a bad ``SYNAPSE_LIVE_SOURCE`` is logged and means "no source"."""
+    hub = _hubs.get("hub")
+    if hub is None:
+        try:
+            source = make_source(os.environ.get(SOURCE_ENV, ""))
+        except ValueError:
+            logger.exception("invalid %s: no live source", SOURCE_ENV)
+            source = None
+        hub = _hubs["hub"] = LiveHub(source)
+    return hub
+
+
 def _reset_services() -> None:
-    """Drop the cached service instances (used by tests)."""
+    """Drop the cached service instances and the live hub (used by tests)."""
     _services.clear()
+    _hubs.clear()
 
 
 def _api_token() -> str:
@@ -375,19 +399,41 @@ def _register_websocket(application: Any) -> None:
                 return
         await websocket.accept(subprotocol=subprotocol)
         connected_clients_local.add(websocket)
+        hub = _live_hub()
+        queue = await hub.attach()
+        loop = asyncio.get_running_loop()
         try:
+            await websocket.send_json(hub.hello())
+            next_status = loop.time()  # the first status goes out right away
             while True:
-                await asyncio.sleep(2.0)
-                svc = _service()
-                cat = await run_in_threadpool(svc.catalog)
-                await websocket.send_json(
-                    {
-                        "type": "status_update",
-                        "data": {"n_sessions": len(cat.sessions) if cat else 0},
-                    }
-                )
+                try:
+                    message = await asyncio.wait_for(
+                        queue.get(), timeout=max(0.0, next_status - loop.time())
+                    )
+                except TimeoutError:
+                    message = None
+                if message is not None:
+                    await websocket.send_json(message)
+                if loop.time() >= next_status:
+                    svc = _service()
+                    cat = await run_in_threadpool(svc.catalog)
+                    await websocket.send_json(
+                        {
+                            "type": "status_update",
+                            "data": {"n_sessions": len(cat.sessions) if cat else 0},
+                        }
+                    )
+                    next_status = loop.time() + 2.0
         except WebSocketDisconnect:
+            pass
+        finally:
             connected_clients_local.discard(websocket)
+            await hub.detach(queue)
+
+    @application.get("/live", include_in_schema=False)
+    async def live_page() -> Any:
+        """The viewer. Public on purpose: it carries no data; /ws/live is what is authenticated."""
+        return HTMLResponse(_LIVE_PAGE.read_text(encoding="utf-8"))
 
 
 def create_app() -> Any:
