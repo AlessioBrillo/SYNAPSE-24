@@ -9,7 +9,6 @@ pre-fill ring ordering that previously made them emit nothing.
 from __future__ import annotations
 
 import ctypes
-from pathlib import Path
 
 import numpy as np
 import pytest

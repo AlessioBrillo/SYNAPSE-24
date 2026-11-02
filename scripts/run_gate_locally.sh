@@ -20,6 +20,7 @@ step uv run python -m ruff check .
 step uv run python -m ruff format --check .
 step uv run python -m mypy --package synapse24 --config-file pyproject.toml
 step uv run python -m mypy sdk/python/synapse_device --config-file pyproject.toml
+step uv run python -m mypy --explicit-package-bases worker backend --config-file pyproject.toml
 step uv run python tools/check_contract.py --verbose
 step uv run python tools/generate_contracts.py --check
 step uv run python tools/check_interfaces.py

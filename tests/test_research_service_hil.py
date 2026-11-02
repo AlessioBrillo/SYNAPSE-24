@@ -28,7 +28,6 @@ from synapse24.hardware.raw_codec import (
     max_samples,
 )
 from synapse24.hardware.research_client import (
-    TS_WRAP_US,
     ResearchStreamDecoder,
     validate_notification_size,
 )

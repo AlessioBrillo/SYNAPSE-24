@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import signal
 import sys
 import threading
 import time
@@ -45,9 +44,7 @@ from synapse24.signal_quality import (
     QualityThresholds,
     Tier,
     compute_ecg_quality,
-    compute_hrv_metrics,
     compute_ppg_quality,
-    rmssd_mae,
 )
 from synapse24.utils import validate_xdf, write_xdf
 

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import struct
 import sys
 from pathlib import Path

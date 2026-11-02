@@ -7,8 +7,6 @@ app wiring is checked separately (importorskip fastapi).
 from __future__ import annotations
 
 import hashlib
-import json
-import struct
 import sys
 from pathlib import Path
 from typing import Any

@@ -174,7 +174,7 @@ class SyntheticSource:
             - 220 * np.exp(-((phase - 0.315) ** 2) / 0.00015)
             + 260 * np.exp(-((phase - 0.55) ** 2) / 0.006)
         )
-        return wave
+        return np.asarray(wave, dtype=np.float64)
 
     def _samples(self, stream: int, t0_s: float, n: int, rate_hz: int) -> np.ndarray:
         t = t0_s + np.arange(n) / rate_hz

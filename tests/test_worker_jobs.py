@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 # Ensure the repo src is importable (worker/hrv_worker.py does the same).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))

@@ -10,14 +10,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import numpy as np
 import pytest
 
 from synapse24.sessions.catalog import index_fit
 
 fitdecode = pytest.importorskip("fitdecode", reason="fitdecode is a dev dependency")
 from synapse_device.fit import FitRecord, FitWriter, fit_timestamp
-from synapse_device.xdf_writer import write_xdf
 
 
 def _write_fit_with_records(path, n_records: int = 3, serial: int = 12345):

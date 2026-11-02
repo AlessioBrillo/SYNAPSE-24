@@ -73,7 +73,7 @@ class EdgeImpulseTrainer:
     def _train_edge_impulse(self) -> EdgeModel:
         """Train using Edge Impulse Python SDK."""
         try:
-            from edgeimpulse import API, Project
+            from edgeimpulse import API, Project  # noqa: F401 - availability probe
         except ImportError:
             print("Edge Impulse SDK not installed, falling back to local training")
             return self._train_local()
