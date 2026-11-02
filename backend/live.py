@@ -96,6 +96,10 @@ class FrameDecoder:
         self.losses = LossTracker()
         self.frames = 0
 
+    def reset(self) -> None:
+        """Forget the expected sequences: a restarted source begins again at 0."""
+        self.losses = LossTracker()
+
     def decode(self, data: bytes) -> list[dict[str, Any]]:
         header, values = decode_frame(data)
         stream = int(header.stream)
@@ -104,8 +108,13 @@ class FrameDecoder:
             return []  # a stream the contract does not describe (TEMP, SYNC): nothing to plot
         self.frames += 1
         channels = int(meta["channels"])
-        usable = (values.size // channels) * channels
-        samples = values[:usable].reshape(-1, channels).astype(np.float64)
+        if values.size % channels:
+            # A parseable header over a payload that is not whole samples: report it, do not
+            # plot a plausible but shorter signal.
+            raise ValueError(
+                f"{values.size} values do not fit {channels} channel(s) of {meta['name']}"
+            )
+        samples = values.reshape(-1, channels).astype(np.float64)
         lows, highs = minmax_envelope(samples, ENVELOPE_BUCKETS)
         out: list[dict[str, Any]] = [
             {
@@ -236,8 +245,15 @@ class TransportSource:
         await transport.connect(self._address)
         try:
             await transport.request_mtu(247)
+            subscribed = 0
             for uuid in (CHAR_ECG, CHAR_PPG, CHAR_ACC, CHAR_GYRO, CHAR_MAG):
-                await transport.subscribe(uuid, lambda _uuid, data: on_frame(bytes(data)))
+                try:
+                    await transport.subscribe(uuid, lambda _uuid, data: on_frame(bytes(data)))
+                    subscribed += 1
+                except Exception:  # noqa: BLE001 - one missing characteristic must not end the feed
+                    logger.warning("cannot subscribe to %s: that stream will be missing", uuid)
+            if subscribed == 0:
+                raise RuntimeError("the device exposes none of the raw streams")
             await asyncio.Event().wait()  # until cancelled
         finally:
             await transport.disconnect()
@@ -263,10 +279,13 @@ class LiveHub:
         self.decoder = FrameDecoder()
         self._clients: set[asyncio.Queue[dict[str, Any]]] = set()
         self._task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._lock = asyncio.Lock()
+        self.last_error: str | None = None
         self.overflowed = 0
 
     def hello(self) -> dict[str, Any]:
-        return {
+        message: dict[str, Any] = {
             "type": "hello",
             "source": self.source.name if self.source else "off",
             "demo": bool(self.source and self.source.demo),
@@ -281,6 +300,9 @@ class LiveHub:
                 if m["name"] != "power"
             ],
         }
+        if self.last_error:
+            message["error"] = self.last_error  # a late client must see why there is no feed
+        return message
 
     def _publish(self, message: dict[str, Any]) -> None:
         for queue in self._clients:
@@ -299,22 +321,38 @@ class LiveHub:
         except ValueError as exc:  # RawCodecError: a corrupt frame is reported, never plotted
             self._publish({"type": "error", "error": f"undecodable frame: {exc}"})
 
+    def _bind_to_running_loop(self) -> None:
+        """Drop state that belongs to another event loop (a restarted server, a test client)."""
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._loop = loop
+            self._clients = set()
+            self._task = None
+            self._lock = asyncio.Lock()
+
     async def attach(self) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
-        self._clients.add(queue)
-        if self.source is not None and self._task is None:
-            self._task = asyncio.create_task(self._run())
-        return queue
+        self._bind_to_running_loop()
+        async with self._lock:  # attach and detach never interleave around the source task
+            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+            self._clients.add(queue)
+            # A source that died is restarted by the next client, not left as a finished task.
+            if self.source is not None and (self._task is None or self._task.done()):
+                self.last_error = None
+                self.decoder.reset()
+                self._task = asyncio.create_task(self._run())
+            return queue
 
     async def detach(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
-        self._clients.discard(queue)
-        if not self._clients and self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        self._bind_to_running_loop()
+        async with self._lock:
+            self._clients.discard(queue)
+            if not self._clients and self._task is not None:
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+                self._task = None
 
     async def _run(self) -> None:
         assert self.source is not None
@@ -324,4 +362,5 @@ class LiveHub:
             raise
         except Exception as exc:  # noqa: BLE001 - the source is the outside world
             logger.exception("live source %s stopped", self.source.name)
-            self._publish({"type": "error", "error": f"live source stopped: {exc}"})
+            self.last_error = f"live source stopped: {exc}"
+            self._publish({"type": "error", "error": self.last_error})

@@ -373,62 +373,88 @@ def _register_data_plane_endpoints(application: Any) -> None:
         )
 
 
+def _authorize_websocket(websocket: WebSocket) -> tuple[bool, str | None]:
+    """Return ``(allowed, subprotocol to echo)`` for a connecting client.
+
+    A browser cannot set an Authorization header on a WebSocket and a query string ends up in
+    every proxy's access log, so the browser-safe channel is the subprotocol list:
+    ``new WebSocket(url, ["bearer", token])``.
+    """
+    expected = _api_token()
+    if not expected:
+        return True, None
+    provided = _bearer_token(websocket.headers.get("authorization", ""))
+    subprotocol: str | None = None
+    if not provided:
+        offered = [
+            p.strip() for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        ]
+        if "bearer" in offered[:-1]:
+            # ["bearer", token] anywhere in the list: other protocols may be offered too.
+            provided, subprotocol = offered[offered.index("bearer") + 1], "bearer"
+    allowed = bool(provided) and hmac.compare_digest(provided.encode(), expected.encode())
+    return allowed, subprotocol
+
+
+async def _serve_live(
+    websocket: WebSocket, hub: LiveHub, queue: asyncio.Queue[dict[str, Any]]
+) -> None:
+    """Feed, status and disconnect detection as three tasks; the first to end ends them all."""
+    send_lock = asyncio.Lock()  # one message at a time on the socket
+
+    async def send(message: dict[str, Any]) -> None:
+        async with send_lock:
+            await websocket.send_json(message)
+
+    async def pump() -> None:
+        """The live feed, as fast as the client takes it."""
+        while True:
+            await send(await queue.get())
+
+    async def status() -> None:
+        """The catalog status on its own cadence: a slow scan never stalls the feed."""
+        while True:
+            cat = await run_in_threadpool(_service().catalog)
+            await send(
+                {"type": "status_update", "data": {"n_sessions": len(cat.sessions) if cat else 0}}
+            )
+            await asyncio.sleep(2.0)
+
+    async def watch() -> None:
+        """Nothing is expected from the client: reading is how a close is noticed at once."""
+        while True:
+            await websocket.receive_text()
+
+    tasks: list[asyncio.Task[None]] = []
+    try:
+        await send(hub.hello())
+        tasks = [asyncio.create_task(job()) for job in (pump, status, watch)]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        for outcome in outcomes:
+            # A close of the socket ends the tasks normally; anything else is worth a line.
+            if isinstance(outcome, Exception) and not isinstance(
+                outcome, (WebSocketDisconnect, RuntimeError)
+            ):
+                logger.warning("live socket task failed: %r", outcome)
+        await hub.detach(queue)
+
+
 def _register_websocket(application: Any) -> None:
-    """Register the WebSocket live endpoint."""
-    connected_clients_local: set[WebSocket] = set()
+    """Register the WebSocket live endpoint and the viewer page."""
 
     @application.websocket("/ws/live")
     async def websocket_live(websocket: WebSocket) -> None:
-        expected = _api_token()
-        subprotocol: str | None = None
-        if expected:
-            # A browser cannot set an Authorization header on a WebSocket, and a query string
-            # ends up in every proxy's access log. The browser-safe channel is the
-            # subprotocol list: new WebSocket(url, ["bearer", token]).
-            provided = _bearer_token(websocket.headers.get("authorization", ""))
-            if not provided:
-                offered = [
-                    p.strip()
-                    for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
-                ]
-                if "bearer" in offered[:-1]:
-                    # ["bearer", token] anywhere in the list: other protocols may be offered too.
-                    provided, subprotocol = offered[offered.index("bearer") + 1], "bearer"
-            if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
-                await websocket.close(code=1008, reason="unauthorized")
-                return
+        allowed, subprotocol = _authorize_websocket(websocket)
+        if not allowed:
+            await websocket.close(code=1008, reason="unauthorized")
+            return
         await websocket.accept(subprotocol=subprotocol)
-        connected_clients_local.add(websocket)
         hub = _live_hub()
-        queue = await hub.attach()
-        loop = asyncio.get_running_loop()
-        try:
-            await websocket.send_json(hub.hello())
-            next_status = loop.time()  # the first status goes out right away
-            while True:
-                try:
-                    message = await asyncio.wait_for(
-                        queue.get(), timeout=max(0.0, next_status - loop.time())
-                    )
-                except TimeoutError:
-                    message = None
-                if message is not None:
-                    await websocket.send_json(message)
-                if loop.time() >= next_status:
-                    svc = _service()
-                    cat = await run_in_threadpool(svc.catalog)
-                    await websocket.send_json(
-                        {
-                            "type": "status_update",
-                            "data": {"n_sessions": len(cat.sessions) if cat else 0},
-                        }
-                    )
-                    next_status = loop.time() + 2.0
-        except WebSocketDisconnect:
-            pass
-        finally:
-            connected_clients_local.discard(websocket)
-            await hub.detach(queue)
+        await _serve_live(websocket, hub, await hub.attach())
 
     @application.get("/live", include_in_schema=False)
     async def live_page() -> Any:

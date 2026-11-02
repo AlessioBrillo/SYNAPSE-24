@@ -141,12 +141,23 @@ function frameLoop() {
 }
 
 function connect(token) {
-  if (socket) socket.close();
+  if (socket) {
+    // The old socket's late close event must not overwrite the state of the new connection.
+    socket.onmessage = socket.onclose = null;
+    socket.close();
+    socket = null;
+  }
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   // A browser cannot set an Authorization header on a WebSocket: the token travels as the
   // second item of the subprotocol list (never in the URL, which proxies log).
-  socket = token ? new WebSocket(proto + "//" + location.host + "/ws/live", ["bearer", token])
-                 : new WebSocket(proto + "//" + location.host + "/ws/live");
+  try {
+    socket = token ? new WebSocket(proto + "//" + location.host + "/ws/live", ["bearer", token])
+                   : new WebSocket(proto + "//" + location.host + "/ws/live");
+  } catch (err) {
+    // A token with a space, comma or non-ASCII character cannot be a subprotocol.
+    setState("Cannot connect: the token contains characters a WebSocket subprotocol cannot carry.");
+    return;
+  }
   setState("Connecting…");
   lossCount = 0; frames = 0; startedAt = performance.now();
   $("loss-count").textContent = "0";
@@ -165,6 +176,7 @@ function connect(token) {
     } else if (msg.type === "frame") addFrame(msg);
     else if (msg.type === "loss") addLoss(msg);
     else if (msg.type === "error") setState("Error: " + msg.error);
+    if (msg.type === "hello" && msg.error) setState("Error: " + msg.error);
   };
   socket.onclose = (ev) => setState(ev.code === 1008 ? "Refused: wrong or missing token." : "Disconnected.");
 }

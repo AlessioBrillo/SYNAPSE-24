@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -342,3 +343,182 @@ def test_the_viewer_page_is_served_and_authenticates_through_the_subprotocol(
         "http://www.w3.org", ""
     )  # no external resource: works offline
     assert "https://" not in html
+
+
+# --- review follow-ups (PR #61) ---------------------------------------------------------------------------------------
+
+
+def test_a_client_attaching_while_the_last_one_detaches_still_gets_a_source() -> None:
+    async def go() -> tuple[bool, bool]:
+        hub = live.LiveHub(live.SyntheticSource(tick_s=0.005))
+        first = await hub.attach()
+        # the last client leaves at the same moment a new one arrives (a page reload)
+        _, second = await asyncio.gather(hub.detach(first), hub.attach())
+        running = hub._task is not None and not hub._task.done()
+        message = await asyncio.wait_for(second.get(), 5.0)
+        await hub.detach(second)
+        return running, message["type"] in {"frame", "loss"}
+
+    assert asyncio.run(go()) == (True, True)
+
+
+def test_a_source_that_died_is_restarted_by_the_next_client_and_the_error_is_not_lost() -> None:
+    class Flaky:
+        name = "flaky"
+        demo = False
+        starts = 0
+
+        async def run(self, on_frame):  # noqa: ANN001, ANN202
+            Flaky.starts += 1
+            if Flaky.starts == 1:
+                raise RuntimeError("adapter unplugged")
+            await asyncio.sleep(3600)
+
+    async def go() -> tuple[dict, dict, int]:
+        hub = live.LiveHub(Flaky())
+        first = await hub.attach()
+        await asyncio.wait_for(first.get(), 5.0)  # the error reaches the first client
+        # a client that arrives after the source died is told why there is no feed...
+        late_hello = hub.hello()
+        late = await hub.attach()  # ...and the attach restarts the source
+        await asyncio.sleep(0.05)  # let the new task take its first step
+        restarted_hello = hub.hello()
+        await hub.detach(first)
+        await hub.detach(late)
+        return late_hello, restarted_hello, Flaky.starts
+
+    late_hello, restarted_hello, starts = asyncio.run(go())
+    assert "adapter unplugged" in late_hello["error"]
+    assert "error" not in restarted_hello  # cleared by the restart
+    assert starts == 2
+
+
+def test_a_restarted_source_does_not_report_a_false_loss() -> None:
+    """The sequence restarts at 0 with the source: the tracker must forget the old one."""
+
+    class Counting:
+        name = "counting"
+        demo = False
+
+        async def run(self, on_frame):  # noqa: ANN001, ANN202
+            for seq in range(3):
+                on_frame(_frame(RawStream.ECG, seq, [1, 2]))
+            await asyncio.sleep(3600)
+
+    async def go() -> list[str]:
+        hub = live.LiveHub(Counting())
+        first = await hub.attach()
+        for _ in range(3):
+            await asyncio.wait_for(first.get(), 5.0)
+        await hub.detach(first)
+        second = await hub.attach()  # the source starts again at sequence 0
+        kinds = [(await asyncio.wait_for(second.get(), 5.0))["type"] for _ in range(3)]
+        await hub.detach(second)
+        return kinds
+
+    assert asyncio.run(go()) == ["frame", "frame", "frame"]
+
+
+def test_the_hub_survives_the_event_loop_it_started_in() -> None:
+    hub = live.LiveHub(live.SyntheticSource(tick_s=0.005))
+    first = asyncio.run(_collect(hub, 5))
+    second = asyncio.run(_collect(hub, 5))  # a new loop (a restarted server, another test client)
+    assert len(first) == len(second) == 5
+
+
+def test_a_payload_that_is_not_whole_samples_is_an_error_not_a_shorter_signal() -> None:
+    hub = live.LiveHub(None)
+
+    async def go() -> list[dict]:
+        queue = await hub.attach()
+        hub._on_frame(_frame(RawStream.ACC, 0, [1, 2, 3, 4]))  # 4 values, 3 channels
+        out = []
+        while not queue.empty():
+            out.append(queue.get_nowait())
+        await hub.detach(queue)
+        return out
+
+    messages = asyncio.run(go())
+    assert [m["type"] for m in messages] == ["error"]
+    assert "do not fit 3 channel" in messages[0]["error"]
+
+
+def test_a_band_missing_one_characteristic_still_streams_the_others() -> None:
+    from synapse_device.transport import CHAR_ECG, CHAR_MAG, SyntheticTransport, TransportError
+
+    class NoMag(SyntheticTransport):
+        async def subscribe(self, char_uuid, handler):  # noqa: ANN001, ANN202
+            if char_uuid == CHAR_MAG:
+                raise TransportError("characteristic not found")
+            await super().subscribe(char_uuid, handler)
+
+    transport = NoMag()
+
+    async def go() -> list[dict]:
+        hub = live.LiveHub(live.TransportSource("SYNTH", transport=transport))
+        queue = await hub.attach()
+        try:
+            for _ in range(100):
+                if CHAR_ECG in transport._subscribed:
+                    break
+                await asyncio.sleep(0.01)
+            await transport.start([CHAR_ECG], rate_hz=200, duration_s=0.1)
+            out = [await asyncio.wait_for(queue.get(), 5.0) for _ in range(2)]
+            await transport.stop()
+            return out
+        finally:
+            await hub.detach(queue)
+
+    assert {m["stream"] for m in asyncio.run(go())} == {"ecg"}
+
+
+def test_a_device_with_none_of_the_streams_is_an_error() -> None:
+    from synapse_device.transport import SyntheticTransport, TransportError
+
+    class Empty(SyntheticTransport):
+        async def subscribe(self, char_uuid, handler):  # noqa: ANN001, ANN202
+            raise TransportError("characteristic not found")
+
+    hub = live.LiveHub(live.TransportSource("SYNTH", transport=Empty()))
+    messages = asyncio.run(_collect(hub, 1))
+    assert messages[0]["type"] == "error"
+    assert "none of the raw streams" in messages[0]["error"]
+
+
+@pytestmark_fastapi
+def test_a_client_that_leaves_stops_the_source_at_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNAPSE_LIVE_SOURCE", "synthetic")
+    with client.websocket_connect("/ws/live") as ws:
+        ws.receive_json()  # hello
+        hub = main_module._live_hub()
+        assert hub._task is not None
+        assert not hub._task.done()
+    # the socket is closed: the disconnect is noticed by reading, not by a failed send
+    for _ in range(100):  # the handler's cleanup runs on the server loop
+        if hub._task is None:
+            break
+        time.sleep(0.02)
+    assert hub._clients == set()
+    assert hub._task is None
+
+
+@pytestmark_fastapi
+def test_a_late_client_is_told_why_the_source_is_down(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNAPSE_LIVE_SOURCE", "synthetic")
+    main_module._live_hub().last_error = "live source stopped: adapter unplugged"
+    main_module._live_hub().source = None  # nothing restarts it: the hello carries the reason
+    with client.websocket_connect("/ws/live") as ws:
+        assert "adapter unplugged" in ws.receive_json()["error"]
+
+
+def test_the_viewer_detaches_the_old_socket_and_survives_a_bad_token() -> None:
+    html = (ROOT / "backend" / "static" / "live.html").read_text(encoding="utf-8")
+    assert "socket.onmessage = socket.onclose = null" in html  # a late close of the old socket
+    constructor = html[html.index("try {") : html.index('setState("Connecting')]
+    assert (
+        "catch (err)" in constructor
+    )  # the constructor throws on a token that is not a subprotocol
