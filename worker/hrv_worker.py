@@ -77,8 +77,8 @@ _WORKER_SCHEMA_PATH = (
 def _load_worker_schema() -> dict | None:
     if not _WORKER_SCHEMA_PATH.is_file():
         return None
-    schema: dict | None = json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
-    return schema
+    schema = json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return schema if isinstance(schema, dict) else None
 
 
 def _validate_payload(computation_type: JobType, payload: dict | None) -> list[str]:

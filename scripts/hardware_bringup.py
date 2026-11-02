@@ -46,7 +46,6 @@ try:
     from bleak import BleakClient, BleakScanner
     from bleak.backends.characteristic import BleakGATTCharacteristic
     from bleak.backends.device import BLEDevice
-    from bleak.backends.scanner import AdvertisementData  # noqa: F401 - availability probe
 except ImportError:
     BleakClient = None
     BleakScanner = None
