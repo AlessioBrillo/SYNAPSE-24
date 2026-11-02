@@ -18,7 +18,7 @@ esp32_band/
 ├── power/          Battery ADC, tier affordability, 24h budget
 ├── ble/            NimBLE GATT: HR/Battery/DIS + Synapse custom service
 ├── fit/            FIT writer (SPIFFS, profile 21.138, dev fields)
-├── provisioning/   BLE provisioning (WiFi + cloud + mTLS CSR flow — stub)
+├── provisioning/   BLE provisioning (mTLS CSR flow only — stub; no Wi-Fi/cloud path)
 ├── ota/            Signed OTA with rollback — stub
 └── main/           app_main entry, event group, main loop
 ```

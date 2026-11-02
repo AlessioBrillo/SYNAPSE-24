@@ -1,5 +1,5 @@
 # Synapse Band v1 - ESP32-S3 SDK Configuration
-# Based on esp32_forearm/esp32_tier0 with Band-specific adjustments
+# Band-specific settings (the former forearm/tier0 projects are removed; see git history)
 
 # Flash: DevKitC-1 N8R8 (WROOM-1-N8R8, 8 MB Quad flash + 8 MB Octal PSRAM).
 # See docs/hardware/PROCUREMENT.md G1 — the smoke kit board is N8R8.

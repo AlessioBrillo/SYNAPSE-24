@@ -2,7 +2,7 @@
  * @file synapse_power.c
  * @brief Power Management Implementation
  * 
- * Wraps firmware/common/power_monitor with Band v1 specifics
+ * Band v1 power monitor (INA219 + battery ADC)
  */
 
 #include <string.h>

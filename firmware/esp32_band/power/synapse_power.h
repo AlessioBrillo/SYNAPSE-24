@@ -3,7 +3,7 @@
  * @brief Synapse Band v1 - Power Management
  * 
  * Battery monitoring, tier affordability, 24h target enforcement.
- * Wraps firmware/common/power_monitor.
+ * Band v1 power monitor.
  */
 
 #ifndef SYNAPSE_POWER_H

@@ -11,12 +11,9 @@ on:
       - 'firmware/**'
 
 env:
-  # NOTE: this legacy workflow stays on v5.2.1: the archived archive-only
-  # variants (esp32_head, esp32_forearm) are proven green there and are NOT
-  # part of the canonical pin. The canonical band firmware is pinned to
-  # v5.5.5 in ci.yml and docs/hardware/ESP-IDF_SETUP.md; esp32_band here
-  # must compile on both toolchains (it does — the triage fixes in the
-  # G0-closing commit are version-independent).
+  # NOTE: this workflow stays on v5.2.1. The canonical band firmware is
+  # pinned to v5.5.5 in ci.yml and docs/hardware/ESP-IDF_SETUP.md;
+  # esp32_band here must compile on both toolchains.
   ESP_IDF_VERSION: v5.2.1
   TARGET: esp32s3
 
@@ -26,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        variant: [esp32_head, esp32_forearm, esp32_band]
+        variant: [esp32_band]
       fail-fast: false
     timeout-minutes: 45
     steps:
@@ -131,7 +128,7 @@ jobs:
     if: github.event_name == 'pull_request'
     strategy:
       matrix:
-        variant: [esp32_head, esp32_forearm, esp32_band]
+        variant: [esp32_band]
       fail-fast: false
     steps:
       - name: Checkout repository
@@ -173,8 +170,6 @@ jobs:
         run: |
           # Verify key firmware docs exist
           required_files=(
-            "firmware/esp32_head/README.md"
-            "firmware/esp32_forearm/README.md"
             "firmware/esp32_band/README.md"
           )
           for f in "${required_files[@]}"; do
