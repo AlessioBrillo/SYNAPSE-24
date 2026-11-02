@@ -160,7 +160,7 @@ Add a **DIY few-channel EEG experiment** with gold cup electrodes into an ESP32/
 
 ### 5. Sequencing and milestones (solo, realistic)
 
-- **Phase 0 — Foundations (Weeks 1–4, ~€0):** literature/reference-design review, communities, software stack, first dataset pipelines running. *Milestone: reproduce a published ECG-HRV and an EEG sleep-staging result on public data.* ✅ **COMPLETE**
+- **Phase 0 — Foundations (Weeks 1–4, ~€0):** literature/reference-design review, communities, software stack, first dataset pipelines running. *Milestone: reproduce a published ECG-HRV and an EEG sleep-staging result on public data.* ⏳ **OPEN** (see the Phase 0 Status above: the artifact's `claim_level` decides, not this line)
 - **Phase 1 — Software mastery + first cheap hardware (Months 2–5, ~€90–120):** WESAD fusion model; edge-AI deployment loop; first live ECG (AD8232), PPG (MAX30102), IMU (MPU-9250/ICM-20948) into ESP32 → PC via LSL. *Milestone: live ECG+PPG+IMU streaming, synchronized in LSL, with real-time HR/HRV.* 🔄 **READY TO START**
 - **Phase 2 — Real EEG + synchronized multimodal (Months 5–12, +€300–500):** add PiEEG/Cerelog/Ganglion EEG; consider EmotiBit as reference and Muse S for Tier-0 continuous sleep EEG; get all modalities co-recording in XDF. *Milestone: a night of synchronized multimodal sleep data (EEG + PPG + IMU + temp) you can analyze end-to-end.* ⏳ Planned
 - **Phase 3 — Edge-AI fusion + fNIRS (Months 12–24+, +€300–700):** port fusion/personalization models to the ESP32 pods + Pi hub; attempt a DIY-fNIRS or OpenNIRScap channel for Tier-1 sessions; iterate on dry-electrode signal quality and 24/7 wearability. *Milestone: an on-device edge-AI pattern-recognition demo running on your own multimodal stream.* ⏳ Planned

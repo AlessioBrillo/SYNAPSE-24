@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(ROOT / "tools"))
@@ -134,6 +136,38 @@ def test_partial_with_assertive_doc_fails(tmp_path: Path, capsys) -> None:
         "results-table row claims PASS",
     ):
         assert needle in out, f"missing from the report: {needle!r}\n{out}"
+
+
+def test_a_phase_list_line_claiming_phase_0_complete_is_caught(tmp_path: Path, capsys) -> None:
+    """The roadmap's phase list said COMPLETE while the artifact said partial; no pattern saw it."""
+    doc = _write(
+        tmp_path,
+        "Roadmap.md",
+        "- **Phase 0 \u2014 Foundations (Weeks 1\u20134):** reproduce a result. \u2705 **COMPLETE**\n",
+    )
+    assert _check(tmp_path, _artifact(tmp_path), doc) == 1
+    assert "the Phase 0 line of the roadmap claims it is COMPLETE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("dash", ["-", "\u2013", "\u2014"])
+def test_the_phase_0_claim_is_caught_whatever_the_dash(tmp_path: Path, dash: str) -> None:
+    doc = _write(
+        tmp_path, "Roadmap.md", f"- **Phase 0 {dash} Foundations:** x. \u2705 **COMPLETE**\n"
+    )
+    assert _check(tmp_path, _artifact(tmp_path), doc) == 1
+
+
+def test_a_line_that_only_quotes_the_word_is_not_a_claim(tmp_path: Path) -> None:
+    doc = _write(
+        tmp_path,
+        "Roadmap.md",
+        "- **Phase 0 \u2014 Foundations:** x. \u23f3 **OPEN** until the baseline run (COMPLETE only then)\n",
+    )
+    assert _check(tmp_path, _artifact(tmp_path), doc) == 0
+
+
+def test_the_committed_roadmap_does_not_claim_phase_0_complete() -> None:
+    assert cbc.main(argv=[]) == 0
 
 
 def test_partial_with_target_doc_passes(tmp_path: Path, capsys) -> None:
