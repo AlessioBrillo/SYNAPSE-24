@@ -1,6 +1,6 @@
 # Increment: MVP-1.3 — First light e contratto consumer v2
 
-**PR:** #55–#64 (tutte unite su `master`) · **Periodo:** 2026-10-29 → 2026-11-02 · **Scope:** firmware della band, SDK, worker, backend, contratti e documentazione di cablaggio (nessun acquisto hardware) · **Stato:** chiuso come **"pronto per l'hardware", non "verificato"**.
+**PR:** #55–#65 (#55–#64 unite su `master`; #65 è questo documento) · **Periodo:** 2026-10-29 → 2026-11-02 · **Scope:** firmware della band, SDK, worker, backend, contratti e documentazione di cablaggio (nessun acquisto hardware) · **Stato:** chiuso come **"pronto per l'hardware", non "verificato"**.
 
 > **Rinumerazione.** `MVP1_2_DEVICE_PATH.md` assegnava a MVP-1.3 il provisioning GATT. Questo incremento ha preso il numero perché l'audit ha mostrato che il firmware non poteva ancora avviarsi: il provisioning (solo CSR) slitta a **MVP-1.4**, insieme al FIT on-device.
 
@@ -24,6 +24,7 @@ La misura di successo era verificabile solo a metà: ogni difetto trovato ha un 
 | #62 | mypy anche su `worker/` e `backend/`, import inutilizzati di nuovo segnalati, guardie perché non si spengano. |
 | #63 | Documenti di cablaggio allineati alla mappa dei pin del firmware (27/34/36 erano flash/PSRAM); `READINESS_GATE` e `POWER_BUDGET` dicono ciò che non è misurato. |
 | #64 | `AVERYN_INTERFACE.md` riscritto secondo il codice e gli ADR di Averyn; README e roadmap corretti; il tripwire della baseline intercetta la riga della roadmap che prima sfuggiva. |
+| #65 | Questo documento di chiusura, la nota di rinumerazione e il metodo di gate in `AGENTS.md`. |
 
 ## Decisioni prese
 
@@ -35,7 +36,7 @@ La misura di successo era verificabile solo a metà: ogni difetto trovato ha un 
 
 ## Verifica: che cosa è stato eseguito e che cosa no
 
-**Eseguito** (gate locale su host, `scripts/run_gate_locally.sh` nei suoi passi, a blocchi; ultimo risultato sull'incremento): ruff, mypy (`synapse24`, SDK, `worker`, `backend`), `check_contract`, `generate_contracts --check`, `check_interfaces`, `check_baseline_claim`, dry-run Phase 1; suite principale con coverage **84,38%** (soglia 80); suite SDK **88,67%**; probe gcc nel container del gate; test C compilati su host (nativamente quando Windows lo consente, altrimenti nel container Linux).
+**Eseguito** (gate locale su host, `scripts/run_gate_locally.sh` nei suoi passi, a blocchi, **su ogni PR prima dell'unione**; i risultati sono nei commenti delle singole PR e non in un artefatto del repository, e si invalidano al commit successivo; gli ultimi, alla chiusura): ruff, mypy (`synapse24`, SDK, `worker`, `backend`), `check_contract`, `generate_contracts --check`, `check_interfaces`, `check_baseline_claim`, dry-run Phase 1; suite principale con coverage **84,38%** (soglia 80); suite SDK **88,67%**; probe gcc nel container del gate; test C compilati su host (nativamente quando Windows lo consente, altrimenti nel container Linux).
 
 **NON eseguito, e non va dato per fatto:**
 
@@ -53,15 +54,15 @@ La run unica viene fermata per memoria bassa. Si esegue a pezzi: passi leggeri u
 
 - `contracts/fit_developer_fields.json`, campo `synapse_sleep_stage`: cambia il **significato** dei valori 1–4 (ora N1/N2/N3/REM, 255 = non disponibile); gli id restano immutati. Nessun consumatore noto leggeva il campo.
 - `window_start` nei payload dei job è sempre in secondi Unix.
-- Il frame feature v1 è di 23 byte (documentazione e ADR-0026 di Averyn dicono 26).
-- Il campo RR di `0x2A37` è in 1/1024 s: **il parser di Averyn lo legge ancora come millisecondi** (vedi sotto).
+- Il frame feature v1 è di 23 byte. Il parser e i golden vector di Averyn usano già 23: sbagliate erano solo le *descrizioni* (yaml, commenti, ADR-0026 dicono 26), corrette qui per la parte di questo repository. Il v1 non è quindi rotto per Averyn.
+- Il campo RR di `0x2A37` è in 1/1024 s: **il parser di Averyn lo legge ancora come millisecondi** (vedi sotto), cioè un RR del 2,4 % troppo alto. Oggi non ha effetto, perché il firmware manda sempre RR assente (`0xFFFF`); lo avrà non appena l'RR verrà collegato.
 - API: gli endpoint di sessione rispondono 404 (non 200 con un corpo d'errore), `current_tier` è `null`, `sessions_dir` non c'è più, `/ws/live` inizia con `hello`, i percorsi sono relativi, `/api/live` e `/api/control/*` rispondono 501.
 - `SYNAPSE_PPG_SAMPLE_RATE` è ora il codice SPO2_SR del datasheet (`0x00` = 50 Hz); i pin di default sono cambiati (lead-off 15, wired sync 10).
 
 ## Debito dichiarato (non fatto)
 
 - **Cross-repo Averyn (repo non toccato, serve un via libera esplicito):** parser RR in `HeartRateFrameParser.kt` (ms → 1/1024 s), ADR-0026 (26 → 23 B), re-pin a `gatt_v2.json`, scope di consenso `signal_quality` / `stress_monitoring`.
-- **Firmware:** SQI del PPG (rimozione DC, finestra sul ring, lock), qualità ECG ancora fissa a 0,8, motion gate per finestre, contatori di perdita per motivo, temperatura reale, ISR del wired sync (conta solo nel ruolo POD), nome di advertising unico per unità, parametri di connessione / PHY / DLE, pairing, tier e hash di build nello Status, flag `lead_off` e `clock_wrapped` riservati.
+- **Firmware:** SQI del PPG (produce un valore, difetto precedente corretto, ma senza rimozione della DC, con la finestra non allineata al ring e senza lock: il valore è indicativo), qualità ECG ancora fissa a 0,8, motion gate per finestre, contatori di perdita per motivo, temperatura reale, ISR del wired sync (conta solo nel ruolo POD), nome di advertising unico per unità, parametri di connessione / PHY / DLE, pairing, tier e hash di build nello Status, flag `lead_off` e `clock_wrapped` riservati.
 - **Edge AI** spenta per default: l'interprete è costruito dentro la propria arena e corromperebbe la memoria; i sorgenti restano compilati.
 - **Sequenza su notify rifiutato:** l'audit la dava per gap fantasma, ma i test esistenti la dichiarano scelta di progetto; da decidere.
 - **Software:** il report non include i risultati dei job; catalogo (id di sessione stabile da sha256, `started_at` degli XDF, walker FIT, ancoraggio di t0 nell'export, unità dai `channel_units`); `esp32_tier0.py` ancora presente (va prima spostata `forearm_hub_normative_rates`); ~40 variabili inutilizzate (F841) negli script di bring-up hardware; il rilevatore PPG non ha rigetto degli artefatti.
