@@ -18,9 +18,7 @@ import numpy as np  # noqa: E402
 
 from synapse24.report import build_session_report, report_quality_note  # noqa: E402
 from synapse24.sessions import (  # noqa: E402
-    SessionCatalog,
     SessionRecord,
-    StreamInfo,
     index_directory,
     load_catalog,
     save_catalog,

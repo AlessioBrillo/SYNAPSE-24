@@ -27,6 +27,7 @@ steps:
       - uv run ruff format --check .
       - uv run mypy --package synapse24 --config-file pyproject.toml
       - uv run mypy sdk/python/synapse_device --config-file pyproject.toml
+      - uv run mypy --explicit-package-bases worker backend --config-file pyproject.toml
       - uv run python tools/check_contract.py --verbose
       # The generated contract artifacts (UUIDs, stream ids, rates) must be in
       # sync with config/hardware.yaml: a stale artifact is a silent drift.

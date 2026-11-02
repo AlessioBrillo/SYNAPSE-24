@@ -14,7 +14,7 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   gate, not a replacement for the server run.
 - **Server:** push the branch; the check is `ci/woodpecker/push/ci` (`gh pr checks <n> --watch`).
 - **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band.
-- **Gate steps (2026-10-20):** ruff check/format, mypy (`synapse24`), `check_contract`,
+- **Gate steps (2026-10-20):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
   `check_interfaces` (FIT developer fields, GATT UUIDs, worker payloads), `check_baseline_claim`,
   phase1 dry-run, the SDK suite (`sdk/python/tests`), the format conformance
   (`tests/test_format_conformance.py`: `fitdecode` reads the FIT files, `pyxdf` the XDF ones),

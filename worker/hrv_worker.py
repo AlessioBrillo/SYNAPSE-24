@@ -26,11 +26,12 @@ import argparse
 import hashlib
 import json
 import logging
-import struct
 import sys
-from datetime import UTC, datetime, timezone
+from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -46,20 +47,12 @@ from synapse24.utils.windows import window_bounds
 # Allow running both as `python worker/hrv_worker.py` and as a module.
 try:
     from worker.job_contract import (  # package import
-        HRV_TRENDS_KEYS,
-        SLEEP_STAGING_KEYS,
-        SQI_REPORT_KEYS,
-        STRESS_DAILY_KEYS,
         Job,
         JobResult,
         JobType,
     )
 except ImportError:  # pragma: no cover - executed as a script inside worker/
-    from job_contract import (  # type: ignore[no-redef]
-        HRV_TRENDS_KEYS,
-        SLEEP_STAGING_KEYS,
-        SQI_REPORT_KEYS,
-        STRESS_DAILY_KEYS,
+    from job_contract import (  # type: ignore[no-redef,import-not-found]
         Job,
         JobResult,
         JobType,
@@ -84,7 +77,8 @@ _WORKER_SCHEMA_PATH = (
 def _load_worker_schema() -> dict | None:
     if not _WORKER_SCHEMA_PATH.is_file():
         return None
-    return json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema = json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return schema if isinstance(schema, dict) else None
 
 
 def _validate_payload(computation_type: JobType, payload: dict | None) -> list[str]:
@@ -285,7 +279,7 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     return out
 
 
-def _iter_xdf_streams(path: Path):
+def _iter_xdf_streams(path: Path) -> Iterator[tuple[dict[str, Any], Any, Any]]:
     """Yield (stream_info_dict, timestamps, series) for every XDF stream."""
     import numpy as np
     import pyxdf
@@ -538,7 +532,7 @@ def run_sqi_report(job: Job, file_path: Path) -> JobResult:
     timestamps = [w["window_start"] for w in windows if isinstance(w["window_start"], (int, float))]
     window_s = float(max(timestamps) - min(timestamps)) if len(timestamps) > 1 else 0.0
 
-    def _mean_int(values: list[int]) -> int | None:
+    def _mean_int(values: Sequence[float]) -> int | None:
         return int(round(sum(values) / len(values))) if values else None
 
     payload = {

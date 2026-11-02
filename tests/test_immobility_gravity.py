@@ -13,7 +13,6 @@ from __future__ import annotations
 import time
 
 import numpy as np
-import pytest
 
 from synapse24.acquisition.immobility import ImmobilityDetector
 

@@ -11,10 +11,9 @@ No hardware dependency; fully testable on synthetic fixtures.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
-from synapse24.sessions import SessionRecord, StreamInfo
+from synapse24.sessions import SessionRecord
 
 REPORT_VERSION = "session-report-v1"
 

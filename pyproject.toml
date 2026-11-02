@@ -151,7 +151,6 @@ ignore = [
     "SIM108",   # Ternary operator preference (explicit if-else for clarity)
     "PTH123",   # Path.open() vs open() (compatibility with older Python)
     "E402",     # Module import not at top (conditional imports for optional deps)
-    "F401",     # Unused import (re-exported in __all__)
     "E501",     # Line too long (docstrings, URLs, complex assertions)
     "SIM102",   # Nested if statements (explicit for readability)
     "TRY300",   # Consider else block (explicit returns)
@@ -168,6 +167,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Package __init__ files re-export on purpose (names listed in __all__).
+"**/__init__.py" = ["F401"]
 "tests/**/*.py" = ["PLC0415", "PLR2004", "NPY002"]
 "scripts/**/*.py" = ["PLC0415", "PLR2004"]
 
@@ -222,6 +223,7 @@ module = [
     "sklearn.*",
     "mne.*",
     "yasa.*",
+    "jsonschema.*",
 ]
 ignore_missing_imports = true
 disable_error_code = "syntax"

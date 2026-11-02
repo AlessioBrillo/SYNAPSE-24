@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -72,9 +73,7 @@ class EdgeImpulseTrainer:
 
     def _train_edge_impulse(self) -> EdgeModel:
         """Train using Edge Impulse Python SDK."""
-        try:
-            from edgeimpulse import API, Project
-        except ImportError:
+        if importlib.util.find_spec("edgeimpulse") is None:
             print("Edge Impulse SDK not installed, falling back to local training")
             return self._train_local()
 

@@ -70,8 +70,6 @@ def _idf_py_version() -> str | None:
         env_python = os.environ.get("IDF_PYTHON_ENV_PATH")
         idf_path = os.environ.get("IDF_PATH")
         if env_python and idf_path:
-            import sys as _sys
-
             python = Path(env_python) / "Scripts" / "python.exe"
             script = Path(idf_path) / "tools" / "idf.py"
             if python.is_file() and script.is_file():

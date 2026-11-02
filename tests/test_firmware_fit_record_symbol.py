@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 FIT_WRITER = ROOT / "firmware" / "esp32_band" / "fit" / "fit_writer.c"
 

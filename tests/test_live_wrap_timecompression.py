@@ -22,7 +22,6 @@ import pytest
 
 from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
 from synapse24.hardware.raw_codec import (
-    FRAME_VERSION,
     RawCodecError,
     RawFormat,
     RawStream,

@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pytest
-from synapse_device.fit import read_fit
 from synapse_device.xdf_writer import write_xdf
 
 fitdecode = pytest.importorskip("fitdecode", reason="fitdecode is a dev dependency")

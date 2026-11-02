@@ -7,7 +7,6 @@ and provides multi-stream LSL synchronization for SYNAPSE-24 tiered acquisition.
 from __future__ import annotations
 
 import json
-import struct
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +22,7 @@ from pylsl import StreamInfo, StreamOutlet, local_clock
 
 # The XDF chunk encoder is the SDK's (Apache-2.0 device layer): one
 # implementation of the format, shared by the host pipeline and the SDK CLI.
-from synapse_device.xdf_writer import write_varlen_int, write_xdf_chunk
+from synapse_device.xdf_writer import write_varlen_int
 from synapse_device.xdf_writer import write_xdf as _write_xdf_chunks
 
 # XDF 1.0 format constants

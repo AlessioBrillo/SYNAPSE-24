@@ -14,7 +14,6 @@ is a firmware metric nobody can trust.
 from __future__ import annotations
 
 import ctypes
-from pathlib import Path
 
 import numpy as np
 import pytest

@@ -23,7 +23,7 @@ import numpy as np
 from synapse_device.transport import Transport
 
 from synapse24.acquisition.pod_clock_model import ClockExchange, PodClockModel
-from synapse24.hardware.raw_codec import RawStream, decode_frame
+from synapse24.hardware.raw_codec import RawStream
 from synapse24.hardware.research_client import ResearchStreamDecoder
 
 __all__ = [

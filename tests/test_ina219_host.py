@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path
 
 import pytest
 
