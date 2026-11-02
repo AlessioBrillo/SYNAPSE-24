@@ -360,9 +360,14 @@ void sensor_task_fn(void* arg) {
 
         // A failed or empty read must not become a sample: the previous values
         // would be re-sent with a fresh timestamp (or zeros for a dead sensor).
-        if (config->read && config->read(&sample, config->user_ctx) != ESP_OK) {
-            scheduler->read_errors[config->type]++;
-            continue;
+        if (config->read) {
+            esp_err_t rd = config->read(&sample, config->user_ctx);
+            if (rd != ESP_OK) {
+                if (rd != ESP_ERR_NOT_FOUND) {  // NOT_FOUND = nothing new to report
+                    scheduler->read_errors[config->type]++;
+                }
+                continue;
+            }
         }
         sample.sequence = scheduler->sample_counts[config->type]++;
 

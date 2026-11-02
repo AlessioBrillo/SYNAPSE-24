@@ -66,7 +66,9 @@ typedef struct {
     volatile uint32_t rates_hz[SENSOR_SCHEDULER_MAX_SENSORS];
 } sensor_scheduler_t;
 
-// Returns ESP_OK only when `sample` holds a fresh reading; anything else is dropped and counted.
+// Returns ESP_OK only when `sample` holds a fresh reading; anything else is dropped.
+// ESP_ERR_NOT_FOUND means "no new sample yet" (empty FIFO, calibrating): dropped, not an error.
+// Any other code is counted in read_errors.
 typedef esp_err_t (*sensor_read_fn_t)(sensor_sample_t* sample, void* user_ctx);
 typedef void (*sensor_init_fn_t)(void* user_ctx);
 typedef void (*sensor_deinit_fn_t)(void* user_ctx);

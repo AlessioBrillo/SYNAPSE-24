@@ -26,12 +26,16 @@ static const char *TAG = "SYNAPSE_POWER";
 
 static synapse_power_status_t g_status = {0};
 static adc_oneshot_unit_handle_t g_adc_handle = NULL;
+static uint16_t battery_mv_unchecked(void);
 static adc_cali_handle_t g_cali_handle = NULL;
 static adc_channel_t g_bat_adc_channel = ADC_CHANNEL_3; // ADC1 CH3 = GPIO4 on ESP32-S3
 static float g_voltage_divider = 2.0f;
 static bool g_charging = false;
 static bool g_initialized = false;
 static synapse_power_telemetry_sink_t g_telemetry_sink = NULL;
+static synapse_power_battery_sink_t g_battery_sink = NULL;
+static int64_t g_last_tick_us = 0;      // 1 Hz gate of synapse_power_tick()
+static uint8_t g_last_notified_pct = 0xFF;
 
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
 static bool g_ina_present = false;
@@ -122,12 +126,15 @@ esp_err_t synapse_power_init(void) {
     g_status.can_afford_tier2 = true;
     g_status.charging = false;
     
-    // Initial voltage read
-    uint16_t mv = synapse_power_read_battery_mv();
+    // Initial voltage read (g_initialized is still false here: use the unchecked
+    // read, or the first reading is always 0 V)
+    uint16_t mv = battery_mv_unchecked();
     g_status.voltage_v = mv / 1000.0f;
     g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
     g_status.estimated_remaining_h = g_status.battery_remaining_mah / (hw_cfg.t0_avg_mw / 3.7f);
     
+    g_last_tick_us = 0;
+    g_last_notified_pct = 0xFF;
     g_initialized = true;
     ESP_LOGI(TAG, "Power management initialized (bat: %.2fV, %d%%, cap: %.0f mAh)",
              g_status.voltage_v, g_status.battery_level_pct, g_status.battery_capacity_mah);
@@ -136,15 +143,30 @@ esp_err_t synapse_power_init(void) {
 
 void synapse_power_tick(void) {
     if (!g_initialized) return;
+
+    // The main loop calls this every 10 ms, but the battery averaging (64 ADC
+    // reads), the INA219 read, the coulomb counter and the POWER stream are 1 Hz
+    // affairs: ungated, the stream ran at 100 Hz (~2.8 kB/s against a 64 B/s budget).
+    int64_t run_us = esp_timer_get_time();
+    if (g_last_tick_us != 0 && (run_us - g_last_tick_us) < 1000000) return;
+    g_last_tick_us = run_us;
     
     // Read battery voltage
-    uint16_t mv = synapse_power_read_battery_mv();
-    float voltage_v = mv / 1000.0f;
+    uint16_t mv = battery_mv_unchecked();
+    // mv == 0 means no divider / failed read: keep the last voltage rather than
+    // decaying to 0 V (which turns the tier-model current into inf).
+    if (mv > 0) {
+        float voltage_v = mv / 1000.0f;
+        if (g_status.voltage_v <= 0.0f) {
+            g_status.voltage_v = voltage_v;  // first valid reading seeds the filter
+        } else {
+            // Low-pass filter (1 Hz tick: ~10 s time constant, a fuel-gauge scale)
+            g_status.voltage_v = 0.9f * g_status.voltage_v + 0.1f * voltage_v;
+        }
+        g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
+    }
     
-    // Low-pass filter
-    g_status.voltage_v = 0.9f * g_status.voltage_v + 0.1f * voltage_v;
-    g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
-    
+    bool current_measured = false;
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
     // Measured current replaces the tier-model estimate (Architecture.md §55-62:
     // the budget is validated against what the pod actually draws, and the
@@ -154,6 +176,7 @@ void synapse_power_tick(void) {
         if (ina219_read_once(&meas) == ESP_OK) {
             g_status.voltage_v = meas.bus_voltage_v;
             g_status.current_ma = meas.current_a * 1000.0f;  // A -> mA
+            current_measured = true;
             g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
             if (g_telemetry_sink != NULL) {
                 g_telemetry_sink(g_status.voltage_v * 1000.0f, g_status.current_ma,
@@ -163,6 +186,15 @@ void synapse_power_tick(void) {
     }
 #endif
 
+    // Battery Service / feature frame: report a plausible single-cell LiPo reading
+    // when it changes. Outside 3.0-4.4 V the divider is not connected (USB-powered
+    // smoke kit): publish nothing instead of noise.
+    if (g_battery_sink != NULL && g_status.voltage_v >= 3.0f && g_status.voltage_v <= 4.4f &&
+        g_status.battery_level_pct != g_last_notified_pct) {
+        g_last_notified_pct = g_status.battery_level_pct;
+        g_battery_sink(g_status.battery_level_pct, g_status.charging);
+    }
+
     // Estimate current draw based on current tier
     synapse_hw_config_t hw_cfg;
     synapse_config_get(&hw_cfg);
@@ -170,7 +202,10 @@ void synapse_power_tick(void) {
     float current_mw = hw_cfg.t0_avg_mw;  // Default Tier 0
     // In a full implementation, would get current tier from acquisition FSM
     
-    g_status.current_ma = (current_mw / g_status.voltage_v);  // mA    
+    if (!current_measured) {
+        float model_v = g_status.voltage_v > 1.0f ? g_status.voltage_v : 3.7f;  // nominal cell if unmeasured
+        g_status.current_ma = (current_mw / model_v);  // mA, tier model
+    }    
     // Update remaining capacity (simple coulomb counting)
     static int64_t last_tick = 0;
     int64_t now = esp_timer_get_time();
@@ -222,6 +257,10 @@ void synapse_power_on_tier_change(int from_tier, int to_tier) {
     
     // Log tier change
     ESP_LOGI(TAG, "Tier change: %d -> %d", from_tier, to_tier);
+}
+
+void synapse_power_set_battery_sink(synapse_power_battery_sink_t sink) {
+    g_battery_sink = sink;
 }
 
 void synapse_power_set_telemetry_sink(synapse_power_telemetry_sink_t sink) {
@@ -281,8 +320,8 @@ void synapse_power_set_charging(bool charging) {
     ESP_LOGI(TAG, "Charging: %s", charging ? "YES" : "NO");
 }
 
-uint16_t synapse_power_read_battery_mv(void) {
-    if (!g_initialized || !g_adc_handle) return 0;
+static uint16_t battery_mv_unchecked(void) {
+    if (!g_adc_handle) return 0;
 
     int adc_raw = 0;
     const int samples = 64;
@@ -305,6 +344,10 @@ uint16_t synapse_power_read_battery_mv(void) {
     return (uint16_t)(voltage_mv * g_voltage_divider);
 }
 
+uint16_t synapse_power_read_battery_mv(void) {
+    return g_initialized ? battery_mv_unchecked() : 0;
+}
+
 esp_err_t synapse_power_deinit(void) {
     if (!g_initialized) return ESP_OK;
 
@@ -315,6 +358,7 @@ esp_err_t synapse_power_deinit(void) {
     g_adc_handle = NULL;  // borrowed from synapse_adc1, not ours to delete
 
     g_initialized = false;
+    g_last_tick_us = 0;
     ESP_LOGI(TAG, "Power management deinitialized");
     return ESP_OK;
 }

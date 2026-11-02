@@ -85,13 +85,22 @@ static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
 // semantics (Bluetooth SIG, Heart Rate Service):
 //   bit0 (0x01) -> the Heart Rate Measurement Value is a 16-bit uint16
 //                  (little-endian) instead of an 8-bit uint8;
-//   bit4 (0x10) -> the project-specific "RR interval present" bit: the RR
-//                  bytes follow the HR value only when this bit is set.
+//   bit4 (0x10) -> the standard "RR-Interval present" bit: one or more RR
+//                  uint16 fields follow the HR value only when it is set.
+//                  The unit is 1/1024 s (NOT milliseconds): a spec-correct
+//                  client multiplies by 1000/1024, so a value sent in ms
+//                  would read 2.4 % too short.
 //
 // The read path and the notify path MUST agree: a flag that announces a
 // field the payload does not carry makes every client mis-parse the value
 // (and an uninitialised byte reaches the client), so the flags are computed
 // from the data that is actually sent.
+// The device computes RR in milliseconds; the characteristic carries 1/1024 s.
+static uint16_t rr_ms_to_1024(uint16_t rr_ms) {
+    uint32_t v = ((uint32_t)rr_ms * 1024u + 500u) / 1000u;
+    return (uint16_t)(v > 0xFFFEu ? 0xFFFEu : v);  // 0xFFFF stays the "no RR" sentinel upstream
+}
+
 static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
@@ -104,8 +113,9 @@ static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
         val[2] = (uint8_t)((s_last_hr_bpm >> 8) & 0xFF);
         uint8_t n = 3;
         if (rr != 0xFFFF) {
-            val[3] = (uint8_t)(rr & 0xFF);
-            val[4] = (uint8_t)((rr >> 8) & 0xFF);
+            uint16_t rr_1024 = rr_ms_to_1024(rr);
+            val[3] = (uint8_t)(rr_1024 & 0xFF);
+            val[4] = (uint8_t)((rr_1024 >> 8) & 0xFF);
             n = 5;
         }
         int rc = os_mbuf_append(ctxt->om, val, n);
@@ -153,8 +163,9 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     val[n++] = (uint8_t)(hr_bpm & 0xFF);
     val[n++] = (uint8_t)((hr_bpm >> 8) & 0xFF);
     if (rr_interval_ms != 0xFFFF) {
-        val[n++] = (uint8_t)(rr_interval_ms & 0xFF);
-        val[n++] = (uint8_t)((rr_interval_ms >> 8) & 0xFF);
+        uint16_t rr_1024 = rr_ms_to_1024(rr_interval_ms);
+        val[n++] = (uint8_t)(rr_1024 & 0xFF);
+        val[n++] = (uint8_t)((rr_1024 >> 8) & 0xFF);
     }
     struct os_mbuf *om = ble_hs_mbuf_from_flat(val, n);
     if (!om) return ESP_ERR_NO_MEM;
