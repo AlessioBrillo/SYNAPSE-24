@@ -60,6 +60,7 @@ class _Feature(ctypes.Structure):
         ("sdnn_ms", ctypes.c_uint16),
         ("sport_type", ctypes.c_uint8),
         ("sensor_health", ctypes.c_uint8),
+        ("motion_artifact", ctypes.c_uint8),
     ]
 
 
@@ -76,17 +77,21 @@ class _Status(ctypes.Structure):
         ("dropped_frames", ctypes.c_uint32),
         ("read_errors", ctypes.c_uint32),
         ("fw_build", ctypes.c_uint32),
+        ("ppg_skipped", ctypes.c_uint32),
+        ("power_dropped", ctypes.c_uint32),
     ]
 
 
 _SET_TX = ctypes.CFUNCTYPE(None, ctypes.c_bool, ctypes.c_void_p)
 _SET_RATE = ctypes.CFUNCTYPE(None, ctypes.c_uint8, ctypes.c_void_p)
+_SET_TIME = ctypes.CFUNCTYPE(None, ctypes.c_uint64, ctypes.c_void_p)
 
 
 class _Ops(ctypes.Structure):
     _fields_ = [
         ("set_transmitting", _SET_TX),
         ("set_feature_rate", _SET_RATE),
+        ("set_time", _SET_TIME),
         ("ctx", ctypes.c_void_p),
     ]
 
@@ -148,6 +153,10 @@ def test_the_sdk_layout_matches_the_generated_json() -> None:
         assert [(f["name"], _FMT[f["type"]], f["offset"], f.get("na")) for f in spec["fields"]] == [
             (f.name, f.fmt, f.offset, f.na) for f in fields
         ], key
+        # unit + scale: physical value = wire integer * scale, the same in the SDK and the JSON
+        assert [(f["name"], f.get("unit"), f.get("scale")) for f in spec["fields"]] == [
+            (f.name, f.unit, pytest.approx(f.scale) if f.unit else None) for f in fields
+        ], key
 
 
 def test_the_v2_characteristics_are_new_and_distinct() -> None:
@@ -178,6 +187,70 @@ def test_the_golden_vectors_are_the_sdk_encoding() -> None:
     doc = json.loads(VECTORS.read_text(encoding="utf-8"))
     for case in doc["feature"]:
         assert consumer.encode_feature(case["values"]).hex() == case["hex"], case["name"]
+    for case in doc["status"]:
+        assert consumer.encode_status(case["values"]).hex() == case["hex"], case["name"]
+
+
+def test_the_vector_file_is_what_the_generator_writes() -> None:
+    """Averyn vendors the file: it must be regenerated, never hand-edited."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import make_consumer_vectors
+    finally:
+        sys.path.pop(0)
+    assert make_consumer_vectors.main(["--check"]) == 0
+
+
+def test_the_rr_vector_is_in_1024ths_of_a_second() -> None:
+    """968 ms is 991 in 1/1024 s: the vector used to carry the millisecond value."""
+    case = next(
+        c
+        for c in json.loads(VECTORS.read_text("utf-8"))["feature"]
+        if c["name"] == "typical_resting"
+    )
+    assert case["values"]["rr_last"] == round(968 * 1024 / 1000) == 991
+    assert case["values"]["rr_last"] * (1 / 1024) == pytest.approx(0.968, abs=0.001)
+
+
+def test_the_flags_are_defined_once_for_the_feature_frame_and_the_status() -> None:
+    doc = json.loads(GATT_V2.read_text(encoding="utf-8"))
+    assert doc["flags"] == {"charging": 0, "lead_off": 1, "transmitting": 2, "clock_wrapped": 3}
+    header = (BLE_DIR / "synapse_consumer_v2.h").read_text(encoding="utf-8")
+    assert "SYNAPSE_V2_STATUS_" not in header, "the status record must reuse the feature flags"
+    for name in doc["flags"]:
+        assert f"SYNAPSE_V2_FLAG_{name.upper()}" in header
+
+
+def test_motion_artifact_is_in_the_feature_frame_so_v1_ppg_map_is_not_lost() -> None:
+    doc = json.loads(GATT_V2.read_text(encoding="utf-8"))
+    field = {f["name"]: f for f in doc["feature"]["fields"]}["motion_artifact"]
+    assert (field["offset"], field["na"], field["unit"]) == (26, 0xFF, "fraction")
+    assert (
+        doc["feature"]["bytes"] == 27
+    )  # the 2.0 offsets did not move: motion_artifact is appended
+
+
+def test_the_sentinels_cover_the_enums_that_used_to_have_none() -> None:
+    fields = {
+        f["name"]: f for f in json.loads(GATT_V2.read_text(encoding="utf-8"))["feature"]["fields"]
+    }
+    assert fields["stress_level"]["na"] == 0xFF
+    assert fields["sport_type"]["na"] == 0xFF
+
+
+def test_the_streams_publish_what_a_ui_shows() -> None:
+    """The wire unit is not the display unit for the gyroscope and the magnetometer."""
+    streams = {
+        s["name"]: s
+        for s in json.loads(GATT_V2.read_text(encoding="utf-8"))["stream_metadata"]["streams"]
+    }
+    assert streams["gyro"]["display_unit"] == "dps"
+    # wire mrad/s * display_per_wire = deg/s
+    assert 1000 * streams["gyro"]["display_per_wire"] == pytest.approx(180 / 3.141592653589793)
+    assert streams["mag"]["display_unit"] == "uT"
+    assert streams["mag"]["display_per_wire"] == pytest.approx(0.01)
+    for s in streams.values():
+        assert len(s["channel_names"]) == len(s["channel_units"]) == s["channels"], s["name"]
 
 
 def test_the_firmware_encoder_reproduces_the_golden_vectors(fw: ctypes.CDLL) -> None:
@@ -191,7 +264,9 @@ def test_not_available_decodes_to_none_never_to_zero(fw: ctypes.CDLL) -> None:
         assert decoded[name] is None, name
     assert decoded["battery_pct"] is None
     assert decoded["temperature_c100"] is None
-    assert decoded["stress_level"] == 3  # unknown, an enum value: the model has not run
+    assert decoded["stress_level"] is None  # the model has not run: null, not "unknown"
+    assert decoded["sport_type"] is None
+    assert decoded["motion_artifact"] is None
 
 
 _u8 = st.integers(0, 254)  # 255 is the sentinel of several u8 fields
@@ -216,6 +291,7 @@ _u16 = st.integers(0, 0xFFFE)
     sdnn_ms=_u16,
     sport_type=st.integers(0, 4),
     sensor_health=st.integers(0, 0x1F),
+    motion_artifact=_u8,
 )
 def test_c_and_sdk_agree_on_any_feature_record(fw: ctypes.CDLL, **values: int) -> None:
     raw = _c_feature(fw, dict(values))
@@ -244,7 +320,7 @@ def test_the_sdk_rejects_a_wrong_version_and_a_wrong_length() -> None:
 
 
 def test_the_status_record_round_trips(fw: ctypes.CDLL) -> None:
-    rec = _Status(1, 0x07, 0x06, 247, 86_400, 3, 11, 22, 33, 44, 0xDEADBEEF)
+    rec = _Status(1, 0x07, 0x06, 247, 86_400, 3, 11, 22, 33, 44, 0xDEADBEEF, 55, 66)
     buf = ctypes.create_string_buffer(64)
     n = fw.synapse_status_v2_encode(ctypes.byref(rec), buf, 64)
     assert n == consumer.STATUS_BYTES
@@ -261,6 +337,8 @@ def test_the_status_record_round_trips(fw: ctypes.CDLL) -> None:
         "dropped_frames": 33,
         "read_errors": 44,
         "fw_build": 0xDEADBEEF,
+        "ppg_skipped": 55,
+        "power_dropped": 66,
     }
     assert fw.synapse_status_v2_encode(ctypes.byref(rec), buf, n - 1) == 0
 
@@ -311,6 +389,7 @@ def _apply(fw: ctypes.CDLL, payload: bytes) -> tuple[int, list[tuple[str, int]]]
     ops = _Ops(
         _SET_TX(lambda on, _ctx: calls.append(("tx", int(on)))),
         _SET_RATE(lambda hz, _ctx: calls.append(("rate", int(hz)))),
+        _SET_TIME(lambda ms, _ctx: calls.append(("time", int(ms)))),
         None,
     )
     return fw.synapse_control_apply(payload, len(payload), ctypes.byref(ops)), calls
@@ -320,6 +399,25 @@ def test_the_control_point_applies_valid_writes(fw: ctypes.CDLL) -> None:
     assert _apply(fw, consumer.encode_control("start")) == (0, [("tx", 1)])
     assert _apply(fw, consumer.encode_control("stop")) == (0, [("tx", 0)])
     assert _apply(fw, consumer.encode_control("set_feature_rate", 5)) == (0, [("rate", 5)])
+    epoch_ms = 1_798_848_000_123  # 2026-12-31T00:00:00.123Z
+    assert _apply(fw, consumer.encode_control("set_time", epoch_ms)) == (0, [("time", epoch_ms)])
+
+
+def test_set_time_is_little_endian_and_refuses_a_clock_before_2020(fw: ctypes.CDLL) -> None:
+    doc = json.loads(GATT_V2.read_text(encoding="utf-8"))["control_point"]
+    errors = doc["errors"]
+    assert doc["opcodes"]["set_time"] == 4
+    assert doc["set_time_min_epoch_ms"] == consumer.SET_TIME_MIN_EPOCH_MS
+    wire = consumer.encode_control("set_time", 1_798_848_000_123)
+    assert len(wire) == 9
+    assert wire[0] == 4
+    too_early = bytes([4]) + (consumer.SET_TIME_MIN_EPOCH_MS - 1).to_bytes(8, "little")
+    assert _apply(fw, too_early) == (errors["bad_argument"], [])
+    assert _apply(fw, bytes([4]) + bytes(7)) == (errors["bad_length"], [])  # 7 bytes of argument
+    with pytest.raises(consumer.ConsumerCodecError, match="set_time"):
+        consumer.encode_control("set_time", 1)
+    with pytest.raises(consumer.ConsumerCodecError, match="set_time"):
+        consumer.encode_control("set_time")
 
 
 def test_the_control_point_refuses_bad_writes_without_side_effects(fw: ctypes.CDLL) -> None:
@@ -389,3 +487,75 @@ def test_the_sdk_control_encoder_enforces_the_firmware_rate_range() -> None:
 def test_the_control_point_errors_fit_the_att_application_window() -> None:
     errors = json.loads(GATT_V2.read_text(encoding="utf-8"))["control_point"]["errors"]
     assert all(0 < code <= 0x1F for code in errors.values())  # 0x80 + code stays in 0x80..0x9F
+
+
+# --- raw research frame: contract + vectors -------------------------------------------------------
+
+RAW_CONTRACT = ROOT / "contracts" / "raw_frame_v1.json"
+RAW_VECTORS = ROOT / "contracts" / "vectors" / "raw_frame_v1.json"
+
+
+def test_the_raw_contract_matches_the_sdk_codec() -> None:
+    from synapse_device import codec
+
+    doc = json.loads(RAW_CONTRACT.read_text(encoding="utf-8"))
+    assert doc["header_bytes"] == codec.HEADER_SIZE
+    assert doc["frame_version"] == codec.FRAME_VERSION
+    assert doc["max_frame_bytes"] == codec.MAX_PAYLOAD
+    assert doc["dropped_max"] == codec.MAX_DROPPED
+    assert doc["flag_bits"]["ts_epoch_wrapped"] == 0
+    assert dict(doc["stream_ids"]) == {s.name.lower(): int(s) for s in codec.RawStream}
+    assert {k: v["code"] for k, v in doc["sample_formats"].items()} == {
+        f.name.lower(): int(f) for f in codec.RawFormat
+    }
+    assert {k: v["bytes"] for k, v in doc["sample_formats"].items()} == {
+        "s8": 1,
+        "s16": 2,
+        "s32": 4,
+    }
+    offsets = {f["name"]: f["offset"] for f in doc["header_fields"]}
+    assert offsets == {
+        "version": 0,
+        "stream_id": 1,
+        "sequence": 2,
+        "timestamp_us": 4,
+        "flags": 8,
+        "sample_count": 9,
+        "sample_format": 10,
+        "dropped": 11,
+    }
+    assert sum(f["size"] for f in doc["header_fields"]) == doc["header_bytes"]
+
+
+def test_the_valid_raw_vectors_decode_to_what_they_declare() -> None:
+    from synapse_device import codec
+
+    for case in json.loads(RAW_VECTORS.read_text(encoding="utf-8"))["valid"]:
+        header, values = codec.decode_frame(bytes.fromhex(case["hex"]))
+        want = case["expected"]
+        assert header.stream.name.lower() == want["stream"], case["name"]
+        assert header.sequence == want["sequence"], case["name"]
+        assert header.timestamp_us == want["timestamp_us"], case["name"]
+        assert header.ts_epoch_wrapped is want["ts_epoch_wrapped"], case["name"]
+        assert header.sample_format.name.lower() == want["sample_format"], case["name"]
+        assert header.dropped == want["dropped"], case["name"]
+        assert [int(v) for v in values] == want["values"], case["name"]
+
+
+def test_the_invalid_raw_vectors_are_all_refused() -> None:
+    from synapse_device import codec
+
+    cases = json.loads(RAW_VECTORS.read_text(encoding="utf-8"))["invalid"]
+    assert {c["reason"] for c in cases} >= {"too_short", "truncated", "unknown_version"}
+    for case in cases:
+        with pytest.raises(codec.RawCodecError):
+            codec.decode_frame(bytes.fromhex(case["hex"]))
+
+
+def test_the_loss_counter_saturates_at_255_in_the_vectors() -> None:
+    case = next(
+        c
+        for c in json.loads(RAW_VECTORS.read_text(encoding="utf-8"))["valid"]
+        if c["name"] == "loss_reported_and_saturated"
+    )
+    assert case["expected"]["dropped"] == 255

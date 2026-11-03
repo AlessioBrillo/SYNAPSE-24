@@ -27,7 +27,9 @@ void synapse_feature_v2_init_na(synapse_feature_v2_t *f)
     f->temperature_c100 = (int16_t)SYNAPSE_CONTRACT_V2_FEATURE_NA_TEMPERATURE_C100;
     f->rmssd_ms = SYNAPSE_CONTRACT_V2_FEATURE_NA_RMSSD_MS;
     f->sdnn_ms = SYNAPSE_CONTRACT_V2_FEATURE_NA_SDNN_MS;
-    f->stress_level = 3; /* unknown: the model has not run */
+    f->stress_level = SYNAPSE_CONTRACT_V2_FEATURE_NA_STRESS_LEVEL; /* the model has not run */
+    f->sport_type = SYNAPSE_CONTRACT_V2_FEATURE_NA_SPORT_TYPE;
+    f->motion_artifact = SYNAPSE_CONTRACT_V2_FEATURE_NA_MOTION_ARTIFACT;
 }
 
 size_t synapse_feature_v2_encode(const synapse_feature_v2_t *f, uint8_t *out, size_t cap)
@@ -53,6 +55,7 @@ size_t synapse_feature_v2_encode(const synapse_feature_v2_t *f, uint8_t *out, si
     put_u16(out + SYNAPSE_CONTRACT_V2_FEATURE_OFF_SDNN_MS, f->sdnn_ms);
     out[SYNAPSE_CONTRACT_V2_FEATURE_OFF_SPORT_TYPE] = f->sport_type;
     out[SYNAPSE_CONTRACT_V2_FEATURE_OFF_SENSOR_HEALTH] = f->sensor_health;
+    out[SYNAPSE_CONTRACT_V2_FEATURE_OFF_MOTION_ARTIFACT] = f->motion_artifact;
     return SYNAPSE_CONTRACT_V2_FEATURE_BYTES;
 }
 
@@ -74,6 +77,8 @@ size_t synapse_status_v2_encode(const synapse_status_v2_t *s, uint8_t *out, size
     put_u32(out + SYNAPSE_CONTRACT_V2_STATUS_OFF_DROPPED_FRAMES, s->dropped_frames);
     put_u32(out + SYNAPSE_CONTRACT_V2_STATUS_OFF_READ_ERRORS, s->read_errors);
     put_u32(out + SYNAPSE_CONTRACT_V2_STATUS_OFF_FW_BUILD, s->fw_build);
+    put_u32(out + SYNAPSE_CONTRACT_V2_STATUS_OFF_PPG_SKIPPED, s->ppg_skipped);
+    put_u32(out + SYNAPSE_CONTRACT_V2_STATUS_OFF_POWER_DROPPED, s->power_dropped);
     return SYNAPSE_CONTRACT_V2_STATUS_BYTES;
 }
 
@@ -124,6 +129,22 @@ int synapse_control_apply(const uint8_t *data, size_t len, const synapse_control
             ops->set_feature_rate(data[1], ops->ctx);
         }
         return 0;
+    case SYNAPSE_CONTRACT_V2_OP_SET_TIME: {
+        uint64_t epoch_ms = 0;
+        if (len != 9u) {
+            return SYNAPSE_CONTRACT_V2_ERR_BAD_LENGTH;
+        }
+        for (size_t i = 0; i < 8u; i++) {
+            epoch_ms |= (uint64_t)data[1u + i] << (8u * i);
+        }
+        if (epoch_ms < SYNAPSE_CONTRACT_V2_SET_TIME_MIN_EPOCH_MS) {
+            return SYNAPSE_CONTRACT_V2_ERR_BAD_ARGUMENT;
+        }
+        if (ops->set_time != NULL) {
+            ops->set_time(epoch_ms, ops->ctx);
+        }
+        return 0;
+    }
     default:
         return SYNAPSE_CONTRACT_V2_ERR_BAD_OPCODE;
     }

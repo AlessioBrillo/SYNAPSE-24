@@ -56,8 +56,17 @@ FIT_SOURCES = (
 _FIT_SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
 
 
-# MAX30102 sample-rate register -> Hz, from the datasheet.
-PPG_RATE_REGISTERS = {0x02: 50, 0x03: 64, 0x04: 100, 0x05: 200, 0x06: 400, 0x07: 800}
+# MAX30102 SPO2_SR code (SPO2_CONFIG bits 4:2) -> Hz, from the datasheet.
+PPG_RATE_REGISTERS = {
+    0x00: 50,
+    0x01: 100,
+    0x02: 200,
+    0x03: 400,
+    0x04: 800,
+    0x05: 1000,
+    0x06: 1600,
+    0x07: 3200,
+}
 
 
 @dataclass
