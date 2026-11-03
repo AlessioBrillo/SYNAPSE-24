@@ -41,7 +41,9 @@ def test_not_available_is_none_and_never_zero() -> None:
         assert decoded[name] is None
     assert decoded["battery_pct"] is None
     assert decoded["temperature_c100"] is None
-    assert decoded["stress_level"] == 3
+    assert decoded["stress_level"] is None  # the model did not run: null, never "unknown"
+    assert decoded["sport_type"] is None
+    assert decoded["motion_artifact"] is None
 
 
 def test_a_negative_temperature_survives_the_round_trip() -> None:

@@ -1,6 +1,6 @@
 """Consumer contract v2: decode/encode the feature, status, metadata and control frames.
 
-The layouts mirror ``contracts/gatt_v2.json`` (generated from
+The layouts mirror ``contracts/gatt_v2.json`` (contract 2.1, generated from
 ``config/hardware.yaml``). ``tests/test_consumer_v2_parity.py`` checks this table
 against that JSON and the firmware encoder byte for byte, so the three cannot
 drift apart silently.
@@ -19,6 +19,7 @@ __all__ = [
     "FEATURE_BYTES",
     "FEATURE_FIELDS",
     "FEATURE_VERSION",
+    "SET_TIME_MIN_EPOCH_MS",
     "STATUS_BYTES",
     "STATUS_FIELDS",
     "STATUS_VERSION",
@@ -29,6 +30,7 @@ __all__ = [
     "decode_stream_metadata",
     "encode_control",
     "encode_feature",
+    "encode_status",
 ]
 
 
@@ -42,31 +44,37 @@ class _Field:
     fmt: str  # struct code, little-endian: B H I h
     offset: int
     na: int | None = None
+    unit: str | None = None  # physical value = wire integer * scale, in this unit
+    scale: float = 1.0
 
+
+_FRACTION: Final = 1 / 254  # 0..254 = 0.0..1.0 (255 is the sentinel)
 
 FEATURE_VERSION: Final = 2
-FEATURE_BYTES: Final = 26
+FEATURE_BYTES: Final = 27
 STATUS_VERSION: Final = 1
-STATUS_BYTES: Final = 32
+STATUS_BYTES: Final = 40
+SET_TIME_MIN_EPOCH_MS: Final = 1_577_836_800_000  # 2020-01-01T00:00:00Z
 
 FEATURE_FIELDS: Final[tuple[_Field, ...]] = (
     _Field("version", "B", 0),
     _Field("flags", "B", 1),
     _Field("sequence", "H", 2),
-    _Field("t_dev_ms", "I", 4),
-    _Field("heart_rate_bpm", "H", 8, 0xFFFF),
-    _Field("rr_last", "H", 10, 0xFFFF),
+    _Field("t_dev_ms", "I", 4, None, "ms", 1),
+    _Field("heart_rate_bpm", "H", 8, 0xFFFF, "bpm", 1),
+    _Field("rr_last", "H", 10, 0xFFFF, "s", 1 / 1024),
     _Field("rr_count", "B", 12, 0xFF),
-    _Field("ppg_sqi", "B", 13, 0xFF),
-    _Field("ecg_quality", "B", 14, 0xFF),
-    _Field("motion_level", "B", 15, 0xFF),
-    _Field("stress_level", "B", 16),
-    _Field("battery_pct", "B", 17, 0xFF),
-    _Field("temperature_c100", "h", 18, 0x7FFF),
-    _Field("rmssd_ms", "H", 20, 0xFFFF),
-    _Field("sdnn_ms", "H", 22, 0xFFFF),
-    _Field("sport_type", "B", 24),
+    _Field("ppg_sqi", "B", 13, 0xFF, "fraction", _FRACTION),
+    _Field("ecg_quality", "B", 14, 0xFF, "fraction", _FRACTION),
+    _Field("motion_level", "B", 15, 0xFF, "fraction", _FRACTION),
+    _Field("stress_level", "B", 16, 0xFF),
+    _Field("battery_pct", "B", 17, 0xFF, "percent", 1),
+    _Field("temperature_c100", "h", 18, 0x7FFF, "degC", 0.01),
+    _Field("rmssd_ms", "H", 20, 0xFFFF, "ms", 1),
+    _Field("sdnn_ms", "H", 22, 0xFFFF, "ms", 1),
+    _Field("sport_type", "B", 24, 0xFF),
     _Field("sensor_health", "B", 25),
+    _Field("motion_artifact", "B", 26, 0xFF, "fraction", _FRACTION),
 )
 
 STATUS_FIELDS: Final[tuple[_Field, ...]] = (
@@ -75,13 +83,15 @@ STATUS_FIELDS: Final[tuple[_Field, ...]] = (
     _Field("sensor_health", "B", 2),
     _Field("flags", "B", 3),
     _Field("mtu", "H", 4),
-    _Field("uptime_s", "I", 6),
+    _Field("uptime_s", "I", 6, None, "s", 1),
     _Field("epoch_wraps", "H", 10),
     _Field("ring_overflow", "I", 12),
     _Field("stale_samples", "I", 16),
     _Field("dropped_frames", "I", 20),
     _Field("read_errors", "I", 24),
     _Field("fw_build", "I", 28),
+    _Field("ppg_skipped", "I", 32),
+    _Field("power_dropped", "I", 36),
 )
 
 _META_ENTRY: Final = struct.Struct("<BBBBHH")  # stream_id format channels unit rate_hz unit_scale
@@ -122,41 +132,53 @@ _RANGE: Final = {
 FEATURE_RATE_MAX_HZ: Final = 5
 
 
-def encode_feature(values: dict[str, int | None]) -> bytes:
-    """Encode a record; ``None`` (or a missing optional field) becomes its sentinel.
-
-    Raises ``ConsumerCodecError`` for an unknown field, a value outside its type, or a real
-    value equal to the field's "not available" sentinel (it would decode back as ``None``).
-    """
-    known = {f.name: f for f in FEATURE_FIELDS}
+def _encode(
+    values: dict[str, int | None],
+    fields: tuple[_Field, ...],
+    size: int,
+    version: int,
+    what: str,
+) -> bytes:
+    known = {f.name: f for f in fields}
     unknown = sorted(set(values) - set(known))
     if unknown:
-        raise ConsumerCodecError(f"feature: unknown field(s) {unknown}")
-    if values.get("version") not in (None, FEATURE_VERSION):
-        raise ConsumerCodecError(f"feature: this codec writes version {FEATURE_VERSION} only")
+        raise ConsumerCodecError(f"{what}: unknown field(s) {unknown}")
+    if values.get("version") not in (None, version):
+        raise ConsumerCodecError(f"{what}: this codec writes version {version} only")
     for name, value in values.items():
         if value is None or name == "version":
             continue
         field = known[name]
         low, high = _RANGE[field.fmt]
         if not low <= value <= high:
-            raise ConsumerCodecError(f"feature: {name}={value} is outside {low}..{high}")
+            raise ConsumerCodecError(f"{what}: {name}={value} is outside {low}..{high}")
         if field.na is not None and value == field.na:
             raise ConsumerCodecError(
-                f"feature: {name}={value} is the 'not available' sentinel; pass None"
+                f"{what}: {name}={value} is the 'not available' sentinel; pass None"
             )
-    buf = bytearray(FEATURE_BYTES)
-    for field in FEATURE_FIELDS:
+    buf = bytearray(size)
+    for field in fields:
         value = values.get(field.name)
         if field.name == "version":
-            value = FEATURE_VERSION
+            value = version
         elif value is None:
-            if field.na is None:
-                value = 0
-            else:
-                value = field.na
+            value = 0 if field.na is None else field.na
         struct.pack_into("<" + field.fmt, buf, field.offset, value)
     return bytes(buf)
+
+
+def encode_feature(values: dict[str, int | None]) -> bytes:
+    """Encode a feature record; ``None`` (or a missing optional field) becomes its sentinel.
+
+    Raises ``ConsumerCodecError`` for an unknown field, a value outside its type, or a real
+    value equal to the field's "not available" sentinel (it would decode back as ``None``).
+    """
+    return _encode(values, FEATURE_FIELDS, FEATURE_BYTES, FEATURE_VERSION, "feature")
+
+
+def encode_status(values: dict[str, int | None]) -> bytes:
+    """Encode a status record (same rules as :func:`encode_feature`; missing counters are 0)."""
+    return _encode(values, STATUS_FIELDS, STATUS_BYTES, STATUS_VERSION, "status")
 
 
 @dataclass(frozen=True)
@@ -191,13 +213,25 @@ def decode_stream_metadata(blob: bytes) -> list[StreamMeta]:
     return rows
 
 
-_OPCODES: Final = {"start": 1, "stop": 2, "set_feature_rate": 3}
+_OPCODES: Final = {"start": 1, "stop": 2, "set_feature_rate": 3, "set_time": 4}
 
 
 def encode_control(op: str, arg: int | None = None) -> bytes:
-    """Build a control write: ``start``, ``stop`` or ``set_feature_rate`` (``arg`` = Hz)."""
+    """Build a control write.
+
+    ``start``, ``stop``, ``set_feature_rate`` (``arg`` = Hz) or ``set_time`` (``arg`` = Unix
+    epoch in milliseconds).
+    """
     if op not in _OPCODES:
         raise ConsumerCodecError(f"unknown control op {op!r}")
+    if op == "set_time":
+        if arg is None:
+            raise ConsumerCodecError("set_time needs the Unix epoch in milliseconds")
+        if not SET_TIME_MIN_EPOCH_MS <= arg < 1 << 64:
+            raise ConsumerCodecError(
+                f"set_time: {arg} ms is outside {SET_TIME_MIN_EPOCH_MS}..2^64-1 (before 2020?)"
+            )
+        return bytes((_OPCODES[op],)) + arg.to_bytes(8, "little")
     if op == "set_feature_rate":
         if arg is None:
             raise ConsumerCodecError("set_feature_rate needs a rate in Hz")

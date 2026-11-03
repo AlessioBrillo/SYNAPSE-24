@@ -79,7 +79,7 @@ static void fill_status(synapse_status_v2_t *st)
 {
     st->tier = 0;  // ponytail: the acquisition FSM does not expose its tier yet
     st->sensor_health = synapse_sensors_health_mask();
-    st->flags = s_transmitting ? SYNAPSE_V2_STATUS_TRANSMITTING : 0;
+    st->flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
     st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
     st->ring_overflow = synapse_research_service_ring_overflow();
@@ -87,6 +87,8 @@ static void fill_status(synapse_status_v2_t *st)
     st->dropped_frames = synapse_research_service_dropped_frames();
     st->read_errors = synapse_sensors_read_errors();
     st->fw_build = 0;  // ponytail: no build hash is embedded yet; 0 = unknown
+    st->ppg_skipped = 0;    // ponytail: not counted yet (the PPG driver keeps only the newest FIFO sample)
+    st->power_dropped = 0;  // ponytail: not counted yet
 }
 
 // Consumer feature stream (Averyn integration).
@@ -327,7 +329,8 @@ void app_main(void)
             v2.heart_rate_bpm = hr_bpm;
             v2.ppg_sqi = ppg_sqi;
             v2.ecg_quality = ecg_quality;
-            v2.stress_level = stress_level;
+            v2.motion_artifact = ppg_map;  // v1's ppg_map: the PPG window is motion-corrupted
+            if (stress.valid) v2.stress_level = stress_level;  // otherwise it stays NA (null)
             v2.sensor_health = synapse_sensors_health_mask();
             if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
             (void)synapse_ble_gatt_push_feature_v2(&v2);

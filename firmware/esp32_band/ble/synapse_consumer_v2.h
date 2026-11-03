@@ -21,23 +21,20 @@
 extern "C" {
 #endif
 
-/* Feature frame `flags` */
-#define SYNAPSE_V2_FLAG_CHARGING      0x01u
-#define SYNAPSE_V2_FLAG_LEAD_OFF      0x02u
-#define SYNAPSE_V2_FLAG_TRANSMITTING  0x04u
-#define SYNAPSE_V2_FLAG_CLOCK_WRAPPED 0x08u
-
-/* Status `flags` */
-#define SYNAPSE_V2_STATUS_LEAD_OFF     0x01u
-#define SYNAPSE_V2_STATUS_TRANSMITTING 0x02u
-#define SYNAPSE_V2_STATUS_CHARGING     0x04u
+/* `flags`: ONE definition for the feature frame and the status record. The bits come from
+ * config/hardware.yaml (ble.consumer_v2.flags); `charging` is meaningful only when the POWER
+ * bit of `sensor_health` is set. */
+#define SYNAPSE_V2_FLAG_CHARGING      SYNAPSE_CONTRACT_V2_FLAG_CHARGING
+#define SYNAPSE_V2_FLAG_LEAD_OFF      SYNAPSE_CONTRACT_V2_FLAG_LEAD_OFF
+#define SYNAPSE_V2_FLAG_TRANSMITTING  SYNAPSE_CONTRACT_V2_FLAG_TRANSMITTING
+#define SYNAPSE_V2_FLAG_CLOCK_WRAPPED SYNAPSE_CONTRACT_V2_FLAG_CLOCK_WRAPPED
 
 /* `sensor_health` bits (set = the sensor initialised) */
-#define SYNAPSE_V2_HEALTH_ECG   0x01u
-#define SYNAPSE_V2_HEALTH_PPG   0x02u
-#define SYNAPSE_V2_HEALTH_IMU   0x04u
-#define SYNAPSE_V2_HEALTH_TEMP  0x08u
-#define SYNAPSE_V2_HEALTH_POWER 0x10u
+#define SYNAPSE_V2_HEALTH_ECG   SYNAPSE_CONTRACT_V2_HEALTH_ECG
+#define SYNAPSE_V2_HEALTH_PPG   SYNAPSE_CONTRACT_V2_HEALTH_PPG
+#define SYNAPSE_V2_HEALTH_IMU   SYNAPSE_CONTRACT_V2_HEALTH_IMU
+#define SYNAPSE_V2_HEALTH_TEMP  SYNAPSE_CONTRACT_V2_HEALTH_TEMP
+#define SYNAPSE_V2_HEALTH_POWER SYNAPSE_CONTRACT_V2_HEALTH_POWER
 
 /** Fields hold the value to send; a field equal to its NA sentinel is "not available". */
 typedef struct {
@@ -57,6 +54,7 @@ typedef struct {
     uint16_t sdnn_ms;
     uint8_t sport_type;
     uint8_t sensor_health;
+    uint8_t motion_artifact;   /**< 0..254 = 0.0..1.0 (v1 ppg_map), 255 = not available */
 } synapse_feature_v2_t;
 
 typedef struct {
@@ -71,6 +69,8 @@ typedef struct {
     uint32_t dropped_frames;
     uint32_t read_errors;
     uint32_t fw_build;
+    uint32_t ppg_skipped;      /**< PPG FIFO samples not read in time */
+    uint32_t power_dropped;    /**< POWER telemetry samples dropped */
 } synapse_status_v2_t;
 
 /** Start a feature record with every optional field set to its NA sentinel. */
@@ -89,6 +89,7 @@ size_t synapse_stream_metadata_encode(uint8_t *out, size_t cap);
 typedef struct {
     void (*set_transmitting)(bool on, void *ctx);
     void (*set_feature_rate)(uint8_t hz, void *ctx);
+    void (*set_time)(uint64_t epoch_ms, void *ctx);   /**< the phone gives the band its wall clock */
     void *ctx;
 } synapse_control_ops_t;
 
