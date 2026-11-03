@@ -268,6 +268,9 @@ static int body_loc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_
 static int batt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        // Before the power module has measured the battery, 100 % would be a made-up value:
+        // refuse the read instead (a client retries or shows nothing).
+        if (!s_batt_known) return BLE_ATT_ERR_UNLIKELY;
         os_mbuf_append(ctxt->om, &s_batt_level, sizeof(s_batt_level));
         return 0;
     }
@@ -280,6 +283,7 @@ static int batt_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
 esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging) {
     (void)charging;
     s_batt_level = level;
+    s_batt_known = true;  // a notified level is a measured one
     s_batt_notify_pending = true;
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
     if (s_batt_handle == 0 || !s_batt_subscribed) return ESP_ERR_INVALID_STATE;
@@ -787,11 +791,22 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
                                          uint8_t ecg_quality, uint8_t stress_level,
                                          uint8_t motion_level, int16_t temperature) {
     static uint32_t s_last_notify_ms = 0;
+    static uint32_t s_last_hr_ms = 0;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+
+    // Standard Heart Rate first, on its own 1 Hz gate: a plain HR client (level L0, the band as a
+    // strap) subscribes to 0x2A37 only and never to the feature characteristic. It used to be
+    // mirrored from inside the feature path, so that client received nothing.
+    // rr_interval_ms is reserved for genuine RR intervals (not RMSSD): 0xFFFF unless a real
+    // RR is available.
+    if (hr_bpm != 0xFFFF && s_hr_subscribed && now_ms - s_last_hr_ms >= 1000) {
+        if (synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF) == ESP_OK) s_last_hr_ms = now_ms;
+    }
+
     // 1 Hz default gate: 1000 ms between notifications. Configurable later via
     // the config characteristic if Averyn needs a faster live feed.
     if (now_ms - s_last_notify_ms < 1000) return ESP_OK;
-    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
     if (!g_feat_subscribed || s_feat_handle == 0) return ESP_OK; // nothing subscribed: silent drop
 
     synapse_feature_stream_t f = {0};
@@ -804,8 +819,10 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
     f.ecg_quality = ecg_quality;
     f.stress_level = stress_level;
     f.motion_level = motion_level;
-    f.battery_level = s_batt_level;
-    f.charging = 0; // filled by power module when wired
+    // v1 has no "not available" for these: 0xFF is out of range (0..100 %), which a v1 parser
+    // reads as null; a placeholder 100 % would read as a full battery that nobody measured.
+    f.battery_level = s_batt_known ? s_batt_level : 0xFF;
+    f.charging = (s_batt_known && s_batt_charging) ? 1 : 0;
     f.sport_type = 0;
     f.cadence = 0xFFFF;
     f.temperature = temperature;
@@ -815,12 +832,6 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
     esp_err_t rc = synapse_ble_gatt_notify_features(&f);
     if (rc != ESP_OK) return rc;
 
-    // Mirror HR onto the standard characteristic so any HR app works.
-    // rr_interval_ms is reserved for genuine RR intervals (not RMSSD); pass
-    // 0xFFFF unless a real RR is available.
-    if (hr_bpm != 0xFFFF) {
-        (void)synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF);
-    }
     s_last_notify_ms = now_ms;
     return ESP_OK;
 }

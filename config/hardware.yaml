@@ -75,7 +75,7 @@ pods:
         lead_off_plus: 15
         lead_off_minus: null           # single combined line; GPIO34 is octal PSRAM
         vref_mv: 1100
-        gain: 6.0                      # nominal AD8232 module gain — NOT verified for
+        gain: 1100.0                   # nominal AD8232 breakout gain (100 x ~11) — NOT verified for
                                        # generic clones; see gain_measured below
         gain_measured: null            # bench-calibrated gain (BRINGUP_SOP §4a). Empty
                                        # until the kit is on the desk: the µV scale of

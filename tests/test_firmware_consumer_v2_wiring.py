@@ -171,9 +171,10 @@ def test_a_too_small_mtu_is_reported_once_not_swallowed() -> None:
 
 def test_a_perfect_signal_cannot_be_reported_as_not_available() -> None:
     main = _code(APP_MAIN)
-    helper = main[main.index("static uint8_t unit_to_u8(") :]
+    helper = _code(APP_MAIN.parent / "synapse_feature_map.h")
+    helper = helper[helper.index("synapse_unit_to_u8(") :]
     helper = helper[: helper.index("\n}\n")]
-    assert "return 254" in helper  # 255 is the NA sentinel
-    assert "!(v > 0.0f)" in helper  # NaN and negatives
+    assert "return 254u" in helper  # 255 is the NA sentinel
+    assert "!(v >= 0.0f)" in helper  # NaN and negatives are not a measurement
     assert "* 255.0f" not in main
-    assert "ppg_sqi = unit_to_u8(ppg.sqi)" in main
+    assert "ppg_sqi = synapse_unit_to_u8(ppg.sqi)" in main

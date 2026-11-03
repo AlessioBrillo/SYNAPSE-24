@@ -41,6 +41,7 @@
 #include "synapse_signal_quality.h"
 #include "synapse_config.h"
 #include "synapse_power.h"
+#include "synapse_feature_map.h"
 
 static const char *TAG = "SYNAPSE_BAND";
 
@@ -58,16 +59,6 @@ static EventGroupHandle_t s_system_events;
 // Consumer contract v2 glue. The BLE layer owns the wire format; what the band knows
 // (sensor health, counters, whether the raw streams run) is provided from here.
 static bool s_transmitting = true;
-
-// 0.0..1.0 -> 0..254. 255 is the "not available" sentinel of these fields, so a perfect
-// signal must not be able to reach it (it used to: 1.0 * 255), and an out-of-range or NaN
-// input must not wrap the cast.
-static uint8_t unit_to_u8(float v)
-{
-    if (!(v > 0.0f)) return 0;  // also catches NaN
-    if (v >= 1.0f) return 254;
-    return (uint8_t)(v * 254.0f + 0.5f);
-}
 
 static void on_transmit_request(bool on)
 {
@@ -302,12 +293,15 @@ void app_main(void)
             uint8_t ppg_map = 0xFF;     // not available
             uint8_t ecg_quality = 0xFF; // the signal-quality module exposes no
                                        // validated ECG quality yet
-            if (ppg.valid) {
-                // 0 bpm is not a legal Heart Rate Measurement Value, so a
-                // zero reading is reported as "invalid" instead.
-                hr_bpm = (ppg.hr_bpm > 0.0f) ? (uint16_t)ppg.hr_bpm : 0xFFFF;
-                ppg_sqi = unit_to_u8(ppg.sqi);
-                ppg_map = unit_to_u8(ppg.motion_artifact_prob);
+            // `valid` is never cleared by the quality module: without an age check the heart
+            // rate and the quality freeze at the last value once the finger leaves the sensor.
+            if (ppg.valid && synapse_is_fresh(esp_timer_get_time(), ppg.timestamp_us,
+                                              SYNAPSE_PPG_MAX_AGE_US)) {
+                // synapse_hr_to_u16: rounded, and 0 / NaN / implausible bpm is "invalid"
+                // (0 bpm is not a legal Heart Rate Measurement Value either).
+                hr_bpm = synapse_hr_to_u16(ppg.hr_bpm);
+                ppg_sqi = synapse_unit_to_u8(ppg.sqi);
+                ppg_map = synapse_unit_to_u8(ppg.motion_artifact_prob);
             }
 
             (void)synapse_ble_gatt_push_feature(
