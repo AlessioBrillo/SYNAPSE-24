@@ -221,12 +221,12 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-        if (len > sizeof(s_cfg_buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        s_cfg_len = len;
-        os_mbuf_copydata(ctxt->om, 0, len, s_cfg_buf);
-        synapse_config_update_from_ble(s_cfg_buf, s_cfg_len);
-        return 0;
+        // The device configuration is not writable over BLE yet: the config handler
+        // only logs a received write. Accepting it would tell the client it worked (and a read would
+        // echo it back), so it is refused, like provisioning in band-core. The settings are
+        // Kconfig / OTA for now.
+        ESP_LOGW(BLE_TAG, "config write refused: not implemented");
+        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
     }
     return BLE_ATT_ERR_UNLIKELY;
 }
@@ -303,16 +303,27 @@ esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging) {
 static int prov_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        // [cmd u8][reserved u8][data_len u16 LE][data...]. The length in the header is the
+        // client's claim: it is checked against the bytes the packet really carries, or the
+        // handler would read (and act on) whatever is left on the stack past the end.
+        const uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
         if (len < 4) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         uint8_t hdr[4];
-        os_mbuf_copydata(ctxt->om, 0, 4, hdr);
-        uint16_t data_len = hdr[2] | ((uint16_t)hdr[3] << 8);
-        uint8_t payload[240];
-        if (data_len > sizeof(payload)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        if (data_len) os_mbuf_copydata(ctxt->om, 4, data_len, payload);
+        if (os_mbuf_copydata(ctxt->om, 0, 4, hdr) != 0) return BLE_ATT_ERR_UNLIKELY;
+        const uint16_t data_len = hdr[2] | ((uint16_t)hdr[3] << 8);
+        uint8_t payload[240] = {0};
+        if (data_len > sizeof(payload) || (uint32_t)data_len + 4u != len) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (data_len && os_mbuf_copydata(ctxt->om, 4, data_len, payload) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
 #if defined(CONFIG_SYNAPSE_FEATURE_PROVISIONING)
-        synapse_provisioning_process_cmd(hdr[0], payload, data_len);
+        const esp_err_t pr = synapse_provisioning_process_cmd(hdr[0], payload, data_len);
+        if (pr != ESP_OK) {
+            ESP_LOGW(BLE_TAG, "provisioning command 0x%02x failed: %s", hdr[0], esp_err_to_name(pr));
+            return BLE_ATT_ERR_UNLIKELY;  // the client must know it did not work
+        }
 #else
         // band-core: no provisioning. The write is refused, not silently
         // swallowed: a client that tries to provision must know it failed.
@@ -419,13 +430,16 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             {
                 .uuid = &CFG_UUID.u,
                 .access_cb = cfg_access,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC,
             },
             {
                 .uuid = &PROV_UUID.u,
                 .access_cb = prov_access,
                 .val_handle = &s_prov_handle,
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                // Provisioning commands (COMMIT, FACTORY_RESET...) need an encrypted link: the
+                // central must pair first (LE Secure Connections, Just Works: it keeps a passive
+                // eavesdropper out; MITM protection needs an I/O capability the band does not have).
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_NOTIFY,
             },
             {
                 .uuid = &FEAT2_UUID.u,
@@ -643,6 +657,9 @@ static void on_sync(void) {
     int rc = ble_svc_gap_device_name_set(SYNAPSE_BLE_DEVICE_NAME);
     assert(rc == 0);
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_sc = 1;       // LE Secure Connections
+    ble_hs_cfg.sm_mitm = 0;     // no I/O to confirm with: Just Works
+    ble_hs_cfg.sm_bonding = 0;  // no key store is initialised: pair per connection
     // Provisioning and normal mode advertise the same identity: the device
     // name and the consumer service UUID. The difference is in what the
     // provisioning characteristic accepts, not in the advertisement, so the
