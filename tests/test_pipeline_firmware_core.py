@@ -57,3 +57,14 @@ def test_the_core_profile_really_turns_those_features_off() -> None:
     )
     assert "CONFIG_SYNAPSE_FEATURE_GPS=n" in core
     assert "CONFIG_SYNAPSE_FEATURE_FIT_STORAGE=n" in core
+
+
+def test_the_flagged_rr_code_is_built_too() -> None:
+    """CONFIG_SYNAPSE_RR_ENABLE is off in the product: without a build with it on, it could rot."""
+    commands = _commands()
+    rr = [c for c in commands if "sdkconfig.rr" in c and "idf.py build" in c]
+    assert len(rr) == 1
+    assert "SDKCONFIG_DEFAULTS=" in rr[0]
+    assert any("CONFIG_SYNAPSE_RR_ENABLE=y" in c for c in commands)
+    flags = (ROOT / "firmware" / "esp32_band" / "sdkconfig.rr").read_text(encoding="utf-8")
+    assert "CONFIG_SYNAPSE_RR_ENABLE=y" in flags
