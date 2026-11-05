@@ -295,3 +295,36 @@ class TestFitWiring:
         assert status["residual_ms"] < 1.0
         assert status["median_rtt_ms"] < 50.0
         assert status["n_samples"] >= 2
+
+
+class TestFitIsNotRecomputedPerSample:
+    """The live path maps hundreds of timestamps per second; the exchanges change once a minute."""
+
+    def test_the_fit_is_computed_once_per_recorded_exchange(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+        original = PodClockModel._compute_fit
+
+        def counting(self: PodClockModel):  # noqa: ANN202
+            nonlocal calls
+            calls += 1
+            return original(self)
+
+        monkeypatch.setattr(PodClockModel, "_compute_fit", counting)
+        model = PodClockModel(pod_id="forearm_hub")
+        feed_session(model, n=6)
+        for i in range(1000):
+            assert model.to_lsl_seconds(1_000_000.0 + i * 2000.0) is not None
+        assert calls == 1
+        model.record_exchange(make_exchange(99, 400.0))
+        model.fit()
+        model.fit()
+        assert calls == 2, "a new exchange must invalidate the cache, and only once"
+
+    def test_a_cached_fit_equals_a_fresh_one(self) -> None:
+        model = PodClockModel(pod_id="forearm_hub")
+        feed_session(model, n=8)
+        cached = model.fit()
+        model._fit_cache = None
+        assert model.fit() == cached

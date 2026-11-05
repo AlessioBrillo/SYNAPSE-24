@@ -156,6 +156,10 @@ def select_primary_stream(streams: list[StreamView]) -> StreamView:
     )
 
 
+#: Timestamps from 2017 on are wall-clock seconds; a local LSL clock never gets there.
+_UNIX_EPOCH_PLAUSIBLE_S = 1_500_000_000.0
+
+
 def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anchor, HRV, write)
     xdf_path: Path | str,
     out_path: Path | str,
@@ -168,8 +172,10 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     XDF timestamps live in the LSL clock domain (``pylsl.local_clock``),
     which is *not* Unix epoch. To write correct FIT wall-clock times we need
     an anchor: the Unix epoch that corresponds to LSL time ``t0`` (the first
-    sample). Without it we fall back to ``time.time()`` at export time and
-    log a warning — the dates will be approximate, never 1970.
+    sample). Without it, timestamps that already look like Unix time
+    (wall-clock recordings, as ``synapse record`` writes) are taken as such,
+    with a warning; a local LSL clock raises :class:`ExportError`, because
+    the date is unknown and a made-up one does not belong in a health record.
 
     Args:
         xdf_path: Input XDF file.
@@ -177,8 +183,7 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
         serial: Device serial written in the FIT file id.
         window_s: Analysis window length, in seconds.
         utc0_s: Unix epoch seconds corresponding to LSL time ``t0`` (the
-            first sample timestamp). If omitted, ``time.time()`` is used as
-            an approximate anchor.
+            first sample timestamp). Required for a local LSL clock.
 
     Returns:
         An :class:`ExportSummary` describing what was written.
@@ -206,19 +211,26 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     t1 = float(timestamps[-1])
     duration_s = t1 - t0
 
-    # Anchor LSL timestamps to Unix epoch. LSL local_clock() is NOT Unix
-    # epoch, so datetime.fromtimestamp(lsl_ts) would yield dates around 1970.
-    # utc0_s is the Unix epoch at LSL time t0; without it we fall back to
-    # time.time() and warn that dates are approximate.
-    import time as _time
-
+    # Anchor the timestamps to Unix epoch. LSL local_clock() is NOT Unix epoch (it counts from
+    # the machine's start), so a FIT written from it would be dated 1970. Two cases are told
+    # apart by the value itself, because nothing in the file says which clock wrote it:
+    #   * a caller-supplied anchor (utc0_s): used as given;
+    #   * timestamps after 2017: wall-clock time, as `synapse record` writes (an LSL clock
+    #     would need 54 years of uptime to read this): taken as Unix epoch;
+    #   * anything else: a local clock with no anchor. The date is unknown, and inventing
+    #     one (the export time was used, "approximate") puts a wrong date in a health record.
     warnings: list[str] = []
 
     if utc0_s is None:
-        utc0_s = _time.time()
+        if t0 < _UNIX_EPOCH_PLAUSIBLE_S:
+            raise ExportError(
+                f"the XDF timestamps (t0={t0:.3f}) are a local LSL clock, not dates: "
+                "pass the Unix time of the first sample (--utc0-s) to date the FIT file"
+            )
+        utc0_s = t0
         warnings.append(
-            f"no UTC anchor for LSL t0={t0:.3f}; using export time {utc0_s:.3f} "
-            f"as approximate wall clock (dates may be off by session uptime)"
+            f"no UTC anchor given: the XDF timestamps (t0={t0:.3f}) are taken as Unix epoch "
+            "(wall-clock timestamps, as `synapse record` writes them)"
         )
 
     def _utc(lsl_ts: float) -> float:
@@ -319,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         "--utc0-s",
         type=float,
         default=None,
-        help="Unix epoch seconds at LSL time t0 (first sample). Without it, export time is used as approximate anchor.",
+        help="Unix epoch seconds at LSL time t0 (first sample). Required when the XDF timestamps are a local LSL clock; wall-clock timestamps (synapse record) need none.",
     )
     args = parser.parse_args(argv)
 

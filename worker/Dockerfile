@@ -15,9 +15,11 @@ COPY src ./src
 COPY sdk/python ./sdk/python
 RUN pip install --no-cache-dir -e ./sdk/python && pip install --no-cache-dir -e .
 
-# Worker code + contract.
+# Worker code + contract. contracts/schemas/ is what every result is validated against: without
+# the directory the validation used to be skipped silently.
 COPY worker ./worker
 COPY config ./config
+COPY contracts ./contracts
 
 # Entrypoint: orchestrator (Averyn) overrides --job/--file at runtime.
 # Default is a no-op import sanity check (exits 0 when the worker loads).

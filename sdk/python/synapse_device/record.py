@@ -48,6 +48,19 @@ _GATT_RAW_CHARS: dict[str, RawStream] = {
     uuid: RawStream(stream_id) for uuid, stream_id in CHAR_UUID_TO_STREAM.items()
 }
 
+# The device sends integers in the wire unit of each stream (contracts/gatt_v2.json: ECG uV,
+# ACC mg, GYRO mrad/s, MAG 0.01 uT). The XDF declares the units a person reads below (uV, mg,
+# dps, uT), so the integers are scaled to them: GYRO by 180/pi/1000, MAG by 0.01. They used to
+# be written unscaled under the display units (a gyroscope 17.45 times and a magnetometer 100
+# times off). A test compares this table with `display_per_wire` of the contract.
+DISPLAY_PER_WIRE: dict[RawStream, float] = {
+    RawStream.ECG: 1.0,
+    RawStream.PPG: 1.0,
+    RawStream.ACC: 1.0,
+    RawStream.GYRO: 180.0 / 3.141592653589793 / 1000.0,
+    RawStream.MAG: 0.01,
+}
+
 # Stream metadata: name, LSL type, channel names and units.
 STREAM_META: dict[RawStream, tuple[str, str, list[str], list[str]]] = {
     RawStream.ECG: ("ECG", "ECG", ["ecg_uv"], ["uV"]),
@@ -203,7 +216,7 @@ def _xdf_payload(
                 stamps.append(np.full(chunk.shape[0], base, dtype=np.float64))
         timestamps = np.concatenate(stamps)
 
-        data = np.concatenate(chunks).astype(np.float64)
+        data = np.concatenate(chunks).astype(np.float64) * DISPLAY_PER_WIRE[stream]
         name, type_, channels, units = STREAM_META[stream]
         payload.append(
             {

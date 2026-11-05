@@ -219,3 +219,37 @@ def test_index_json_contains_expected_keys(tmp_path: Path) -> None:
         "indexed_at",
     ):
         assert key in rec, f"missing key {key}"
+
+
+def test_the_session_id_follows_the_content_not_the_location(tmp_path: Path) -> None:
+    """The same bytes are the same session: after a copy, a move, a touch, or in another container."""
+    import os
+    import shutil
+
+    original = tmp_path / "a" / "session_001.xdf"
+    original.parent.mkdir()
+    _make_xdf(original)
+    first = index_xdf(original).session_id
+
+    moved = tmp_path / "elsewhere" / "renamed.xdf"
+    moved.parent.mkdir()
+    shutil.copy2(original, moved)
+    assert index_xdf(moved).session_id == first
+
+    os.utime(original, (1_000_000_000, 1_000_000_000))  # another mtime
+    assert index_xdf(original).session_id == first
+
+    different = tmp_path / "different.xdf"
+    _make_xdf(different, n=2000)
+    assert index_xdf(different).session_id != first
+
+
+def test_the_session_id_is_a_prefix_of_the_recorded_digest(tmp_path: Path) -> None:
+    xdf = tmp_path / "s.xdf"
+    _make_xdf(xdf)
+    rec = index_xdf(xdf)
+    assert rec.session_id == "syn-" + rec.sha256[:24]
+    fit = tmp_path / "s.fit"
+    _make_fit(fit)
+    rec = index_fit(fit)
+    assert rec.session_id == "syn-" + rec.sha256[:24]

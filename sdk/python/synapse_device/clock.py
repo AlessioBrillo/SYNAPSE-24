@@ -66,5 +66,7 @@ class PodClockModel:
             raise RuntimeError("clock model not calibrated: no sync exchange performed")
 
         ts = (pod_ts_us & 0xFFFFFFFF) + (TS_WRAP_US if wrapped else 0)
-        host_ts = ts + self.offset_us
+        # offset_us is pod MINUS host (ClockExchange.offset_us): host = pod - offset. It used to be
+        # added, which put every mapped timestamp twice the offset away from the host clock.
+        host_ts = ts - self.offset_us
         return host_ts

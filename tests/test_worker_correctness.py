@@ -313,7 +313,9 @@ def test_a_clipped_window_is_analysed_over_its_real_duration() -> None:
     ):
         source = path.read_text(encoding="utf-8")
         assert "window_duration_s=window_s" not in source, path.name
-    assert "window_duration_s=w1 - w0" in (ROOT / "worker" / "hrv_worker.py").read_text(
+    # the worker no longer asks the LF/HF-aware helper: it works from the real beat instants
+    # of the window (see test_hrv_windows below)
+    assert "_window_hrv(win_times)" in (ROOT / "worker" / "hrv_worker.py").read_text(
         encoding="utf-8"
     )
     assert "window_duration_s=win_t1 - win_t0" in (
@@ -377,3 +379,126 @@ def test_the_mapping_in_another_fields_comment_does_not_satisfy_the_check(tmp_pa
     report = ci.Report()
     ci.check_sleep_stage_semantics(report, _descriptor(), decoy, ci.SDK_FIT_MODULE)
     assert any("firmware fit_writer.h" in f for f in report.failures), report.failures
+
+
+# --- MVP-1.4 S9: HRV from the real instants of the beats ---------------------------------------------
+
+
+def _beats(rr_ms: list[float], start: float = 100.0) -> np.ndarray:
+    return start + np.concatenate([[0.0], np.cumsum(rr_ms)]) / 1000.0
+
+
+def test_two_beats_give_no_hrv_not_a_nan() -> None:
+    assert hrv_worker._window_hrv(_beats([800.0])) == {}  # one interval: no SDNN, no RMSSD
+    assert hrv_worker._window_hrv(np.array([])) == {}
+
+
+def test_a_steady_heart_gives_its_numbers() -> None:
+    hrv = hrv_worker._window_hrv(_beats([1000.0, 1010.0, 990.0, 1000.0, 1020.0, 980.0]))
+    assert hrv["mean_rr_ms"] == pytest.approx(1000.0)
+    assert hrv["hr_mean_bpm"] == pytest.approx(60.0)
+    assert 10.0 < hrv["sdnn_ms"] < 25.0
+    assert 15.0 < hrv["rmssd_ms"] < 40.0
+    assert all(np.isfinite(v) for v in hrv.values())
+
+
+def test_an_ectopic_beat_does_not_inflate_the_variability() -> None:
+    steady = [1000.0] * 9
+    with_ectopic = [1000.0, 1000.0, 1000.0, 520.0, 1480.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0]
+    clean = hrv_worker._window_hrv(_beats(steady))
+    dirty = hrv_worker._window_hrv(_beats(with_ectopic))
+    assert dirty["sdnn_ms"] == pytest.approx(clean["sdnn_ms"], abs=1.0)
+    assert dirty["rmssd_ms"] == pytest.approx(clean["rmssd_ms"], abs=1.0)
+
+
+def test_a_window_that_is_mostly_artefact_is_not_analysed() -> None:
+    assert hrv_worker._window_hrv(_beats([300.0, 2400.0, 400.0, 2300.0, 350.0, 2450.0])) == {}
+
+
+def test_a_gap_in_the_recording_is_a_long_interval_not_a_quiet_stretch() -> None:
+    # 4 clean beats, 8 s with no data, 4 more: the interval across the gap is 8000 ms
+    times = np.concatenate([_beats([1000.0] * 3), _beats([1000.0] * 3, start=111.0)])
+    hrv = hrv_worker._window_hrv(times)
+    assert hrv["mean_rr_ms"] == pytest.approx(1000.0)  # the gap interval was rejected, not averaged
+
+
+def test_the_numbers_are_json_safe() -> None:
+    import json
+
+    for rr in ([1000.0, 1000.0], [800.0, 900.0, 1000.0], [1000.0] * 12):
+        json.dumps(hrv_worker._window_hrv(_beats(rr)), allow_nan=False)
+
+
+def _xdf_with(tmp_path: Path, name: str, columns: list[np.ndarray], t: np.ndarray) -> Path:
+    from synapse24.utils import write_xdf
+
+    path = tmp_path / f"{name}.xdf"
+    data = np.stack(columns, axis=1)
+    write_xdf(
+        path,
+        streams=[
+            {
+                "data": data,
+                "timestamps": t,
+                "info": {
+                    "name": name,
+                    "type": name,
+                    "nominal_srate": 50.0,
+                    "channel_count": data.shape[1],
+                    "channel_format": "float32",
+                    "source_id": "test",
+                },
+            }
+        ],
+    )
+    return path
+
+
+def test_the_ppg_analysis_uses_the_infrared_channel(tmp_path: Path) -> None:
+    fs, seconds = 50.0, 90
+    t = np.arange(int(fs * seconds)) / fs
+    pulse = 0.5 * (1.0 - np.cos(2.0 * np.pi * t * 1.2))  # 72 bpm
+    noise = np.random.RandomState(3).normal(0.0, 1.0, t.size)
+    red = 100_000 + 2.0 * noise  # no pulse at all in this channel
+    ir = 120_000 - 6_000 * pulse  # reflective PPG: the count falls on the pulse
+    path = _xdf_with(tmp_path, "PPG", [red, ir], t)
+    windows = hrv_worker.read_xdf_hrv(path, window_s=30.0)
+    rates = [w["hr_mean_bpm"] for w in windows if w["hr_mean_bpm"] is not None]
+    assert rates, "no window was analysed: the red channel was used"
+    assert np.mean(rates) == pytest.approx(72.0, abs=4.0)
+
+
+def test_beat_times_follow_the_timestamps_across_a_gap(tmp_path: Path) -> None:
+    """Samples missing from the recording must not shift the later beats earlier in time."""
+    fs = 50.0
+    t = np.arange(int(fs * 120)) / fs
+    keep = ~((t >= 40.0) & (t < 50.0))  # a 10 s hole
+    t, pulse_t = t[keep], t[keep]
+    ir = 120_000 - 6_000 * 0.5 * (1.0 - np.cos(2.0 * np.pi * pulse_t))  # 60 bpm
+    path = _xdf_with(tmp_path, "PPG", [ir, ir], t)
+    windows = hrv_worker.read_xdf_hrv(path, window_s=30.0)
+    by_start = {round(w["window_start"] - t[0]): w for w in windows}
+    gap_window = by_start[30]  # covers 30-60 s: 10 s of it is empty
+    # 20 s of beats at 60 bpm, then the hole: the heart rate is still 60, not distorted by the gap
+    if gap_window["hr_mean_bpm"] is not None:
+        assert gap_window["hr_mean_bpm"] == pytest.approx(60.0, abs=3.0)
+    assert by_start[60]["hr_mean_bpm"] == pytest.approx(60.0, abs=3.0)
+
+
+def test_the_worker_image_carries_the_schemas_it_validates_against() -> None:
+    dockerfile = (ROOT / "worker" / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY contracts ./contracts" in dockerfile
+
+
+def test_a_missing_schema_is_reported_not_skipped_in_silence(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(hrv_worker, "_WORKER_SCHEMA_PATH", tmp_path / "absent.json")
+    hrv_worker._load_worker_schema.cache_clear()
+    try:
+        with caplog.at_level("WARNING"):
+            errors = hrv_worker._validate_payload(JobType.SQI_REPORT, {"anything": 1})
+    finally:
+        hrv_worker._load_worker_schema.cache_clear()
+    assert errors == []
+    assert "NOT validated" in caplog.text

@@ -3,7 +3,8 @@
 Scans a directory of stored XDF / FIT sessions and builds an idempotent,
 JSON-serializable index:
 
-* a stable, content-derived `session_id` (sha256 over path + size + mtime),
+* a stable, content-derived `session_id` (the first 24 hex digits of the file's sha256: the same
+  bytes are the same session wherever they sit, in a container or after a copy),
 * device serial, time window, duration,
 * per-stream metadata (name, type, sampling rate, sample count),
 * XDF validation outcome (`synapse24.utils.validate_xdf`),
@@ -108,15 +109,13 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _stable_session_id(path: Path) -> str:
-    """Deterministic session id from path + size + mtime.
+def _session_id(sha256: str) -> str:
+    """Session id from the file's content digest.
 
-    Stable across re-scans of an unchanged file (idempotent index), cheap to
-    compute (no full-content hash of potentially large XDF files).
+    It used to hash the absolute path and the mtime, so the same file got another id in a
+    container, after a copy, or after a ``touch``; the digest was computed anyway.
     """
-    stat = path.stat()
-    payload = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
-    return "syn-" + hashlib.sha256(payload.encode()).hexdigest()[:24]
+    return "syn-" + sha256[:24]
 
 
 def _iso_from_timestamp(ts: float) -> str:
@@ -279,6 +278,7 @@ def _xdf_stream_infos(streams: list[dict[str, Any]]) -> list[StreamInfo]:
 
 def index_xdf(path: Path) -> SessionRecord:
     """Index a single XDF file."""
+    digest = _sha256_file(path)
     summary = validate_xdf(path)
     streams_raw = summary.get("streams", []) or []
     streams = _xdf_stream_infos(streams_raw)
@@ -287,12 +287,12 @@ def index_xdf(path: Path) -> SessionRecord:
     # start/end times; leave those unset rather than inventing them.
     duration_s = max((s.get("duration_s") or 0.0) for s in streams_raw) if streams_raw else 0.0
     return SessionRecord(
-        session_id=_stable_session_id(path),
+        session_id=_session_id(digest),
         device_serial=_extract_device_serial_from_xdf(path),
         path=str(path.resolve()),
         format="xdf",
         size_bytes=path.stat().st_size,
-        sha256=_sha256_file(path),
+        sha256=digest,
         started_at=None,
         ended_at=None,
         duration_s=round(float(duration_s), 6),
@@ -305,6 +305,7 @@ def index_xdf(path: Path) -> SessionRecord:
 
 def index_fit(path: Path) -> SessionRecord:
     """Index a single FIT file: file_id serial/time_created plus record count."""
+    digest = _sha256_file(path)
     valid = _validate_fit_light(path)
     serial, time_created_unix = _parse_fit_file_id(path)
     device_serial = f"SYN-{serial:06d}" if serial is not None else path.stem.upper()
@@ -345,12 +346,12 @@ def index_fit(path: Path) -> SessionRecord:
         started_at = datetime.fromtimestamp(time_created_unix, tz=UTC).isoformat()
 
     return SessionRecord(
-        session_id=_stable_session_id(path),
+        session_id=_session_id(digest),
         device_serial=device_serial,
         path=str(path.resolve()),
         format="fit",
         size_bytes=path.stat().st_size,
-        sha256=_sha256_file(path),
+        sha256=digest,
         started_at=started_at,
         ended_at=ended_at,
         duration_s=duration_s,

@@ -144,6 +144,13 @@ class PodClockModel:
     rtt_budget_us: float = DEFAULT_RTT_BUDGET_US
     residual_outlier_us: float = DEFAULT_RESIDUAL_OUTLIER_US
     exchanges: deque[ClockExchange] = field(default_factory=deque)
+    # The fit is a pure-Python regression over up to max_samples exchanges; the live path asks for
+    # it once per sample (hundreds of times a second) while the exchanges change once a minute.
+    # The cache is keyed by a generation counter bumped by every recorded exchange.
+    _generation: int = field(default=0, init=False, repr=False, compare=False)
+    _fit_cache: tuple[tuple[int, int], PodClockFit | None] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def n_exchanges(self) -> int:
@@ -175,9 +182,19 @@ class PodClockModel:
         self.exchanges.append(exchange)
         while len(self.exchanges) > self.max_samples:
             self.exchanges.popleft()
+        self._generation += 1
         return True
 
     def fit(self) -> PodClockFit | None:
+        """The fit of the recorded exchanges, recomputed only when an exchange was recorded."""
+        key = (self._generation, len(self.exchanges))
+        if self._fit_cache is not None and self._fit_cache[0] == key:
+            return self._fit_cache[1]
+        result = self._compute_fit()
+        self._fit_cache = (key, result)
+        return result
+
+    def _compute_fit(self) -> PodClockFit | None:
         """Fit host(LSL) time as a linear function of pod time.
 
         Returns:
