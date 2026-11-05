@@ -1,4 +1,5 @@
 #include "ppg_max30102.h"
+#include "ppg_fifo_batch.h"
 #include "esp_log.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
@@ -38,7 +39,7 @@ typedef struct {
     ppg_max30102_config_t config;
     bool initialized;
     bool fifo_enabled;
-    uint32_t skipped_samples;  // FIFO samples superseded by a newer one before they were read
+    uint32_t skipped_samples;  // FIFO samples lost: overwritten while the poll stalled, or a failed burst read
 } ppg_max30102_ctx_t;
 
 static ppg_max30102_ctx_t s_ctx = {};
@@ -161,15 +162,46 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
     return ESP_OK;
 }
 
+// One poll can find several samples in the FIFO (the sensor and the poll run on different
+// clocks). All of them are forwarded: the burst is read once, kept here, and handed out one
+// per read() call; the scheduler keeps calling while ppg_max30102_has_more() says so. The
+// timestamps are spaced by the sensor's period with the newest at the poll time
+// (ppg_fifo_batch.h) instead of every sample carrying the poll time.
+static float s_batch_red[PPG_BATCH_MAX];
+static float s_batch_ir[PPG_BATCH_MAX];
+static int64_t s_batch_ts[PPG_BATCH_MAX];
+static uint8_t s_batch_n = 0;
+static uint8_t s_batch_next = 0;
+
+static void ppg_deliver(sensor_sample_t* sample, uint8_t i) {
+    sample->data.ppg.red = s_batch_red[i];
+    sample->data.ppg.ir = s_batch_ir[i];
+    sample->data.ppg.green = 0.0f;
+    sample->timestamp_us = s_batch_ts[i];
+    sample->lsl_timestamp_us = s_batch_ts[i];
+
+    // Process PPG SQI for motion gate (Architecture.md §74)
+    ppg_sqi_result_t sqi_result;
+    ppg_sqi_process_sample(s_batch_red[i], s_batch_ir[i], s_batch_ts[i], &sqi_result);
+}
+
+bool ppg_max30102_has_more(void* user_ctx) {
+    (void)user_ctx;
+    return s_batch_next < s_batch_n;
+}
+
 esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
     (void)user_ctx;
 
     if (!s_ctx.initialized || !s_ctx.fifo_enabled) return ESP_ERR_INVALID_STATE;
 
-    // The sensor runs on its own clock and the poll on another: drain what is
-    // buffered and keep the newest sample, so the FIFO cannot lag or overflow.
-    // ponytail: older samples in a burst are counted, not forwarded (one sample
-    // per poll); read them all into the ring if the poll jitter ever matters.
+    if (s_batch_next < s_batch_n) {  // the rest of a burst already read
+        ppg_deliver(sample, s_batch_next++);
+        return ESP_OK;
+    }
+    s_batch_n = 0;
+    s_batch_next = 0;
+
     uint8_t wr = 0, rd = 0;
     CHK(max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr));
     CHK(max30102_read_reg(MAX30102_REG_FIFO_RD_PTR, &rd));
@@ -180,29 +212,30 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
         uint8_t ovf = 0;
         CHK(max30102_read_reg(MAX30102_REG_OVF_COUNTER, &ovf));
         if (ovf == 0) return ESP_ERR_NOT_FOUND;  // nothing new since the last poll
-        avail = 32;
+        // The counter saturates at 15: at least that many samples were overwritten.
+        s_ctx.skipped_samples += ovf;
+        avail = PPG_BATCH_MAX;
     }
+    if (avail > PPG_BATCH_MAX) avail = PPG_BATCH_MAX;
 
+    const int64_t poll_us = sample->timestamp_us;
+    const uint32_t period_us = ppg_period_us_from_code(s_ctx.config.sample_rate);
     uint8_t fifo_data[6];
     for (uint8_t i = 0; i < avail; i++) {
-        CHK(max30102_read_fifo(fifo_data, 6));
+        esp_err_t rc = max30102_read_fifo(fifo_data, 6);
+        if (rc != ESP_OK) {
+            // The samples already taken out of the FIFO are gone: count them, do not hide them.
+            s_ctx.skipped_samples += (uint32_t)(avail - i);
+            return rc;
+        }
+        uint32_t red = (((uint32_t)fifo_data[0] << 16) | ((uint32_t)fifo_data[1] << 8) | fifo_data[2]) & 0x3FFFF;
+        uint32_t ir = (((uint32_t)fifo_data[3] << 16) | ((uint32_t)fifo_data[4] << 8) | fifo_data[5]) & 0x3FFFF;
+        s_batch_red[i] = (float)red;
+        s_batch_ir[i] = (float)ir;
+        s_batch_ts[i] = ppg_batch_timestamp_us(poll_us, avail, i, period_us);
     }
-    s_ctx.skipped_samples += (uint32_t)(avail - 1);
-
-    uint32_t red = ((uint32_t)fifo_data[0] << 16) | ((uint32_t)fifo_data[1] << 8) | fifo_data[2];
-    uint32_t ir = ((uint32_t)fifo_data[3] << 16) | ((uint32_t)fifo_data[4] << 8) | fifo_data[5];
-
-    red &= 0x3FFFF;
-    ir &= 0x3FFFF;
-
-    sample->data.ppg.red = (float)red;
-    sample->data.ppg.ir = (float)ir;
-    sample->data.ppg.green = 0.0f;
-
-    // Process PPG SQI for motion gate (Architecture.md §74)
-    ppg_sqi_result_t sqi_result;
-    ppg_sqi_process_sample((float)red, (float)ir, sample->timestamp_us, &sqi_result);
-
+    s_batch_n = avail;
+    ppg_deliver(sample, s_batch_next++);
     return ESP_OK;
 }
 

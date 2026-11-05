@@ -254,4 +254,4 @@ def test_the_imu_gyro_divider_uses_the_gyro_base_rate() -> None:
 def test_the_ppg_tells_an_empty_fifo_from_a_wrapped_one() -> None:
     code = _strip_comments(_src(PPG))
     assert "MAX30102_REG_OVF_COUNTER, &ovf" in code
-    assert "avail = 32;" in code
+    assert "avail = PPG_BATCH_MAX;" in code  # a wrapped FIFO holds all 32

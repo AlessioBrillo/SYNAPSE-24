@@ -37,7 +37,11 @@ esp_err_t ppg_max30102_deinit(void* user_ctx);
 esp_err_t ppg_max30102_enable_fifo(void* user_ctx);
 esp_err_t ppg_max30102_disable_fifo(void* user_ctx);
 
-// Samples superseded by a newer one before they could be forwarded (poll slower than the sensor).
+// More samples of the burst read by the last poll are waiting: call read() again (scheduler hook).
+bool ppg_max30102_has_more(void* user_ctx);
+
+// FIFO samples lost: overwritten while the poll stalled (lower bound), or taken out of the FIFO
+// by a burst read that failed half way.
 uint32_t ppg_max30102_skipped_samples(void);
 
 // Get latest PPG SQI result for motion gate (Architecture.md §74)

@@ -125,6 +125,12 @@ uint8_t synapse_sensors_health_mask(void);
 /** Reads that failed (not counting "no new sample yet"), summed over the sensors. */
 uint32_t synapse_sensors_read_errors(void);
 
+/** PPG FIFO samples lost (overwritten, or lost in a failed burst read). */
+uint32_t synapse_sensors_ppg_skipped(void);
+
+/** Samples lost because a scheduler ring or queue was full, summed over the sensors. */
+uint32_t synapse_sensors_dropped_samples(void);
+
 /**
  * @brief Get sensor scheduler stats (sample counts, dropped samples)
  * @param[out] sample_counts Array of 4 uint32_t (ECG, PPG, IMU, EEG)

@@ -165,6 +165,18 @@ uint8_t synapse_sensors_health_mask(void) {
     return s_sensor_health;
 }
 
+uint32_t synapse_sensors_ppg_skipped(void) {
+    return ppg_max30102_skipped_samples();
+}
+
+uint32_t synapse_sensors_dropped_samples(void) {
+    uint32_t total = 0;
+    for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
+        total += g_sensors.scheduler.dropped_samples[i];
+    }
+    return total;
+}
+
 uint32_t synapse_sensors_read_errors(void) {
     uint32_t total = 0;
     for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
@@ -222,6 +234,7 @@ esp_err_t synapse_sensors_init(void) {
         .sampling_rate_hz = synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate),
         .init = ppg_init_wrap,
         .read = ppg_read_wrap,
+        .has_more = ppg_max30102_has_more,
         .deinit = ppg_deinit_wrap,
         .user_ctx = &g_sensors.ppg_config,
         .task_handle = NULL

@@ -72,6 +72,9 @@ typedef struct {
 typedef esp_err_t (*sensor_read_fn_t)(sensor_sample_t* sample, void* user_ctx);
 typedef void (*sensor_init_fn_t)(void* user_ctx);
 typedef void (*sensor_deinit_fn_t)(void* user_ctx);
+// Optional: true when the last read() left more ready samples (a FIFO burst), so the task
+// reads again at once instead of waiting for the next period.
+typedef bool (*sensor_has_more_fn_t)(void* user_ctx);
 
 typedef struct {
     sensor_type_t type;
@@ -82,6 +85,7 @@ typedef struct {
     sensor_deinit_fn_t deinit;
     void* user_ctx;
     TaskHandle_t* task_handle;
+    sensor_has_more_fn_t has_more;  // optional, see above
 } sensor_config_t;
 
 esp_err_t sensor_scheduler_init(sensor_scheduler_t* scheduler, QueueHandle_t ble_tx_queue);

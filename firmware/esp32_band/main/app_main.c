@@ -7,6 +7,8 @@
  */
 
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -60,6 +62,22 @@ static EventGroupHandle_t s_system_events;
 // (sensor health, counters, whether the raw streams run) is provided from here.
 static bool s_transmitting = true;
 
+// The phone sends the time on every connection (control point set_time): the band has no
+// RTC and no network. Everything that needs a date (the night window, FIT timestamps)
+// waits for it.
+static void on_set_time(uint64_t epoch_ms)
+{
+    struct timeval tv = {
+        .tv_sec = (time_t)(epoch_ms / 1000ULL),
+        .tv_usec = (suseconds_t)((epoch_ms % 1000ULL) * 1000ULL),
+    };
+    if (settimeofday(&tv, NULL) == 0) {
+        ESP_LOGI(TAG, "wall clock set from the phone: %llu ms", (unsigned long long)epoch_ms);
+    } else {
+        ESP_LOGW(TAG, "settimeofday failed");
+    }
+}
+
 static void on_transmit_request(bool on)
 {
     s_transmitting = on;
@@ -73,13 +91,15 @@ static void fill_status(synapse_status_v2_t *st)
     st->flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
     st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
-    st->ring_overflow = synapse_research_service_ring_overflow();
+    // Both rings: the research service's and the scheduler's (a sample the scheduler could not
+    // store never reached the research service, and used to vanish without a trace).
+    st->ring_overflow = synapse_research_service_ring_overflow() + synapse_sensors_dropped_samples();
     st->stale_samples = synapse_research_service_stale_samples();
     st->dropped_frames = synapse_research_service_dropped_frames();
     st->read_errors = synapse_sensors_read_errors();
     st->fw_build = 0;  // ponytail: no build hash is embedded yet; 0 = unknown
-    st->ppg_skipped = 0;    // ponytail: not counted yet (the PPG driver keeps only the newest FIFO sample)
-    st->power_dropped = 0;  // ponytail: not counted yet
+    st->ppg_skipped = synapse_sensors_ppg_skipped();
+    st->power_dropped = synapse_research_service_power_dropped();
 }
 
 // Consumer feature stream (Averyn integration).
@@ -162,6 +182,7 @@ void app_main(void)
 
     synapse_ble_gatt_set_status_provider(fill_status);
     synapse_ble_gatt_set_transmit_handler(on_transmit_request);
+    synapse_ble_gatt_set_time_handler(on_set_time);
 
     // 8a. Device Information: serial derived from the public MAC so Averyn can
     //     bind device -> owner (serial printed on box/QR). HW rev from Kconfig.

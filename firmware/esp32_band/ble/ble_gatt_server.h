@@ -294,6 +294,10 @@ void synapse_ble_gatt_set_status_provider(synapse_ble_status_provider_t provider
 typedef void (*synapse_ble_transmit_handler_t)(bool on);
 void synapse_ble_gatt_set_transmit_handler(synapse_ble_transmit_handler_t handler);
 
+/** The phone gave the band its wall clock (control point set_time): Unix epoch in ms. */
+typedef void (*synapse_ble_time_handler_t)(uint64_t epoch_ms);
+void synapse_ble_gatt_set_time_handler(synapse_ble_time_handler_t handler);
+
 /**
  * @brief Send provisioning notification
  * @param packet Provisioning packet to send

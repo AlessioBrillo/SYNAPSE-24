@@ -85,6 +85,7 @@ static uint16_t s_feat2_seq = 0;
 static uint8_t s_feat2_rate_hz = SYNAPSE_CONTRACT_V2_FEATURE_RATE_HZ;
 static synapse_ble_status_provider_t s_status_provider = NULL;
 static synapse_ble_transmit_handler_t s_transmit_handler = NULL;
+static synapse_ble_time_handler_t s_time_handler = NULL;
 // The 100 default in s_batt_level is a placeholder, not a measurement: v2 reports
 // the level only once the power module has actually provided one.
 static bool s_batt_known = false;
@@ -139,6 +140,11 @@ static void ctl_set_transmitting(bool on, void *ctx) {
     if (s_transmit_handler != NULL) s_transmit_handler(on);
 }
 
+static void ctl_set_time(uint64_t epoch_ms, void *ctx) {
+    (void)ctx;
+    if (s_time_handler != NULL) s_time_handler(epoch_ms);  // >= 2020, checked by the parser
+}
+
 static void ctl_set_feature_rate(uint8_t hz, void *ctx) {
     (void)ctx;
     s_feat2_rate_hz = hz;  // validated 1..SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ by the parser
@@ -147,7 +153,7 @@ static void ctl_set_feature_rate(uint8_t hz, void *ctx) {
 static int ctl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
-    uint8_t req[8];
+    uint8_t req[16];  // the longest write is set_time: 1 + 8 bytes
     uint16_t len = 0;
     if (ble_hs_mbuf_to_flat(ctxt->om, req, sizeof(req), &len) != 0) {
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -155,6 +161,7 @@ static int ctl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
     synapse_control_ops_t ops = {
         .set_transmitting = ctl_set_transmitting,
         .set_feature_rate = ctl_set_feature_rate,
+        .set_time = ctl_set_time,
         .ctx = NULL,
     };
     int err = synapse_control_apply(req, len, &ops);
@@ -896,4 +903,8 @@ void synapse_ble_gatt_set_status_provider(synapse_ble_status_provider_t provider
 
 void synapse_ble_gatt_set_transmit_handler(synapse_ble_transmit_handler_t handler) {
     s_transmit_handler = handler;
+}
+
+void synapse_ble_gatt_set_time_handler(synapse_ble_time_handler_t handler) {
+    s_time_handler = handler;
 }

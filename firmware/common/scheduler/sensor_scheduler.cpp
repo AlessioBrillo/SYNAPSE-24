@@ -355,23 +355,32 @@ void sensor_task_fn(void* arg) {
             if (period_ticks == 0) period_ticks = 1;
         }
 
-        sample.timestamp_us = get_time_us();
-        sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
+        // One read per period, plus the rest of a burst when the driver reports one (the PPG FIFO).
+        // The budget bounds the time spent here if a driver keeps saying yes.
+        int budget = 32;
+        do {
+            sample.timestamp_us = get_time_us();
+            sample.lsl_timestamp_us = sample.timestamp_us;  // Initially same, corrected by sync markers
 
-        // A failed or empty read must not become a sample: the previous values
-        // would be re-sent with a fresh timestamp (or zeros for a dead sensor).
-        if (config->read) {
-            esp_err_t rd = config->read(&sample, config->user_ctx);
-            if (rd != ESP_OK) {
-                if (rd != ESP_ERR_NOT_FOUND) {  // NOT_FOUND = nothing new to report
-                    scheduler->read_errors[config->type]++;
+            // A failed or empty read must not become a sample: the previous values
+            // would be re-sent with a fresh timestamp (or zeros for a dead sensor).
+            if (config->read) {
+                esp_err_t rd = config->read(&sample, config->user_ctx);
+                if (rd != ESP_OK) {
+                    if (rd != ESP_ERR_NOT_FOUND) {  // NOT_FOUND = nothing new to report
+                        scheduler->read_errors[config->type]++;
+                    }
+                    break;
                 }
-                continue;
             }
-        }
-        sample.sequence = scheduler->sample_counts[config->type]++;
+            sample.sequence = scheduler->sample_counts[config->type]++;
 
-        sensor_ring_buffer_push(&scheduler->buffers[config->type], &sample);
+            // A full ring loses the sample: count it (it used to vanish without a trace).
+            if (!sensor_ring_buffer_push(&scheduler->buffers[config->type], &sample)) {
+                scheduler->dropped_samples[config->type]++;
+            }
+        } while (config->has_more && config->has_more(config->user_ctx) && --budget > 0);
+
     }
 }
 
