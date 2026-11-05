@@ -172,3 +172,18 @@ def test_a_real_qrs_fits_the_16_bit_microvolt_range_at_that_gain() -> None:
     assert electrode_uv < 32767
     old_uv = adc_swing_mv / 6.0 * 1000.0
     assert old_uv > 32767, "the regression this test exists for"
+
+
+# --- S5: when RR and HRV may be published -----------------------------------------------------------------
+
+
+def test_rr_is_published_only_from_a_fresh_clean_reading(fm: ctypes.CDLL) -> None:
+    fm.host_rr_publishable.argtypes = [ctypes.c_int, ctypes.c_float, ctypes.c_float]
+    fm.host_rr_publishable.restype = ctypes.c_int
+    assert fm.host_rr_publishable(1, 0.8, 0.1) == 1
+    assert fm.host_rr_publishable(1, 0.5, 0.3) == 1  # the limits are inclusive
+    assert fm.host_rr_publishable(0, 0.9, 0.0) == 0  # a stale reading
+    assert fm.host_rr_publishable(1, 0.49, 0.0) == 0  # signal too poor
+    assert fm.host_rr_publishable(1, 0.9, 0.31) == 0  # too much motion
+    assert fm.host_rr_publishable(1, float("nan"), 0.0) == 0
+    assert fm.host_rr_publishable(1, 0.9, float("nan")) == 0

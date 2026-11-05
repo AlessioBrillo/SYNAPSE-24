@@ -44,6 +44,7 @@
 #include "synapse_config.h"
 #include "synapse_power.h"
 #include "synapse_feature_map.h"
+#include "synapse_rr.h"
 
 static const char *TAG = "SYNAPSE_BAND";
 
@@ -57,6 +58,10 @@ static synapse_wired_sync_t s_wired_sync = {0};
 #define ACQUISITION_RUNNING_BIT BIT3
 
 static EventGroupHandle_t s_system_events;
+
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+static synapse_rr_t s_rr;  // beat detector fed from the infrared PPG samples
+#endif
 
 // Consumer contract v2 glue. The BLE layer owns the wire format; what the band knows
 // (sensor health, counters, whether the raw streams run) is provided from here.
@@ -273,6 +278,9 @@ void app_main(void)
 #endif
 
     // 14. Main loop - runs acquisition FSM and handles events
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+    synapse_rr_init(&s_rr);
+#endif
     ESP_LOGI(TAG, "Entering main loop");
     while (1) {
         // Drain the sensor queue into the on-device processors AND the raw
@@ -281,6 +289,11 @@ void app_main(void)
         synapse_sensor_sample_t sample;
         for (int n = 0; n < 64 && synapse_sensors_get_sample(&sample) == ESP_OK; n++) {
             synapse_signal_quality_process(&sample.base);
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+            if (sample.base.type == SENSOR_TYPE_PPG) {
+                (void)synapse_rr_push(&s_rr, sample.base.data.ppg.ir, sample.base.timestamp_us);
+            }
+#endif
             synapse_research_service_submit(&sample.base);
         }
 
@@ -348,6 +361,28 @@ void app_main(void)
             if (stress.valid) v2.stress_level = stress_level;  // otherwise it stays NA (null)
             v2.sensor_health = synapse_sensors_health_mask();
             if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+            // RR and HRV leave only with a frame that really goes out (the intervals are consumed
+            // when reported) and only from a fresh, clean reading: otherwise they stay NA.
+            if (synapse_ble_gatt_feature_v2_due()) {
+                uint16_t rr_units[4];
+                const uint32_t n_rr = synapse_rr_take(&s_rr, rr_units, 4);
+                const int publishable = synapse_rr_publishable(
+                    ppg_sqi != SYNAPSE_NA_U8, ppg.sqi, ppg.motion_artifact_prob);
+                if (publishable && n_rr > 0) {
+                    const uint32_t held = n_rr < 4 ? n_rr : 4;
+                    v2.rr_last = rr_units[held - 1];
+                    // How many intervals happened since the last frame: more than one means the
+                    // others were not carried, and a consumer must not pretend they were.
+                    v2.rr_count = (uint8_t)(n_rr < 254 ? n_rr : 254);
+                }
+                float rmssd = 0.0f, sdnn = 0.0f;
+                if (publishable && synapse_rr_hrv(&s_rr, &rmssd, &sdnn)) {
+                    v2.rmssd_ms = (uint16_t)(rmssd < 65534.0f ? rmssd + 0.5f : 65534.0f);
+                    v2.sdnn_ms = (uint16_t)(sdnn < 65534.0f ? sdnn + 0.5f : 65534.0f);
+                }
+            }
+#endif
             (void)synapse_ble_gatt_push_feature_v2(&v2);
             (void)synapse_ble_gatt_push_status();
         }
