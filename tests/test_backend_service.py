@@ -7,6 +7,7 @@ app wiring is checked separately (importorskip fastapi).
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -346,3 +347,15 @@ def test_file_sha256_is_cached(svc: DataPlaneService, tmp_path: Path) -> None:
     second = svc.file_sha256(xdf)
     assert first == second
     assert first == hashlib.sha256(xdf.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    ["C:/Windows/win.ini", r"C:\Windows\win.ini", "D:data.fit", "//host/share/x.fit"],
+)
+@pytest.mark.skipif(
+    os.name == "nt", reason="a drive path is native on Windows; the roots confine it"
+)
+def test_a_drive_or_unc_path_is_refused_off_windows(svc: DataPlaneService, candidate: str) -> None:
+    """On Linux ``C:/Windows/win.ini`` is a harmless relative name: only an explicit check refuses it."""
+    assert svc.resolve_allowed_path(candidate) is None

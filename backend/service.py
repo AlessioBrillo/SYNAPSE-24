@@ -32,7 +32,7 @@ import logging
 import os
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from pydantic import BaseModel
@@ -243,6 +243,12 @@ class DataPlaneService:
         never opened by this method.
         """
         if file_path is None:
+            return None
+        # Off Windows, a drive letter or a UNC prefix ("C:/Windows/win.ini") is not an absolute path
+        # but an innocent-looking relative name that would be looked up inside the sessions dir.
+        # Nothing legitimate names a drive there: refuse it. (On Windows it is native and the
+        # roots below confine it.)
+        if os.name != "nt" and PureWindowsPath(str(file_path)).drive:
             return None
         try:
             raw = Path(file_path).expanduser()
