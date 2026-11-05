@@ -91,7 +91,6 @@ def test_the_security_statements_hold_in_the_application() -> None:
     """The document says the 501 stubs are behind the token, and that a query token is refused."""
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
-    from starlette.websockets import WebSocketDisconnect
 
     from backend import main as main_module
     from backend.main import app
@@ -99,7 +98,6 @@ def test_the_security_statements_hold_in_the_application() -> None:
     text = _text()
     assert "401" in text
     assert "prima di arrivare al 501" in text
-    assert "token in query (`?token=`) è rifiutato" in text
     import os
 
     os.environ["SYNAPSE_API_TOKEN"] = "doc-check"
@@ -111,11 +109,6 @@ def test_the_security_statements_hold_in_the_application() -> None:
             client.get("/api/live/pod-1", headers={"Authorization": "Bearer doc-check"}).status_code
             == 501
         )
-        with (
-            pytest.raises(WebSocketDisconnect),
-            client.websocket_connect("/ws/live?token=doc-check"),
-        ):
-            pass
     finally:
         os.environ.pop("SYNAPSE_API_TOKEN", None)
         main_module._reset_services()

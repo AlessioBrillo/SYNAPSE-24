@@ -55,15 +55,13 @@ Il Data Plane è **local-only**: il compose lo pubblica su `127.0.0.1:8000`, e a
 
 ### Bearer token (opzionale)
 
-Se `SYNAPSE_API_TOKEN` è impostata, **ogni** route `/api/*` richiede `Authorization: Bearer <token>`; mancante o errato = HTTP 401. `/api/health` e la pagina `/live` restano aperte (non contengono dati). Senza token l'API è aperta per lo sviluppo locale (WARNING in avvio).
+Se `SYNAPSE_API_TOKEN` è impostata, **ogni** route `/api/*` richiede `Authorization: Bearer <token>`; mancante o errato = HTTP 401. `/api/health` resta aperta (non contiene dati). Senza token l'API è aperta per lo sviluppo locale (WARNING in avvio).
 
 Questo token è un controllo d'accesso a uno strumento locale. **Non è** la credenziale che Averyn userebbe per un utente (ADR-0011: nessun token condiviso che possa interrogare i dati di qualunque utente; per L3 Averyn conia una credenziale per job).
 
-### WebSocket `/ws/live`
+### Nessun viewer in questo repository
 
-Un browser non può impostare un header `Authorization` su un WebSocket e un token in query string finisce nei log dei proxy. Il token viaggia quindi nel **sottoprotocollo**: `new WebSocket(url, ["bearer", token])` (accettato anche con altri protocolli nella lista); l'header resta valido per i client non-browser. **Il token in query (`?token=`) è rifiutato.** Una connessione non autorizzata è chiusa con codice 1008.
-
-Il primo messaggio è `hello` (sorgente, `demo`, metadati degli stream dal contratto), poi `status_update` ogni 2 s e, se c'è una sorgente, `frame` (inviluppo min/max), `loss` (con motivo: `sequence_gap`, `device_dropped`) ed `error`. La sorgente si sceglie con `SYNAPSE_LIVE_SOURCE`: vuoto/`off` (nessun dato), `synthetic` (**demo**, dichiarata tale) o `ble:<indirizzo>`.
+Il viewer locale (`/live`, `/ws/live`) è stato **rimosso**: tutta la visualizzazione e l'analisi visiva di ciò che la band misura vive in Averyn ([ADR-0030](https://github.com/AlessioBrillo/averyn/blob/main/docs/adr/0030-synapse-contract-v2-1-and-raw-signals.md) lì). Qui restano firmware, contratti, vettori e test; l'API HTTP sotto è uno strumento di test locale.
 
 ### CORS
 
@@ -103,7 +101,7 @@ Tutti gli istanti `window_start` sono **secondi Unix**, qualunque sia il file di
 
 Restituito da `GET /sessions/{id}/report`: `report_version` (`"session-report-v1"`), `session_id`, `device_serial`, `format`, `window`, `streams[]` (nome, tipo, frequenza, campioni, unità), `decimation`, `series` (in v1 **vuota**: le forme d'onda restano nel file FIT/XDF), `metrics`, `events[]`, `quality`, `raw_ref` (`path` relativo, `sha256`, `size_bytes`). Il report **non include ancora i risultati dei job**: `metrics` e `events` derivati dai job sono vuoti finché non si decide dove memorizzarli.
 
-Le waveform complete non sono embeddate; per vederle dal vivo c'è il viewer locale (`/live`).
+Le waveform complete non sono embeddate: si vedono in Averyn (livello L1R), non qui.
 
 ## Chi produce cosa
 
