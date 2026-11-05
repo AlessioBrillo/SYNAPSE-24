@@ -57,7 +57,7 @@ def test_export_uses_utc_anchor_not_1970(tmp_path):
     """Con un'ancora UTC, i record FIT hanno date coerenti (non 1970)."""
     from synapse24.export import export_session_fit
 
-    lsl_t0 = 1_700_000_000.0  # LSL tempo arbitrario (non Unix epoch)
+    lsl_t0 = 12_345.0  # LSL tempo arbitrario (non Unix epoch)
     utc0 = 1_735_689_600.0  # 2025-01-01T00:00:00Z corrispondente a lsl_t0
     xdf = tmp_path / "session.xdf"
     _write_ecg_xdf(xdf, lsl_t0)
@@ -86,25 +86,36 @@ def test_export_uses_utc_anchor_not_1970(tmp_path):
     assert tc >= datetime.fromtimestamp(utc0, tz=UTC)
 
 
-def test_export_without_utc0_does_not_produce_1970(tmp_path):
-    """Senza ancora UTC si usa time.time() come approssimazione (mai 1970)."""
+def test_a_local_lsl_clock_without_an_anchor_is_refused_not_dated_with_the_export_time(tmp_path):
+    """Un orologio LSL locale non e' una data: senza ancora l'export si ferma (prima usava time.time())."""
+    import pytest
+
+    from synapse24.export import ExportError, export_session_fit
+
+    xdf = tmp_path / "session.xdf"
+    _write_ecg_xdf(xdf, 12_345.0)
+    out = tmp_path / "session.fit"
+    with pytest.raises(ExportError, match="local LSL clock"):
+        export_session_fit(xdf, out, "SYN-000123", window_s=30.0)
+    assert not out.exists(), "nothing is written when the date is unknown"
+
+
+def test_wall_clock_timestamps_are_taken_as_unix_epoch_and_say_so(tmp_path):
+    """Le registrazioni di `synapse record` hanno gia' timestamp Unix: nessuna ancora, nessun errore."""
     from synapse24.export import export_session_fit
 
-    lsl_t0 = 1_700_000_000.0
+    wall_t0 = 1_735_689_600.0  # 2025-01-01T00:00:00Z
     xdf = tmp_path / "session.xdf"
-    _write_ecg_xdf(xdf, lsl_t0)
-
+    _write_ecg_xdf(xdf, wall_t0)
     out = tmp_path / "session.fit"
     summary = export_session_fit(xdf, out, "SYN-000123", window_s=30.0)
     assert summary.n_records == 2
     assert len(summary.warnings) == 1
-    assert "UTC anchor" in summary.warnings[0]
+    assert "taken as Unix epoch" in summary.warnings[0]
 
     with out.open("rb") as handle:
         frames = list(fitdecode.FitReader(handle))
-    file_ids = _data_messages(frames, "file_id")
-    assert len(file_ids) == 1
-    tc = file_ids[0].get_value("time_created")
+    tc = _data_messages(frames, "file_id")[0].get_value("time_created")
     assert isinstance(tc, datetime)
-    # Deve essere una data recente, non il 1970.
-    assert tc.timestamp() > 1_700_000_000
+    assert tc >= datetime.fromtimestamp(wall_t0, tz=UTC)  # the recording's own date
+    assert tc.timestamp() < wall_t0 + 120

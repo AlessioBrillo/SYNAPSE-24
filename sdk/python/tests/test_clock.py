@@ -22,8 +22,18 @@ def test_single_exchange_offset():
         ClockExchange(host_send_us=100, pod_recv_us=200, pod_send_us=210, host_recv_us=300)
     )
     assert model.calibrated
-    # offset = ((200-100)+(210-300))//2 = 5
-    assert model.map(200) == 205
+    # offset (pod - host) = ((200-100)+(210-300))//2 = 5, so host = pod - 5
+    assert model.map(200) == 195
+
+
+def test_a_pod_ahead_of_the_host_maps_back_to_the_host_clock():
+    """Pod time = host time + 1000: the pod reading 5000 is the host reading 4000."""
+    model = PodClockModel()
+    model.add_exchange(
+        ClockExchange(host_send_us=0, pod_recv_us=1010, pod_send_us=1020, host_recv_us=30)
+    )
+    assert model.offset_us == 1000
+    assert model.map(5000) == 4000
 
 
 def test_wrap_adds_full_cycle():

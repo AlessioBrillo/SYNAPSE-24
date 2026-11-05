@@ -266,7 +266,9 @@ def test_export_produces_a_file_a_standard_parser_reads(tmp_path: Path) -> None:
     )
 
     out = tmp_path / "session.fit"
-    summary = export_session_fit(tmp_path / "session.xdf", out, "SYN-000123", window_s=30.0)
+    summary = export_session_fit(
+        tmp_path / "session.xdf", out, "SYN-000123", window_s=30.0, utc0_s=1_735_689_600.0
+    )
     assert summary.n_records == 2
     assert "ECG" in summary.primary_stream
 

@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
 from synapse_device.fit import DEV_FIELDS, FIT_EPOCH, read_fit
 
-from synapse24.signal_quality.ecg import compute_hrv_metrics, detect_r_peaks_neurokit
+from synapse24.signal_quality.ecg import detect_r_peaks_neurokit
 from synapse24.signal_quality.ppg import detect_ppg_peaks
 from synapse24.utils.windows import window_bounds
 
@@ -74,8 +74,19 @@ _WORKER_SCHEMA_PATH = (
 
 
 @lru_cache(maxsize=1)
+def _warn_no_jsonschema() -> None:
+    logging.getLogger(__name__).warning(
+        "jsonschema is not installed: worker results are NOT validated"
+    )
+
+
+@lru_cache(maxsize=1)
 def _load_worker_schema() -> dict | None:
     if not _WORKER_SCHEMA_PATH.is_file():
+        # Results would go out unvalidated: say so, once, instead of skipping in silence.
+        logging.getLogger(__name__).warning(
+            "payload schema not found (%s): worker results are NOT validated", _WORKER_SCHEMA_PATH
+        )
         return None
     schema = json.loads(_WORKER_SCHEMA_PATH.read_text(encoding="utf-8"))
     return schema if isinstance(schema, dict) else None
@@ -83,7 +94,10 @@ def _load_worker_schema() -> dict | None:
 
 def _validate_payload(computation_type: JobType, payload: dict | None) -> list[str]:
     """Return validation errors (empty when payload conforms to the schema)."""
-    if not _HAS_JSONSCHEMA or payload is None:
+    if payload is None:
+        return []
+    if not _HAS_JSONSCHEMA:
+        _warn_no_jsonschema()
         return []
     schema = _load_worker_schema()
     if schema is None:
@@ -232,8 +246,14 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     _name, _type, ts, series = selected
     sig = series
     if sig.ndim > 1:
-        sig = sig[:, 0]
+        # The band's PPG is [red, IR]: the infrared channel carries the pulse best, the first
+        # channel of anything else is the signal (ECG is single-channel).
+        sig = sig[:, 1] if kind == "PPG" and sig.shape[1] >= 2 else sig[:, 0]
     sig = sig.astype(np.float64)
+    if kind == "PPG":
+        # Reflective PPG: the ADC count FALLS when the blood volume rises (more light absorbed).
+        # Inverted, the systolic peaks point up, which is what the peak detector looks for.
+        sig = -(sig - float(np.mean(sig)))
     if len(ts) < 2:
         return []
 
@@ -257,15 +277,14 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
         r_peaks = np.array([], dtype=np.int64)
 
     t0, t1 = float(ts[0]), float(ts[-1])
-    # Absolute time of every R-peak (the peak index is a position in the
-    # signal, not an instant: mixing the two produced empty windows).
-    peak_times = t0 + (r_peaks / fs) if len(r_peaks) else np.array([], dtype=np.float64)
+    # Absolute time of every beat, read from the stream's own timestamps. `t0 + index / fs`
+    # assumed no sample was ever lost: after a gap every later beat was placed too early.
+    peak_times = ts[r_peaks] if len(r_peaks) else np.array([], dtype=np.float64)
 
     out = []
     for w0, w1 in window_bounds(t0, t1, window_s):
-        mask = (peak_times >= w0) & (peak_times < w1)
-        win = r_peaks[mask]
-        hrv = compute_hrv_metrics(win, fs_int, window_duration_s=w1 - w0) if len(win) >= 2 else {}
+        win_times = peak_times[(peak_times >= w0) & (peak_times < w1)]
+        hrv = _window_hrv(win_times)
         out.append(
             {
                 "window_start": w0,
@@ -277,6 +296,50 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
             }
         )
     return out
+
+
+#: Beat-to-beat intervals outside this range are not a resting heart (24-240 bpm).
+_RR_PLAUSIBLE_MS = (250.0, 2500.0)
+#: An interval this far from the window's median is an ectopic beat or a detector miss.
+_RR_MEDIAN_TOLERANCE = 0.30
+#: A window with fewer clean intervals than this share is not analysed.
+_RR_MIN_CLEAN_SHARE = 0.80
+
+
+def _finite(value: float) -> float | None:
+    """A finite float, or None: NaN and infinity are not valid JSON and not a measurement."""
+    return float(value) if np.isfinite(value) else None
+
+
+def _window_hrv(peak_times_s: np.ndarray) -> dict[str, float | None]:
+    """Time-domain HRV from the real instants of the beats of one window.
+
+    The instants come from the stream's timestamps, not from sample indices: a gap in the
+    recording is a long interval, never a quiet stretch that the sample count hides. An
+    interval is clean when it is physiologically possible and within 30 % of the median;
+    with less than 80 % clean intervals the window is not analysed. RMSSD uses only pairs
+    of neighbouring clean intervals. At least three beats (two intervals) are needed: with
+    fewer the standard deviation is undefined (it used to be NaN, written into the JSON).
+    """
+    if len(peak_times_s) < 3:
+        return {}
+    rr = np.diff(peak_times_s) * 1000.0
+    low, high = _RR_PLAUSIBLE_MS
+    clean = (rr >= low) & (rr <= high)
+    if clean.any():
+        median = float(np.median(rr[clean]))
+        clean &= np.abs(rr - median) <= _RR_MEDIAN_TOLERANCE * median
+    if clean.sum() < 2 or clean.mean() < _RR_MIN_CLEAN_SHARE:
+        return {}
+    kept = rr[clean]
+    pairs = np.diff(rr)[clean[:-1] & clean[1:]]
+    mean_rr = float(np.mean(kept))
+    return {
+        "sdnn_ms": _finite(np.std(kept, ddof=1)),
+        "rmssd_ms": _finite(np.sqrt(np.mean(pairs**2))) if len(pairs) else None,
+        "mean_rr_ms": _finite(mean_rr),
+        "hr_mean_bpm": _finite(60000.0 / mean_rr),
+    }
 
 
 def _iter_xdf_streams(path: Path) -> Iterator[tuple[dict[str, Any], Any, Any]]:
