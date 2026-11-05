@@ -30,7 +30,7 @@ La misura di successo era verificabile solo a metà: ogni difetto trovato ha un 
 
 - **v1 congelato, v2 a parte.** `contracts/gatt_v1.json` non si modifica mai (Averyn ne fissa lo sha256); le novità sono characteristic nuove. Un client v1 non le vede.
 - **Nessun dato inventato.** Ogni campo "non disponibile" è una sentinella e si legge `null`; la sorgente live è `off` salvo configurazione esplicita, e `synthetic` si dichiara demo.
-- **Visualizzazione raw in locale** (viewer in SYNAPSE-24). Averyn usa solo L0/L1 e non chiama il Data Plane (ADR-0026).
+- **Visualizzazione raw in locale** (viewer in SYNAPSE-24). Averyn usa solo L0/L1 e non chiama il Data Plane (ADR-0026). *Superato in MVP-1.4: il viewer è stato rimosso, la visualizzazione vive solo in Averyn (livello L1R, ADR-0030 lì).*
 - **Una definizione per cosa.** L'enum del sonno (ADR-0014), l'offset FIT→Unix, le finestre HRV e la mappa dei pin hanno ciascuno una sola fonte, con test che li confrontano.
 - **Il kit non c'è ancora:** l'incremento si chiude "ready for HIL".
 
@@ -54,14 +54,14 @@ La run unica viene fermata per memoria bassa. Si esegue a pezzi: passi leggeri u
 
 - `contracts/fit_developer_fields.json`, campo `synapse_sleep_stage`: cambia il **significato** dei valori 1–4 (ora N1/N2/N3/REM, 255 = non disponibile); gli id restano immutati. Nessun consumatore noto leggeva il campo.
 - `window_start` nei payload dei job è sempre in secondi Unix.
-- Il frame feature v1 è di 23 byte. Il parser e i golden vector di Averyn usano già 23: sbagliate erano solo le *descrizioni* (yaml, commenti, ADR-0026 dicono 26), corrette qui per la parte di questo repository. Il v1 non è quindi rotto per Averyn.
-- Il campo RR di `0x2A37` è in 1/1024 s: **il parser di Averyn lo legge ancora come millisecondi** (vedi sotto), cioè un RR del 2,4 % troppo alto. Oggi non ha effetto, perché il firmware manda sempre RR assente (`0xFFFF`); lo avrà non appena l'RR verrà collegato.
+- Il frame feature v1 è di 23 byte. Il parser e i golden vector di Averyn usano già 23: sbagliate erano solo le *descrizioni* (yaml e commenti dicevano 26; l'ADR-0026 di Averyn dice già 23, come si è verificato in MVP-1.4), corrette qui per la parte di questo repository. Il v1 non è quindi rotto per Averyn.
+- Il campo RR di `0x2A37` è in 1/1024 s: ~~il parser di Averyn lo legge ancora come millisecondi~~ *(falso: Averyn l'aveva già corretto in `3bf2ed4`, 2026-11-01; `HeartRateFrameParser.kt` converte da 1/1024 s)*. Il firmware manda comunque ancora sempre RR assente (`0xFFFF`) sul servizio standard; con MVP-1.4 l'RR esce solo dal frame feature v2 e solo dietro `CONFIG_SYNAPSE_RR_ENABLE`.
 - API: gli endpoint di sessione rispondono 404 (non 200 con un corpo d'errore), `current_tier` è `null`, `sessions_dir` non c'è più, `/ws/live` inizia con `hello`, i percorsi sono relativi, `/api/live` e `/api/control/*` rispondono 501.
 - `SYNAPSE_PPG_SAMPLE_RATE` è ora il codice SPO2_SR del datasheet (`0x00` = 50 Hz); i pin di default sono cambiati (lead-off 15, wired sync 10).
 
 ## Debito dichiarato (non fatto)
 
-- **Cross-repo Averyn (repo non toccato, serve un via libera esplicito):** parser RR in `HeartRateFrameParser.kt` (ms → 1/1024 s), ADR-0026 (26 → 23 B), re-pin a `gatt_v2.json`, scope di consenso `signal_quality` / `stress_monitoring`.
+- **Cross-repo Averyn (repo non toccato, serve un via libera esplicito):** re-pin a `gatt_v2.json`, scope di consenso `signal_quality` / `stress_monitoring`. *(Il parser RR e l'ADR-0026 a 23 B erano già a posto; vedi `MVP1_4_AVERYN_DATA_PATH.md` per ciò che è stato davvero fatto.)*
 - **Firmware:** SQI del PPG (produce un valore, difetto precedente corretto, ma senza rimozione della DC, con la finestra non allineata al ring e senza lock: il valore è indicativo), qualità ECG ancora fissa a 0,8, motion gate per finestre, contatori di perdita per motivo, temperatura reale, ISR del wired sync (conta solo nel ruolo POD), nome di advertising unico per unità, parametri di connessione / PHY / DLE, pairing, tier e hash di build nello Status, flag `lead_off` e `clock_wrapped` riservati.
 - **Edge AI** spenta per default: l'interprete è costruito dentro la propria arena e corromperebbe la memoria; i sorgenti restano compilati.
 - **Sequenza su notify rifiutato:** l'audit la dava per gap fantasma, ma i test esistenti la dichiarano scelta di progetto; da decidere.

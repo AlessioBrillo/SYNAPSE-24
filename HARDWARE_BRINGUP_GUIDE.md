@@ -60,9 +60,13 @@ Complete step-by-step guide to build, flash, and validate the Tier 0 forearm hub
 ```
 
 **Electrode Placement (Lead I equivalent):**
-- **RA (Right Arm)**: Red snap → AD8232 IN+
-- **LA (Left Arm)**: Yellow snap → AD8232 IN-
-- **RL (Right Leg)**: Green/Black snap → AD8232 REF (driven right leg)
+Use the labelled header of the breakout (**RA**, **LA**, **RL**). Inside the AD8232 the inputs are
+IN− = RA and IN+ = LA, because Lead I is LA − RA: swapped, the QRS comes out upside down.
+
+- **RA (Right Arm)**: Red snap → breakout pin RA (IN−)
+- **LA (Left Arm)**: Yellow snap → breakout pin LA (IN+)
+- **RL (Right Leg)**: Green/Black snap → breakout pin RL. This is the *right-leg drive* OUTPUT
+  that cancels common-mode noise, not a reference input: do not tie it to GND or to REF.
 
 **PPG Placement**: MAX30102 on volar wrist/forearm with light pressure.
 

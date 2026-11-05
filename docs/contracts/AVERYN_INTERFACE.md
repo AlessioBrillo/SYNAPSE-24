@@ -24,7 +24,7 @@ Il **Data Plane HTTP** descritto sotto è uno strumento di ricerca **locale**: s
 - **`set_time`** (`[4][epoch_ms u64 LE]`): la band non ha né RTC né rete; il telefono le dà l'ora a ogni connessione. Un valore precedente al 2020-01-01 è rifiutato (`bad_argument`).
 - Il flag `charging` vale solo se il bit POWER di `sensor_health` è acceso; altrimenti la band non lo sa e il bit è 0.
 - Il feature v2 richiede un MTU ≥ 30: i client Android devono chiederlo esplicitamente (la band lo chiede a sua volta alla connessione).
-- Averyn non si iscrive mai al servizio *research* (raw): è il canale del dataset e del viewer locale.
+- Il servizio *research* (raw: ECG, PPG, IMU, power) è sottoscritto da Averyn **solo con lo scope di consenso `raw_signals`** (livello L1R, ADR-0030 di Averyn, proposto): è così che si vedono le forme d'onda, e solo in Averyn. Contratto del frame: `contracts/raw_frame_v1.json`; vettori: `contracts/vectors/raw_frame_v1.json`; sessioni sintetiche con risposta attesa: `contracts/fixtures/band_scenarios_v1.json`.
 
 ## Endpoint HTTP (Data Plane locale, `127.0.0.1:8000`)
 
