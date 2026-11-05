@@ -312,8 +312,8 @@ int synapse_host_bench_run(int mode, int ecg_samples)
     }
 
     bench_submit_ecg(ecg_samples);
-    bench_submit_ppg(20);   /* > PPG flush threshold (8)  */
-    bench_submit_imu(20);   /* > IMU flush threshold (4)  */
+    bench_submit_ppg(40);   /* 2 PPG flushes of 16 + 8 pending */
+    bench_submit_imu(80);   /* 2 IMU flushes of 32 + 16 pending */
     if (mode & BENCH_POWER_ENABLED) {
         synapse_research_service_submit_power(3700.0f, 120.0f, 80.0f);
         synapse_research_service_submit_power(3700.0f, 121.0f, 80.0f);
@@ -361,7 +361,7 @@ int synapse_host_bench_run_subscribe_ecg(void)
     synapse_research_service_on_connect(7);
     synapse_research_service_set_mtu(g_bench_mtu);
     synapse_research_service_handle_subscribe(1, true);  /* ECG handle */
-    bench_submit_ecg(60);
+    bench_submit_ecg(70);
     bench_submit_ppg(4);    /* below threshold: no PPG frame expected */
     return g_capture_count;
 }

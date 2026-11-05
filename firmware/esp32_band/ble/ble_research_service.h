@@ -61,7 +61,7 @@ extern "C" {
  *  ring overflowed before the frame ever left the pod and the samples vanished
  *  without a sequence gap the host could see. 64 keeps ~128 ms of ECG buffer
  *  (3 x 8 streams x 64 x 4 B = 6 kB, trivial in internal RAM). */
-#define SYNAPSE_RESEARCH_RING_DEPTH 64u
+#define SYNAPSE_RESEARCH_RING_DEPTH 128u
 #define SYNAPSE_RESEARCH_MAX_CHANNELS 3u
 
 /** Frames flush_stream may emit in one submit tick. The loop drains the ring
@@ -117,7 +117,15 @@ typedef struct {
     uint32_t last_flushed_ts_low; /**< low 32 bits of the previous frame's    *
                                   *  first timestamp: the wrap witness        */
     bool has_flushed;       /**< at least one frame emitted for this stream  */
+    /* Reset requests posted by the NimBLE host task (link, subscription and control callbacks)
+     * and applied by the producer at its next entry: the host task never touches the ring
+     * state a producer may be in the middle of using. Access with the __atomic builtins. */
+    volatile uint8_t reset_req;
 } synapse_research_stream_t;
+
+#define SYNAPSE_RESEARCH_RESET_PENDING  0x01u /**< drop the buffered samples          */
+#define SYNAPSE_RESEARCH_RESET_SEQUENCE 0x02u /**< sequence and wrap witness restart   */
+#define SYNAPSE_RESEARCH_RESET_DROPPED  0x04u /**< forget the loss carried by the next frame */
 
 /** Module state (single instance, owned by this translation unit). */
 typedef struct {

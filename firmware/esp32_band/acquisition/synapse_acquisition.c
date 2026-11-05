@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "synapse_acquisition.h"
+#include "synapse_night_window.h"
 #include "synapse_config.h"
 #include "synapse_sensors.h"
 #include "synapse_signal_quality.h"
@@ -393,18 +394,13 @@ static void handle_tier_2(void) {
 }
 
 static void update_night_window(void) {
-    time_t now = get_utc_time();
-    struct tm *tm = gmtime(&now);
-    
-    bool in_night = false;
-    if (g_acq.sleep_start_hour > g_acq.sleep_end_hour) {
-        // Overnight window (e.g., 23-7)
-        in_night = (tm->tm_hour >= g_acq.sleep_start_hour) || (tm->tm_hour < g_acq.sleep_end_hour);
-    } else {
-        // Same-day window
-        in_night = (tm->tm_hour >= g_acq.sleep_start_hour) && (tm->tm_hour < g_acq.sleep_end_hour);
-    }
-    
+    // Inactive until the phone has set the clock (set_time): before that, time() is the
+    // uptime from 1970 and every boot would start inside the night.
+    // See synapse_night_window.h.
+    bool in_night = synapse_night_window_active((int64_t)get_utc_time(),
+                                                g_acq.sleep_start_hour,
+                                                g_acq.sleep_end_hour) != 0;
+
     if (in_night != g_acq.night_window_active) {
         g_acq.night_window_active = in_night;
         ESP_LOGI(TAG, "Night window: %s", in_night ? "ACTIVE" : "INACTIVE");

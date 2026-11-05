@@ -281,7 +281,7 @@ def test_service_transmits_when_fully_open(service: ctypes.CDLL) -> None:
     _bind_bench(service)
     service.synapse_host_bench_reset()
     sent = service.synapse_host_bench_run(
-        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED | _MODE_POWER_ENABLED, 60
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED | _MODE_POWER_ENABLED, 70
     )
     assert sent > 0, "no notifications captured: the research service is silent"
 
@@ -289,7 +289,7 @@ def test_service_transmits_when_fully_open(service: ctypes.CDLL) -> None:
     assert len(frames) == sent
 
     # Per-stream expectations from init_stream_table(): flush thresholds
-    # ECG 50, PPG 8, ACC/GYRO/MAG 4, POWER 1; the bench submits 60/20/20.
+    # ECG 64, PPG 16, ACC/GYRO/MAG 32, POWER 1; the bench submits 70/40/80.
     # sample_count counts VALUES (channel-minor): PPG red+IR doubles the
     # count, the IMU sub-streams triple it, POWER quadruples it.
     by_stream: dict[int, list[int]] = {}
@@ -304,15 +304,15 @@ def test_service_transmits_when_fully_open(service: ctypes.CDLL) -> None:
         RawStream.MAG,
         RawStream.POWER,
     }
-    # One frame per threshold hit: ECG 1x50, PPG 2x(8x2), ACC/GYRO/MAG 5x(4x3),
+    # One frame per threshold hit: ECG 1x64, PPG 2x(16x2), ACC/GYRO/MAG 2x(32x3),
     # POWER 2x(1x4).
     values_per_stream = {stream: sum(v) for stream, v in by_stream.items()}
     assert values_per_stream == {
-        RawStream.ECG: 50,
-        RawStream.PPG: 32,
-        RawStream.ACC: 60,
-        RawStream.GYRO: 60,
-        RawStream.MAG: 60,
+        RawStream.ECG: 64,
+        RawStream.PPG: 64,
+        RawStream.ACC: 192,
+        RawStream.GYRO: 192,
+        RawStream.MAG: 192,
         RawStream.POWER: 8,
     }
 
@@ -341,7 +341,7 @@ def test_no_transmitting_no_frames(service: ctypes.CDLL) -> None:
     """transmitting=false must silence the service completely."""
     _bind_bench(service)
     service.synapse_host_bench_reset()
-    sent = service.synapse_host_bench_run(_MODE_CONNECTED | _MODE_BIO_ENABLED, 60)
+    sent = service.synapse_host_bench_run(_MODE_CONNECTED | _MODE_BIO_ENABLED, 70)
     assert sent == 0, f"transmitted {sent} frames while transmitting was off"
 
 
@@ -349,7 +349,7 @@ def test_not_connected_no_frames(service: ctypes.CDLL) -> None:
     """Without a GAP link nothing may leave the pod."""
     _bind_bench(service)
     service.synapse_host_bench_reset()
-    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 60)
+    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 70)
     assert sent == 0, f"transmitted {sent} frames without a connection"
 
 
@@ -357,7 +357,7 @@ def test_not_subscribed_no_frames(service: ctypes.CDLL) -> None:
     """A stream nobody subscribed to is not streamed."""
     _bind_bench(service)
     service.synapse_host_bench_reset()
-    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED, 60)
+    sent = service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED, 70)
     assert sent == 0, f"transmitted {sent} frames with no stream subscribed"
 
 
@@ -366,7 +366,7 @@ def test_power_stream_transmits_when_subscribed(service: ctypes.CDLL) -> None:
     _bind_bench(service)
     service.synapse_host_bench_reset()
     sent = service.synapse_host_bench_run(
-        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 60
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 70
     )
     assert sent == 2, f"expected two 1 Hz power frames, got {sent}"
     frames = _decoded_frames(service)
@@ -383,7 +383,7 @@ def test_subscribe_handler_enables_the_stream(service: ctypes.CDLL) -> None:
     assert sent == 1, f"subscription path produced {sent} frames, expected the ECG frame only"
     frames = _decoded_frames(service)
     assert frames[0][0].stream == RawStream.ECG
-    assert frames[0][0].sample_count == 50
+    assert frames[0][0].sample_count == 64
 
 
 def test_ring_overflow_is_counted_when_the_link_stalls(service: ctypes.CDLL) -> None:
@@ -421,7 +421,7 @@ def test_frames_adapt_to_the_negotiated_mtu(service: ctypes.CDLL) -> None:
     for mtu in (23, 115, 247):
         service.synapse_host_bench_reset()
         service.synapse_host_bench_set_mtu(mtu)
-        sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+        sent = service.synapse_host_bench_run(_MODE_OPEN, 70)
         frames = _decoded_frames(service)
         assert len(frames) == sent
         lengths = [service.synapse_host_bench_frame_len(i) for i in range(sent)]
@@ -440,20 +440,20 @@ def test_frames_adapt_to_the_negotiated_mtu(service: ctypes.CDLL) -> None:
         totals[115]
         == totals[247]
         == {
-            RawStream.ECG: 50,
-            RawStream.PPG: 32,
-            RawStream.ACC: 60,
-            RawStream.GYRO: 60,
-            RawStream.MAG: 60,
+            RawStream.ECG: 64,
+            RawStream.PPG: 64,
+            RawStream.ACC: 192,
+            RawStream.GYRO: 192,
+            RawStream.MAG: 192,
             RawStream.POWER: 8,
         }
     )
     assert {s: v for s, v in totals[23].items() if s != RawStream.POWER} == {
-        RawStream.ECG: 50,
-        RawStream.PPG: 32,
-        RawStream.ACC: 60,
-        RawStream.GYRO: 60,
-        RawStream.MAG: 60,
+        RawStream.ECG: 64,
+        RawStream.PPG: 64,
+        RawStream.ACC: 192,
+        RawStream.GYRO: 192,
+        RawStream.MAG: 192,
     }
     assert RawStream.POWER not in totals[23]
 
@@ -479,7 +479,7 @@ def test_power_stream_is_refused_below_its_mtu_floor(service: ctypes.CDLL) -> No
     service.synapse_host_bench_reset()
     service.synapse_host_bench_set_mtu(23)
     sent = service.synapse_host_bench_run(
-        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 60
+        _MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_POWER_ENABLED, 70
     )
     assert sent == 0, f"MTU 23 emitted {sent} frames that cannot physically fit"
     assert service.synapse_host_bench_power_dropped() > 0, "blocked POWER samples not counted"
@@ -495,10 +495,10 @@ def test_frame_timestamps_travel_with_the_samples(service: ctypes.CDLL) -> None:
     """
     _bind_bench(service)
     service.synapse_host_bench_reset()
-    service.synapse_host_bench_set_mtu(23)  # 4 ECG values per frame: 13 frames
-    service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED, 60)
+    service.synapse_host_bench_set_mtu(23)  # 4 ECG values per frame: 16 frames
+    service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_CONNECTED | _MODE_BIO_ENABLED, 70)
     ecg = [h for h, _s in _decoded_frames(service) if h.stream == RawStream.ECG]
-    assert len(ecg) == 13, "expected 50 samples split over 4-value frames (12x4+2)"
+    assert len(ecg) == 16, "expected 64 samples split over 4-value frames (16x4)"
     prev = ecg[0]
     assert prev.timestamp_us > 0
     for header in ecg[1:]:
@@ -525,7 +525,7 @@ def test_refused_notifications_stay_queued_and_never_double_free(
     _bind_bench(service)
     service.synapse_host_bench_reset()
     service.synapse_host_bench_set_notify_fail_every(1)
-    sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+    sent = service.synapse_host_bench_run(_MODE_OPEN, 70)
     assert sent == 0, f"captured {sent} frames while the stack refused everything"
     assert service.synapse_host_bench_dropped_frames() > 0, "refusals not counted"
     assert service.synapse_host_bench_ring_overflow() == 0, (
@@ -543,7 +543,7 @@ def test_mbuf_exhaustion_counts_drops_and_never_double_frees(service: ctypes.CDL
     _bind_bench(service)
     service.synapse_host_bench_reset()
     service.synapse_host_bench_set_exhaust_mbuf(1)
-    service.synapse_host_bench_run(_MODE_OPEN, 60)
+    service.synapse_host_bench_run(_MODE_OPEN, 70)
     assert service.synapse_host_bench_frame_count() == 0, "frames left without an mbuf"
     assert service.synapse_host_bench_dropped_frames() > 0, "ENOMEM not counted"
     assert service.synapse_host_bench_ring_overflow() == 0
@@ -561,7 +561,7 @@ def test_the_stack_rejects_oversized_notifications(service: ctypes.CDLL) -> None
     service.synapse_host_bench_reset()
     service.synapse_host_bench_set_mtu(247)  # what the service believes
     service.synapse_host_bench_set_stack_mtu(50)  # what the link carries
-    sent = service.synapse_host_bench_run(_MODE_OPEN, 60)
+    sent = service.synapse_host_bench_run(_MODE_OPEN, 70)
     assert sent > 0, "not even a within-budget frame got through"
     for i in range(sent):
         length = service.synapse_host_bench_frame_len(i)
@@ -589,7 +589,7 @@ def test_a_sample_older_than_another_streams_last_is_not_dropped(service: ctypes
     service.synapse_host_bench_reset()
     service.synapse_host_bench_open()
     service.synapse_host_bench_submit_at(_SENSOR_ECG, 10_000_000)
-    for i in range(8):  # the PPG flush threshold
+    for i in range(16):  # the PPG flush threshold
         service.synapse_host_bench_submit_at(_SENSOR_PPG, 1_000_000 + i * 20_000)
 
     streams = {header.stream for header, _ in _decoded_frames(service)}
@@ -614,14 +614,14 @@ def test_the_wrap_witness_does_not_survive_a_reconnect(service: ctypes.CDLL) -> 
     _bind_bench(service)
     service.synapse_host_bench_reset()
     service.synapse_host_bench_open()
-    for i in range(50):  # the ECG flush threshold, stamped just below 2**32
+    for i in range(64):  # the ECG flush threshold, stamped just below 2**32
         service.synapse_host_bench_submit_at(_SENSOR_ECG, 0xFFFE0000 + i * 2000)
     before = _decoded_frames(service)
     assert before, "no frame before the reconnect"
     assert not before[0][0].ts_epoch_wrapped
 
     service.synapse_host_bench_open()  # reconnect: same device clock, now past 2**32
-    for i in range(50):
+    for i in range(64):
         service.synapse_host_bench_submit_at(_SENSOR_ECG, (1 << 32) + 100 + i * 2000)
     after = _decoded_frames(service)
     assert after, "no frame after the reconnect"

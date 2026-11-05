@@ -222,43 +222,43 @@ static void init_stream_table(synapse_research_t *r)
     // (accel in g, gyro in rad/s, mag in uT) and the AD8232 driver (mV).
     memset(r->streams, 0, sizeof(r->streams));
 
-    // ECG 500 Hz, 1 ch, uV -> a frame every 100 ms.
+    // ECG 500 Hz, 1 ch, uV -> a frame every 128 ms (12 B header + 128 B: 1094 B/s, budget 1100).
     r->streams[STREAM_ECG] = (synapse_research_stream_t){
         .stream_id = SYNAPSE_RAW_STREAM_ECG,
         .format = SYNAPSE_RAW_FORMAT_S16,
         .channels = 1,
         .unit_scale = SYNAPSE_RESEARCH_UNIT_UV,
-        .flush_at = 50,
+        .flush_at = 64,
     };
-    // PPG 50 Hz, 2 ch (red + IR), raw ADC codes -> ~160 ms.
+    // PPG 50 Hz, 2 ch (red + IR), raw ADC codes -> a frame every 320 ms (438 B/s, budget 450).
     r->streams[STREAM_PPG] = (synapse_research_stream_t){
         .stream_id = SYNAPSE_RAW_STREAM_PPG,
         .format = SYNAPSE_RAW_FORMAT_S32,
         .channels = 2,
         .unit_scale = SYNAPSE_RESEARCH_UNIT_COUNT,
-        .flush_at = 8,
+        .flush_at = 16,
     };
-    // IMU 50 Hz, 3 ch per sub-stream -> ~80 ms.
+    // IMU 50 Hz, 3 ch per sub-stream -> a frame every 640 ms (319 B/s each, budget 320).
     r->streams[STREAM_ACC] = (synapse_research_stream_t){
         .stream_id = SYNAPSE_RAW_STREAM_ACC,
         .format = SYNAPSE_RAW_FORMAT_S16,
         .channels = 3,
         .unit_scale = SYNAPSE_RESEARCH_UNIT_MG,
-        .flush_at = 4,
+        .flush_at = 32,
     };
     r->streams[STREAM_GYRO] = (synapse_research_stream_t){
         .stream_id = SYNAPSE_RAW_STREAM_GYRO,
         .format = SYNAPSE_RAW_FORMAT_S16,
         .channels = 3,
         .unit_scale = SYNAPSE_RESEARCH_UNIT_MRAD_S,
-        .flush_at = 4,
+        .flush_at = 32,
     };
     r->streams[STREAM_MAG] = (synapse_research_stream_t){
         .stream_id = SYNAPSE_RAW_STREAM_MAG,
         .format = SYNAPSE_RAW_FORMAT_S16,
         .channels = 3,
         .unit_scale = SYNAPSE_RESEARCH_UNIT_CUT,
-        .flush_at = 4,
+        .flush_at = 32,
     };
     // Power telemetry 1 Hz, 4 channels (voltage_mv, current_ma, power_mw,
     // battery_pct): one sample per frame, no buffering.
@@ -344,6 +344,40 @@ static uint16_t stream_mtu_values(const synapse_research_t *r,
 
 /** Emit frames for @p stream until the ring is drained, the tick budget is
  *  spent, or a notification the stack refuses frees us to stop. */
+/* The link, subscription and control callbacks run in the NimBLE host task; the producers
+ * (submit, submit_power) run in the application tasks. The callbacks used to clear the ring
+ * state themselves while a producer could be inside flush_stream. They now post a request,
+ * and the producer applies it at its next entry, in its own context. */
+static void request_reset(synapse_research_stream_t *s, uint8_t bits)
+{
+    __atomic_fetch_or(&s->reset_req, bits, __ATOMIC_SEQ_CST);
+}
+
+static void apply_resets(synapse_research_t *r)
+{
+    for (size_t i = 0; i < r->stream_count; i++) {
+        synapse_research_stream_t *s = &r->streams[i];
+        const uint8_t bits = __atomic_exchange_n(&s->reset_req, 0, __ATOMIC_SEQ_CST);
+        if (bits & SYNAPSE_RESEARCH_RESET_PENDING) {
+            s->pending = 0;
+        }
+        if (bits & SYNAPSE_RESEARCH_RESET_SEQUENCE) {
+            s->sequence = 0;
+            /* The wrap witness compares against the previous frame of THIS link: a frame
+             * sent before the reconnect must not make the first frame after it look like
+             * a counter wrap. */
+            s->has_flushed = false;
+            s->last_flushed_ts_low = 0;
+        }
+        if (bits & SYNAPSE_RESEARCH_RESET_DROPPED) {
+            /* The sequence restarts at 0 on the next connect, so the loss counter restarts
+             * with it: a stale count would be reported as a loss the new host never
+             * suffered. */
+            s->dropped_pending = 0;
+        }
+    }
+}
+
 static void flush_stream(synapse_research_t *r, synapse_research_stream_t *stream)
 {
     if (!r->transmitting || !stream->enabled || stream->pending == 0) {
@@ -523,6 +557,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     if (sample == NULL || !s_research.initialized) {
         return;
     }
+    apply_resets(&s_research);
 
     if ((size_t)sample->type >= sizeof(s_research.last_sample_us) / sizeof(s_research.last_sample_us[0])) {
         return;
@@ -632,6 +667,7 @@ void synapse_research_service_submit_power(float voltage_mv, float current_ma, f
     if (!s_research.initialized) {
         return;
     }
+    apply_resets(&s_research);
 
     synapse_research_stream_t *s = &s_research.streams[STREAM_POWER];
     // Nothing can leave the pod without a link, transmitting on, and a
@@ -670,7 +706,7 @@ esp_err_t synapse_research_service_set_transmitting(bool enable)
     s_research.transmitting = enable;
     if (!enable) {
         for (size_t i = 0; i < s_research.stream_count; i++) {
-            s_research.streams[i].pending = 0;
+            request_reset(&s_research.streams[i], SYNAPSE_RESEARCH_RESET_PENDING);
         }
     }
     ESP_LOGI(TAG, "raw transmission %s", enable ? "enabled" : "disabled");
@@ -683,14 +719,9 @@ void synapse_research_service_on_connect(uint16_t conn_handle)
     s_research.conn_handle = conn_handle;
     s_research.mtu = 23;
     for (size_t i = 0; i < s_research.stream_count; i++) {
-        s_research.streams[i].sequence = 0;
-        s_research.streams[i].pending = 0;
-        s_research.streams[i].dropped_pending = 0;
-        // The wrap witness compares against the previous frame of THIS link: a
-        // frame sent before the reconnect must not make the first frame after
-        // it look like a counter wrap.
-        s_research.streams[i].has_flushed = false;
-        s_research.streams[i].last_flushed_ts_low = 0;
+        request_reset(&s_research.streams[i],
+                      SYNAPSE_RESEARCH_RESET_PENDING | SYNAPSE_RESEARCH_RESET_SEQUENCE |
+                          SYNAPSE_RESEARCH_RESET_DROPPED);
     }
     ESP_LOGI(TAG, "connected (handle %u)", conn_handle);
 }
@@ -700,14 +731,11 @@ void synapse_research_service_on_disconnect(void)
     s_research.connected = false;
     s_research.conn_handle = BLE_HS_CONN_HANDLE_NONE;
     for (size_t i = 0; i < s_research.stream_count; i++) {
-        // Subscriptions die with the link: pending samples are stale, and the
-        // host must re-subscribe before anything streams again.
+        // Subscriptions die with the link: pending samples are stale, and the host must
+        // re-subscribe before anything streams again.
         s_research.streams[i].enabled = false;
-        s_research.streams[i].pending = 0;
-        // The sequence restarts at 0 on the next connect, so the loss
-        // counter must restart with it: a stale count would be reported as
-        // a loss the new host never suffered.
-        s_research.streams[i].dropped_pending = 0;
+        request_reset(&s_research.streams[i],
+                      SYNAPSE_RESEARCH_RESET_PENDING | SYNAPSE_RESEARCH_RESET_DROPPED);
     }
     ESP_LOGI(TAG, "disconnected");
 }
@@ -734,7 +762,7 @@ void synapse_research_service_set_stream_enabled(uint8_t stream_id, bool enabled
             if (!enabled) {
                 // Drop the pending buffer: stale samples must not be flushed as
                 // soon as the host re-subscribes.
-                s->pending = 0;
+                request_reset(s, SYNAPSE_RESEARCH_RESET_PENDING);
             }
             ESP_LOGI(TAG, "stream 0x%02x %s", stream_id,
                      enabled ? "enabled (subscribed)" : "disabled");
