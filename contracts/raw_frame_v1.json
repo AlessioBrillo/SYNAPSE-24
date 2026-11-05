@@ -88,7 +88,7 @@
     "sample_count counts VALUES (channel-minor), not multi-channel samples: a 3-channel stream with sample_count 6 carries 2 samples. Channels per stream: gatt_v2.json stream_metadata.",
     "timestamp_us is the low 32 bits of the device microsecond clock at the FIRST sample of the frame; sample i is at timestamp_us + i * 1e6 / rate_hz.",
     "flags bit ts_epoch_wrapped: this frame's timestamp is lower than the previous transmitted frame of the SAME stream, i.e. the 32-bit counter wrapped in between: add 2^32 to the stream's epoch.",
-    "sequence is per stream, uint16, consumed when a frame is BUILT: a hole means a frame the stack refused (its samples are re-sent in the next frame only if the ring still holds them). A repeat or an older value is not a gap.",
+    "sequence is per stream, uint16, consumed when a frame is BUILT: a hole means a frame the stack refused (its samples are re-sent in the next frame only if the ring still holds them). A repeat or an older value is not a gap, and its samples are not appended: a step back of up to 64 frames is out of order, a longer one is a restart of the band (its clock restarts too).",
     "dropped: samples lost for this stream since the previous transmitted frame, saturating at dropped_max (0 = no loss).",
     "A frame with an unknown version, stream id or sample format is counted as a loss and never interpreted."
   ]
