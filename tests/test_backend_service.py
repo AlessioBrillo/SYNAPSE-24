@@ -162,9 +162,10 @@ def test_app_routes_registered() -> None:
         "/api/v1/metrics",
         "/api/v1/jobs/types",
         "/api/v1/jobs/run",
-        "/ws/live",
     ):
         assert expected in paths, f"missing route {expected}"
+    assert "/ws/live" not in paths, "the viewer lives in Averyn"
+    assert "/live" not in paths, "the viewer lives in Averyn"
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,6 @@ Security model
 
 from __future__ import annotations
 
-import asyncio
 import hmac
 import logging
 import os
@@ -46,7 +45,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from backend.live import SOURCE_ENV, LiveHub, make_source  # noqa: E402
 from backend.service import DataPlaneService, JobRunRequest, JobRunResponse  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
@@ -59,21 +57,15 @@ try:  # fastapi/uvicorn are runtime deps, not dev deps
         FastAPI,
         HTTPException,
         Request,
-        WebSocket,
-        WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware  # noqa: F401
-    from fastapi.responses import HTMLResponse  # noqa: F401
     from starlette.concurrency import run_in_threadpool  # noqa: F401
 except ImportError:  # pragma: no cover - dev environment without fastapi
     Depends = None  # type: ignore[assignment,misc]
     FastAPI = None  # type: ignore[assignment,misc]
     HTTPException = None  # type: ignore[assignment,misc]
     Request = None  # type: ignore[assignment,misc]
-    WebSocket = None  # type: ignore[assignment,misc]
-    WebSocketDisconnect = Exception  # type: ignore[assignment,misc]
     CORSMiddleware = None  # type: ignore[assignment,misc]
-    HTMLResponse = None  # type: ignore[assignment,misc]
     run_in_threadpool = None  # type: ignore[assignment]
     _FASTAPI_AVAILABLE = False
 
@@ -112,30 +104,9 @@ def _service() -> DataPlaneService:
     return svc
 
 
-#: The live hub, built on the first WebSocket client from ``SYNAPSE_LIVE_SOURCE``.
-_hubs: dict[str, LiveHub] = {}
-
-#: The local viewer page (static, no data of its own: the data arrives over /ws/live).
-_LIVE_PAGE = Path(__file__).resolve().parent / "static" / "live.html"
-
-
-def _live_hub() -> LiveHub:
-    """The shared hub; a bad ``SYNAPSE_LIVE_SOURCE`` is logged and means "no source"."""
-    hub = _hubs.get("hub")
-    if hub is None:
-        try:
-            source = make_source(os.environ.get(SOURCE_ENV, ""))
-        except ValueError:
-            logger.exception("invalid %s: no live source", SOURCE_ENV)
-            source = None
-        hub = _hubs["hub"] = LiveHub(source)
-    return hub
-
-
 def _reset_services() -> None:
-    """Drop the cached service instances and the live hub (used by tests)."""
+    """Drop the cached service instances (used by tests)."""
     _services.clear()
-    _hubs.clear()
 
 
 def _api_token() -> str:
@@ -279,7 +250,9 @@ def _register_legacy_endpoints(application: Any) -> None:
 
     @application.get("/api/live/{pod_id}", dependencies=_auth_dependencies())
     async def get_live_data(pod_id: str, duration_s: float = 10.0) -> dict[str, Any]:
-        raise _not_implemented("live streaming requires hardware / an LSL relay (see /ws/live)")
+        raise _not_implemented(
+            "live data needs the hardware and is not served here: the band streams to the phone"
+        )
 
     @application.post("/api/control/tier", dependencies=_auth_dependencies())
     async def control_tier() -> dict[str, Any]:
@@ -373,95 +346,6 @@ def _register_data_plane_endpoints(application: Any) -> None:
         )
 
 
-def _authorize_websocket(websocket: WebSocket) -> tuple[bool, str | None]:
-    """Return ``(allowed, subprotocol to echo)`` for a connecting client.
-
-    A browser cannot set an Authorization header on a WebSocket and a query string ends up in
-    every proxy's access log, so the browser-safe channel is the subprotocol list:
-    ``new WebSocket(url, ["bearer", token])``.
-    """
-    expected = _api_token()
-    if not expected:
-        return True, None
-    provided = _bearer_token(websocket.headers.get("authorization", ""))
-    subprotocol: str | None = None
-    if not provided:
-        offered = [
-            p.strip() for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
-        ]
-        if "bearer" in offered[:-1]:
-            # ["bearer", token] anywhere in the list: other protocols may be offered too.
-            provided, subprotocol = offered[offered.index("bearer") + 1], "bearer"
-    allowed = bool(provided) and hmac.compare_digest(provided.encode(), expected.encode())
-    return allowed, subprotocol
-
-
-async def _serve_live(
-    websocket: WebSocket, hub: LiveHub, queue: asyncio.Queue[dict[str, Any]]
-) -> None:
-    """Feed, status and disconnect detection as three tasks; the first to end ends them all."""
-    send_lock = asyncio.Lock()  # one message at a time on the socket
-
-    async def send(message: dict[str, Any]) -> None:
-        async with send_lock:
-            await websocket.send_json(message)
-
-    async def pump() -> None:
-        """The live feed, as fast as the client takes it."""
-        while True:
-            await send(await queue.get())
-
-    async def status() -> None:
-        """The catalog status on its own cadence: a slow scan never stalls the feed."""
-        while True:
-            cat = await run_in_threadpool(_service().catalog)
-            await send(
-                {"type": "status_update", "data": {"n_sessions": len(cat.sessions) if cat else 0}}
-            )
-            await asyncio.sleep(2.0)
-
-    async def watch() -> None:
-        """Nothing is expected from the client: reading is how a close is noticed at once."""
-        while True:
-            await websocket.receive_text()
-
-    tasks: list[asyncio.Task[None]] = []
-    try:
-        await send(hub.hello())
-        tasks = [asyncio.create_task(job()) for job in (pump, status, watch)]
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in tasks:
-            task.cancel()
-        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        for outcome in outcomes:
-            # A close of the socket ends the tasks normally; anything else is worth a line.
-            if isinstance(outcome, Exception) and not isinstance(
-                outcome, (WebSocketDisconnect, RuntimeError)
-            ):
-                logger.warning("live socket task failed: %r", outcome)
-        await hub.detach(queue)
-
-
-def _register_websocket(application: Any) -> None:
-    """Register the WebSocket live endpoint and the viewer page."""
-
-    @application.websocket("/ws/live")
-    async def websocket_live(websocket: WebSocket) -> None:
-        allowed, subprotocol = _authorize_websocket(websocket)
-        if not allowed:
-            await websocket.close(code=1008, reason="unauthorized")
-            return
-        await websocket.accept(subprotocol=subprotocol)
-        hub = _live_hub()
-        await _serve_live(websocket, hub, await hub.attach())
-
-    @application.get("/live", include_in_schema=False)
-    async def live_page() -> Any:
-        """The viewer. Public on purpose: it carries no data; /ws/live is what is authenticated."""
-        return HTMLResponse(_LIVE_PAGE.read_text(encoding="utf-8"))
-
-
 def create_app() -> Any:
     """Build the FastAPI app. Requires fastapi."""
     if not _FASTAPI_AVAILABLE:
@@ -496,7 +380,6 @@ def create_app() -> Any:
 
     _register_legacy_endpoints(application)
     _register_data_plane_endpoints(application)
-    _register_websocket(application)
 
     return application
 
