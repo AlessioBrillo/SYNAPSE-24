@@ -237,7 +237,9 @@ def _raw_frame_doc(manifest: dict[str, Any]) -> dict[str, Any]:
             (
                 "sequence is per stream, uint16, consumed when a frame is BUILT: a hole means a "
                 "frame the stack refused (its samples are re-sent in the next frame only if the "
-                "ring still holds them). A repeat or an older value is not a gap."
+                "ring still holds them). A repeat or an older value is not a gap, and its samples are "
+                "not appended: a step back of up to 64 frames is out of order, a longer one is a "
+                "restart of the band (its clock restarts too)."
             ),
             (
                 "dropped: samples lost for this stream since the previous transmitted frame, "
