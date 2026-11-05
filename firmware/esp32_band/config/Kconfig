@@ -135,10 +135,16 @@ config SYNAPSE_ECG_VREF_MV
         ADC reference voltage for ESP32-S3 ADC calibration.
 
 config SYNAPSE_ECG_GAIN
-    int "ECG AD8232 Gain (x100)"
-    default 600
+    int "ECG AD8232 total gain (x100)"
+    default 110000
     help
-        AD8232 gain setting. 600 = 6.0x gain.
+        Total voltage gain from the electrodes to the ADC pin, times 100. The common AD8232
+        breakout has the instrumentation amplifier (fixed 100x) followed by a gain stage of
+        about 11x: 1100x in all, so 110000 here. The ADC value (minus the mid-rail) is divided
+        by this to get the electrode voltage; a wrong value scales the whole ECG (6.0x, the
+        old default, made it 180 times too large and clipped every QRS at the 16-bit limit).
+        Clones differ: measure it with a known signal (docs/hardware/BRINGUP_SOP.md) and set
+        the measured value here.
 
 config SYNAPSE_PPG_I2C_PORT
     int "PPG I2C Port"

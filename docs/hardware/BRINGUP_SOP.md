@@ -186,11 +186,12 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    *The µV-equivalent is only true once the AD8232's gain is calibrated
    (next): use the ADC counts until it is.*
 2. **AD8232 gain calibration (per-rig).** Generic clones' gain is set by
-   their instrumentation resistors, not by `hardware.yaml`'s `gain: 6.0`
-   placeholder. Feed a known signal into the electrode inputs (a function
+   their instrumentation resistors, not by `hardware.yaml`'s `gain: 1100.0`
+   nominal value. Feed a known signal into the electrode inputs (a function
    generator through a divider, or a 1 mVpp 10 Hz sine), read the ECG stream,
    and compute `gain_measured = (mV measured at the output) / (mV applied)`.
-   Write it into `config/hardware.yaml` (`ecg_config.gain_measured`); the µV
+   Write it into `config/hardware.yaml` (`ecg_config.gain_measured`) and into
+   `SYNAPSE_ECG_GAIN` (menuconfig, gain x 100: this is the knob the firmware reads); the µV
    scale of every ECG SNR claim hangs on this number, so it is per-rig and
    recalibrated whenever a breakout is replaced.
 3. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
