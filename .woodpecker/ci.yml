@@ -57,5 +57,11 @@ steps:
       - cd firmware/esp32_band
       - idf.py set-target esp32s3
       - idf.py build                      # band-full (sdkconfig.defaults)
-      - idf.py fullclean                  # reset before the core variant
-      - SDKCONFIG_DEFAULT="sdkconfig.defaults.core" idf.py build  # band-core
+      # fullclean keeps sdkconfig, and SDKCONFIG_DEFAULTS only applies when there is none: without
+      # removing it the second build is band-full again. (The variable also used to lack its S.)
+      - idf.py fullclean
+      - rm -f sdkconfig
+      - SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults" idf.py build  # band-core
+      # prove it is the core profile: GPS and FIT storage are off there and on in band-full
+      - grep -q "^# CONFIG_SYNAPSE_FEATURE_GPS is not set" sdkconfig
+      - grep -q "^# CONFIG_SYNAPSE_FEATURE_FIT_STORAGE is not set" sdkconfig
