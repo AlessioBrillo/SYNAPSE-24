@@ -20,6 +20,7 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   (`tests/test_format_conformance.py`: `fitdecode` reads the FIT files, `pyxdf` the XDF ones),
   the full test suite with coverage over `src`, `worker`, `sdk/python` and `backend`, and the
   firmware host C gate (raw-frame parity, research service, PPG SQI, BLE contract).
+- **Firmware step (2026-11-06):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it: the GitHub `Firmware Build (ESP-IDF)` job is the only place the band compiles.
 - **Status:** first green run recorded on branch `feat/device-loop-v1` (commit `3bf5eef`).
   The Python gate (ruff check/format, mypy, check_contract, check_baseline_claim,
   phase1 dry-run, full test suite 650+ tests, firmware host C gate) is green.
