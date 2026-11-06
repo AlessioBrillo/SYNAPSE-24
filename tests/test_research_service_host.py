@@ -431,6 +431,20 @@ def test_imu_streams_are_bounded_one_by_one(
     assert service.synapse_host_bench_ring_overflow() == 0
 
 
+def test_a_stalled_imu_counts_one_loss_per_sample_not_per_stream(service: ctypes.CDLL) -> None:
+    """All three IMU streams subscribed, link down: the rings fill (depth 128).
+
+    Each of the 300 samples past the ring is ONE lost IMU sample for the shared
+    counter, even though three streams dropped it; the per-stream `dropped` byte
+    carries the per-stream count.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run_imu_subset(0b1111, 300)
+    assert sent == 0
+    assert service.synapse_host_bench_ring_overflow() == 300 - 128
+
+
 # ---------------------------------------------------------------------------
 # MTU negotiation: the frame size belongs to the link, not to the 244-byte
 # assumption, and every failure path must leave the data queued (or counted),

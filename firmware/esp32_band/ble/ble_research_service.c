@@ -320,17 +320,17 @@ static bool stream_accepts(const synapse_research_stream_t *stream)
     return s_research.transmitting && stream->enabled;
 }
 
-/** Append one 3-axis sample to its own stream, with its own bound. */
-static void imu_push(synapse_research_stream_t *s, int64_t now_us, float x, float y, float z,
+/** Append one 3-axis sample to its own stream, with its own bound.
+ *  Returns true when the sample was lost to a full ring. */
+static bool imu_push(synapse_research_stream_t *s, int64_t now_us, float x, float y, float z,
                      float unit)
 {
     if (!stream_accepts(s)) {
-        return;
+        return false;
     }
     if (s->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
-        s_research.ring_overflow++;
         research_note_drop(s, 1u);
-        return;
+        return true;
     }
     if (s->pending == 0) {
         s->first_ts_us = now_us;
@@ -340,6 +340,7 @@ static void imu_push(synapse_research_stream_t *s, int64_t now_us, float x, floa
     s->ring[s->pending * 3 + 1] = quantise_s16(y, unit);
     s->ring[s->pending * 3 + 2] = quantise_s16(z, unit);
     s->pending++;
+    return false;
 }
 
 /**
@@ -660,12 +661,20 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         // own fill count: bounding only the accelerometer let gyro/mag run past
         // their rings whenever a host took acc alone. ICM-20948 driver reports
         // g / rad/s / uT (see imu_icm20948.cpp).
-        imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
-                 sample->data.imu.ay, sample->data.imu.az, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
-                 sample->data.imu.gy, sample->data.imu.gz, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
-                 sample->data.imu.my, sample->data.imu.mz, (float)SYNAPSE_RESEARCH_UNIT_CUT);
+        // `|` and not `||`: all three streams must be pushed. One IMU sample is one
+        // loss for the shared counter however many of its streams overflowed.
+        bool lost = imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
+                             sample->data.imu.ay, sample->data.imu.az,
+                             (float)SYNAPSE_RESEARCH_UNIT_MG);
+        lost |= imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
+                         sample->data.imu.gy, sample->data.imu.gz,
+                         (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
+        lost |= imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
+                         sample->data.imu.my, sample->data.imu.mz,
+                         (float)SYNAPSE_RESEARCH_UNIT_CUT);
+        if (lost) {
+            s_research.ring_overflow++;
+        }
         break;
     }
     default:

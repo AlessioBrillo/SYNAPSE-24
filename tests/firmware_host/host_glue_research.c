@@ -321,14 +321,17 @@ int synapse_host_bench_run(int mode, int ecg_samples)
     return g_capture_count;
 }
 
-/** Subscribe only the IMU streams in @p mask (bit0 ACC, bit1 GYRO, bit2 MAG), feed
+/** Subscribe only the IMU streams in @p mask (bit0 ACC, bit1 GYRO, bit2 MAG; bit3
+ *  leaves the link down, so nothing drains and the rings fill), feed
  *  @p n IMU samples, return the number of notifications captured. A host may take
  *  any subset of the three: each ring must be bounded on its own. */
 int synapse_host_bench_run_imu_subset(int mask, int n)
 {
     g_capture_count = 0;
-    synapse_research_service_on_connect(7);
-    synapse_research_service_set_mtu(g_bench_mtu);
+    if (!(mask & 8)) {
+        synapse_research_service_on_connect(7);
+        synapse_research_service_set_mtu(g_bench_mtu);
+    }
     if (mask & 1) {
         synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_ACC, true);
     }
