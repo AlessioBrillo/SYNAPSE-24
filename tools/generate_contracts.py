@@ -235,9 +235,10 @@ def _raw_frame_doc(manifest: dict[str, Any]) -> dict[str, Any]:
                 "add 2^32 to the stream's epoch."
             ),
             (
-                "sequence is per stream, uint16, consumed when a frame is BUILT: a hole means a "
-                "frame the stack refused (its samples are re-sent in the next frame only if the "
-                "ring still holds them). A repeat or an older value is not a gap, and its samples are "
+                "sequence is per stream, uint16, advanced only when the band's stack ACCEPTS the "
+                "frame: a refused attempt is retried with the same number and its samples stay "
+                "queued, so a hole means a frame lost after the stack took it. Samples the band "
+                "had to discard travel in `dropped`. A repeat or an older value is not a gap, and its samples are "
                 "not appended: a step back of up to 64 frames is out of order, a longer one is a "
                 "restart of the band (its clock restarts too)."
             ),

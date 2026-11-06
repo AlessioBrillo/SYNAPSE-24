@@ -266,7 +266,7 @@ at both (they answer different questions):
 
 | Where | What it means | What to do when it is not zero |
 |---|---|---|
-| **Sequence gap** in the host log (`dropped_frames` of the gate report) | whole frames the BLE stack refused: the host sees a hole in the 16-bit sequence | a hole in the sequence is a radio/bandwidth problem: shorten the connection interval, subscribe to fewer streams, re-run |
+| **Sequence gap** in the host log (`dropped_frames` of the gate report) | whole frames the stack accepted that never reached the host (a refused frame is retried with the same number): the host sees a hole in the 16-bit sequence | a hole in the sequence is a radio/bandwidth problem: shorten the connection interval, subscribe to fewer streams, re-run |
 | **`dropped` byte** in the frame header (byte 11) | samples lost for that stream since the previous frame, saturated at 255 | the pod's ring overflowed (or a frame was refused): the flush threshold does not fit the radio budget — reduce the number of subscribed streams |
 
 The two counters are not independent: a refused frame leaves a hole in the

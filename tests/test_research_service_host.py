@@ -580,6 +580,32 @@ def test_refused_notifications_stay_queued_and_never_double_free(
     assert service.synapse_host_bench_double_free() == 0, "the service freed a stack mbuf"
 
 
+@pytest.mark.parametrize("fail_every", [2, 3])
+def test_a_refused_notification_does_not_burn_a_sequence_number(
+    service: ctypes.CDLL, fail_every: int
+) -> None:
+    """A refusal is retried with the same number: no hole, nothing lost.
+
+    Burning the number when the frame was built made a refusal that the next
+    tick repairs look like a lost frame to the host. MTU 23 gives many small
+    frames, so several attempts fail along the way.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_mtu(23)
+    service.synapse_host_bench_set_notify_fail_every(fail_every)
+    service.synapse_host_bench_run(_MODE_OPEN, 200)
+    assert service.synapse_host_bench_dropped_frames() > 0, "the knob refused nothing"
+
+    sequences: dict[int, list[int]] = {}
+    for header, _s in _decoded_frames(service):
+        sequences.setdefault(header.stream, []).append(header.sequence)
+    assert sequences, "nothing was transmitted"
+    for stream, numbers in sequences.items():
+        assert numbers == list(range(len(numbers))), f"stream {stream}: {numbers}"
+    assert service.synapse_host_bench_ring_overflow() == 0
+
+
 def test_mbuf_exhaustion_counts_drops_and_never_double_frees(service: ctypes.CDLL) -> None:
     """No mbuf available for a notification is the ENOMEM path.
 
