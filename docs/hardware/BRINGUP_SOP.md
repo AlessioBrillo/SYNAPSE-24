@@ -202,6 +202,15 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    stream's `current_ma` must match the resistor's expected current within a
    few percent; a zero or wildly low reading means the shunt is miswired, not
    that the pod is efficient.
+5. **RR from the PPG (`CONFIG_SYNAPSE_RR_ENABLE`, off until this is done).** Record 5 minutes seated
+   with the PPG on a fingertip and a reference ECG (the band's own AD8232 on the other hand is
+   enough) at the same time, with the RR switched on. Compare the intervals the band publishes
+   (`rr_last`, in 1/1024 s) with the ECG R-R intervals beat by beat: the mean absolute error must
+   be under 15 ms and RMSSD within 15 ms of the ECG's. If it is not, tune the thresholds in
+   `firmware/esp32_band/signal_quality/synapse_rr.h` (amplitude floor, 20 % tolerance, 75 % clean
+   share) and `synapse_feature_map.h` (SQI 0.5, motion 0.3), repeat, and only then enable the flag
+   in the product build. The detector has only ever seen synthetic pulses
+   (`tests/test_firmware_s5_rr.py`).
 
 ### 4b. Motion session (informational, not a gate)
 

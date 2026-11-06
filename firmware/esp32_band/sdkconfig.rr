@@ -1,0 +1,3 @@
+# band-full with the RR feature on: CI builds this variant so the code behind
+# CONFIG_SYNAPSE_RR_ENABLE keeps compiling while the flag is off in the product.
+CONFIG_SYNAPSE_RR_ENABLE=y

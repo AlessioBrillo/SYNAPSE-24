@@ -65,3 +65,8 @@ steps:
       # prove it is the core profile: GPS and FIT storage are off there and on in band-full
       - grep -q "^# CONFIG_SYNAPSE_FEATURE_GPS is not set" sdkconfig
       - grep -q "^# CONFIG_SYNAPSE_FEATURE_FIT_STORAGE is not set" sdkconfig
+      # band-full with the RR feature on: the code behind the flag must keep compiling while it is off
+      - idf.py fullclean
+      - rm -f sdkconfig
+      - SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.rr" idf.py build
+      - grep -q "^CONFIG_SYNAPSE_RR_ENABLE=y" sdkconfig

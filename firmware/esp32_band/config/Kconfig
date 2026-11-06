@@ -67,6 +67,20 @@ config SYNAPSE_FEATURE_OTA
         This flag gates the code: with it off neither synapse_ota_init()
         nor synapse_ota_process() are called.
 
+config SYNAPSE_RR_ENABLE
+    bool "Beat-to-beat intervals (RR) and HRV from the PPG"
+    default n
+    help
+        Detect heartbeats in the infrared PPG and publish the intervals (RR, in 1/1024 s),
+        RMSSD and SDNN in the consumer feature frame v2.
+
+        Off by default: the detector is verified on synthetic pulse trains only and has
+        never seen a finger. Turn it on after the bench run (docs/hardware/BRINGUP_SOP.md)
+        has compared its intervals with a reference ECG and tuned its thresholds
+        (components/signal_quality/synapse_rr.h). A value is published only from a fresh
+        reading with a good signal quality and little motion; otherwise it stays 'not
+        available'. The standard Heart Rate characteristic keeps carrying no RR.
+
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"
     default n

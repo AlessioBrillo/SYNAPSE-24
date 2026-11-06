@@ -39,6 +39,10 @@ SOURCES = [
         ["-Ifirmware/esp32_band/ble"],
     ),
     (
+        "firmware/esp32_band/signal_quality/synapse_rr.c",
+        ["-Ifirmware/esp32_band/signal_quality"],
+    ),
+    (
         "firmware/esp32_band/ble/ble_research_service.c",
         [
             "-Itests/firmware_host/stubs",

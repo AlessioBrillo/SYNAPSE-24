@@ -56,4 +56,17 @@ static inline int synapse_is_fresh(int64_t now_us, int64_t stamp_us, int64_t max
     return stamp_us > 0 && now_us >= stamp_us && (now_us - stamp_us) <= max_age_us;
 }
 
+/** RR and HRV are published only from a reading this good (CONFIG_SYNAPSE_RR_ENABLE). */
+#define SYNAPSE_RR_MIN_SQI 0.5f
+#define SYNAPSE_RR_MAX_MOTION 0.3f
+
+/**
+ * 1 when the PPG reading is fresh, its quality index is at least SYNAPSE_RR_MIN_SQI and its
+ * motion-artifact probability at most SYNAPSE_RR_MAX_MOTION. A NaN on either side fails.
+ */
+static inline int synapse_rr_publishable(int fresh, float sqi, float motion_artifact_prob)
+{
+    return fresh && sqi >= SYNAPSE_RR_MIN_SQI && motion_artifact_prob <= SYNAPSE_RR_MAX_MOTION;
+}
+
 #endif /* SYNAPSE_FEATURE_MAP_H */

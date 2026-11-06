@@ -866,11 +866,19 @@ static esp_err_t notify_flat(uint16_t handle, const uint8_t *buf, size_t n) {
     return ble_gatts_notify_custom(g_conn_handle, handle, om) == 0 ? ESP_OK : ESP_FAIL;
 }
 
+static uint32_t s_feat2_last_ms = 0;
+
+bool synapse_ble_gatt_feature_v2_due(void) {
+    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
+    if (!s_feat2_subscribed || s_feat2_handle == 0) return false;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    return now_ms - s_feat2_last_ms >= 1000u / s_feat2_rate_hz;
+}
+
 esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec) {
-    static uint32_t s_last_ms = 0;
     if (rec == NULL) return ESP_ERR_INVALID_ARG;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    if (now_ms - s_last_ms < 1000u / s_feat2_rate_hz) return ESP_OK;
+    if (now_ms - s_feat2_last_ms < 1000u / s_feat2_rate_hz) return ESP_OK;
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
     if (!s_feat2_subscribed || s_feat2_handle == 0) return ESP_OK;  // nothing subscribed
     if (g_mtu < SYNAPSE_CONTRACT_V2_FEATURE_BYTES + 3u) {
@@ -894,7 +902,7 @@ esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec) {
     esp_err_t rc = notify_flat(s_feat2_handle, buf, n);
     if (rc == ESP_OK) {
         s_feat2_seq++;  // consumed only by a frame that was actually queued: no phantom gap
-        s_last_ms = now_ms;
+        s_feat2_last_ms = now_ms;
     }
     return rc;
 }
