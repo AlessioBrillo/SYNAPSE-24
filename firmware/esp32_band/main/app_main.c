@@ -248,7 +248,7 @@ void app_main(void)
     synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
     synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed);
 
-    // 12c. Wired sync (GPIO 27) as HUB output: the forearm hub is the tier
+    // 12c. Wired sync (GPIO 10; 27 is a flash pin on the N8R8) as HUB output: the forearm hub is the tier
     //      reference for a second pod. The driver ships now so the two-pod
     //      bench in the SOP can measure the pod↔pod residual; emitting the
     //      pulse is a G2 feature (real head pod on a second body site), so

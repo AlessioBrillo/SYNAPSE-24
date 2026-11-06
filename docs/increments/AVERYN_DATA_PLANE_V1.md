@@ -1,5 +1,10 @@
 # Increment: Averyn Data Plane v1
 
+> **Nota (MVP-1.4).** Il titolo e le righe sotto dicono "per Averyn", ma gli ADR di Averyn (0010, 0014, 0026) stabiliscono che
+> **Averyn non chiama mai il Data Plane**: il canale è band → BLE → telefono → cloud di Averyn. Questa API HTTP è
+> uno strumento di test e di ricerca locale, senza consumatori; la visualizzazione vive in Averyn. Dove sotto si legge che
+> "il frontend può consumare `/api/v1/*`", va letto come "uno strumento locale può". Vedi `docs/contracts/AVERYN_INTERFACE.md`.
+
 **Branch:** `feat/averyn-data-plane-v1` · **Scope:** software-only, nessun acquisto hardware richiesto · **Gate:** `ci-local` (Woodpecker) verde
 
 ## Obiettivo dell'incremento

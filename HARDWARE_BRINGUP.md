@@ -137,17 +137,16 @@ idf.py build
 # 5. Flash (adjust COM port to your system)
 idf.py -p COM3 flash monitor
 
-#    Expected output:
-#    I (xxx) synapse_tier0: SYNAPSE-24 ESP32-S3 Tier 0 Firmware v0.1.0
-#    I (xxx) synapse_tier0: Architecture.md: Decoupled sensor pod, Tier 0 continuous H24
-#    I (xxx) synapse_tier0: Roadmap.md: Live ECG+PPG+IMU streaming, synchronized in LSL
-#    I (xxx) synapse_tier0: MAX30102 PPG initialized (I2C port 0, addr 0x57)
-#    I (xxx) synapse_tier0: ICM-20948 IMU initialized (I2C port 0, addr 0x68)
-#    I (xxx) synapse_tier0: BLE LSL bridge started, advertising as "SYNAPSE_T0"
-#    I (xxx) synapse_tier0: Triage inference initialized (model: triage_int8, 11 features)
-#    I (xxx) synapse_tier0: All subsystems started. Entering main loop...
-#    I (xxx) synapse_tier0: Stats: ECG=5000, PPG=640, IMU=1000 | Dropped: ECG=0, PPG=0, IMU=0
-#    I (xxx) synapse_tier0: PPG SQI: sqi=0.72, pi=1.23%, map=0.15, gate_armed=1, consecutive_clean=2
+#    Expected output (tags are SYNAPSE_BAND / SYNAPSE_SENSORS / SYNAPSE_BLE / SYNAPSE_RESEARCH;
+#    exact wording follows the firmware, see firmware/esp32_band):
+#    I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
+#    I (xxx) SYNAPSE_BAND: Firmware version: ... / Hardware version: ...
+#    I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
+#    I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
+#    I (xxx) SYNAPSE_BLE: Advertising started (...)
+#    I (xxx) SYNAPSE_BAND: Entering main loop
+#    A sensor that failed to initialise is logged as an error and left out of the health mask:
+#    I (xxx) SYNAPSE_SENSORS: PPG disabled: ...   (the band keeps running without it)
 #    I (xxx) synapse_tier0: Triage: baseline=0.89, stress=0.08, artifact=0.03, class=0, time=1245 us
 ```
 
@@ -288,7 +287,7 @@ plt.show()
 |---------|--------------|-----|
 | `ESP_ERR_NOT_FOUND` on MAX30102 PART_ID | I2C wiring wrong / pullups missing | Check SDA/SCL on GPIO 8/9; add 4.7kΩ pullups if breakout lacks them |
 | Wired sync not triggering (Phase 2) | GPIO 10 not connected / role mismatch | Verify forearm_hub→GPIO10(output) wired to head_pod→GPIO10(input); check `SYNAPSE_SYNC_ROLE_HUB` vs `SYNAPSE_SYNC_ROLE_POD` |
-| `ECG=0` samples, PPG/IMU working | AD8232 not powered / LO pins floating | Verify 3V3/GND on AD8232; tie LO+/LO- to GND if not using lead-off detect |
+| `ECG=0` samples, PPG/IMU working | AD8232 not powered / LO pins floating | Verify 3V3/GND on AD8232; LO+/LO- are AD8232 OUTPUTS: never tie them to GND (that shorts them); leave them unconnected if lead-off is not used (the firmware pin has a pull-up and reads "lead-off", harmlessly) |
 | BLE not advertising | Antenna / flash config | Ensure `CONFIG_BT_ENABLED=y`; check `sdkconfig.defaults` has BLE enabled |
 | Triage inference fails | TFLM model not embedded | Run `scripts/quantize_and_deploy.py` first to generate `model_data.h` |
 | HR reads 0 or 200+ bpm | Poor electrode contact / motion | Clean skin with alcohol; ensure snug electrode placement; minimize arm movement |

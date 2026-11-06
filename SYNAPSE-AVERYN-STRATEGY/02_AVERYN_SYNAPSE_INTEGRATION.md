@@ -1,3 +1,8 @@
+> **SUPERATO (2026-11-05).** Questo documento descrive una strategia anteriore: un Synapse Cloud con API chiamate da Averyn,
+> pagine `/synapse/*` e un percorso diretto device → cloud. Non è più così: vale ADR-0010/0014/0026 di Averyn (Averyn è l'unico
+> *system of record*, la band parla BLE al telefono, nessun cloud di consumo qui) e il contratto in `docs/contracts/AVERYN_INTERFACE.md`.
+> Resta come storia.
+
 # Averyn × Synapse Integration Specification
 ## Come Averyn Diventa la "Finestra" sui Dati Synapse — Senza Scrivere Firmware
 
