@@ -321,6 +321,27 @@ int synapse_host_bench_run(int mode, int ecg_samples)
     return g_capture_count;
 }
 
+/** Subscribe only the IMU streams in @p mask (bit0 ACC, bit1 GYRO, bit2 MAG), feed
+ *  @p n IMU samples, return the number of notifications captured. A host may take
+ *  any subset of the three: each ring must be bounded on its own. */
+int synapse_host_bench_run_imu_subset(int mask, int n)
+{
+    g_capture_count = 0;
+    synapse_research_service_on_connect(7);
+    synapse_research_service_set_mtu(g_bench_mtu);
+    if (mask & 1) {
+        synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_ACC, true);
+    }
+    if (mask & 2) {
+        synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_GYRO, true);
+    }
+    if (mask & 4) {
+        synapse_research_service_set_stream_enabled(SYNAPSE_RAW_STREAM_MAG, true);
+    }
+    bench_submit_imu(n);
+    return g_capture_count;
+}
+
 /** Submit one sample of @p type (SENSOR_TYPE_*) at an explicit device time. */
 void synapse_host_bench_submit_at(int type, int64_t timestamp_us)
 {

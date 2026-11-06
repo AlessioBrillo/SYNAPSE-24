@@ -310,6 +310,39 @@ static void research_note_drop(synapse_research_stream_t *stream, uint16_t sampl
 }
 
 /**
+ * A stream buffers samples only while something can drain it: transmitting is on
+ * and the host subscribed to THIS stream. Buffering for an unsubscribed stream
+ * only filled its ring, and counted every later sample as a link loss.
+ * (`connected` is not tested: a subscription dies with the link.)
+ */
+static bool stream_accepts(const synapse_research_stream_t *stream)
+{
+    return s_research.transmitting && stream->enabled;
+}
+
+/** Append one 3-axis sample to its own stream, with its own bound. */
+static void imu_push(synapse_research_stream_t *s, int64_t now_us, float x, float y, float z,
+                     float unit)
+{
+    if (!stream_accepts(s)) {
+        return;
+    }
+    if (s->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
+        s_research.ring_overflow++;
+        research_note_drop(s, 1u);
+        return;
+    }
+    if (s->pending == 0) {
+        s->first_ts_us = now_us;
+    }
+    s->ts_ring[s->pending] = (uint32_t)now_us;
+    s->ring[s->pending * 3 + 0] = quantise_s16(x, unit);
+    s->ring[s->pending * 3 + 1] = quantise_s16(y, unit);
+    s->ring[s->pending * 3 + 2] = quantise_s16(z, unit);
+    s->pending++;
+}
+
+/**
  * Values one notification may carry for @p stream at the NEGOTIATED MTU.
  *
  * The 244-byte payload belongs to a 247-byte MTU; sizing the frames from it
@@ -579,6 +612,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     switch (sample->type) {
     case SENSOR_TYPE_ECG: {
         synapse_research_stream_t *s = &s_research.streams[STREAM_ECG];
+        if (!stream_accepts(s)) {
+            break;
+        }
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -602,6 +638,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     }
     case SENSOR_TYPE_PPG: {
         synapse_research_stream_t *s = &s_research.streams[STREAM_PPG];
+        if (!stream_accepts(s)) {
+            break;
+        }
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -617,37 +656,16 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         break;
     }
     case SENSOR_TYPE_IMU: {
-        synapse_research_stream_t *acc = &s_research.streams[STREAM_ACC];
-        synapse_research_stream_t *gyr = &s_research.streams[STREAM_GYRO];
-        synapse_research_stream_t *mag = &s_research.streams[STREAM_MAG];
-        if (acc->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
-            s_research.ring_overflow++;
-            research_note_drop(acc, 1u);
-            research_note_drop(gyr, 1u);
-            research_note_drop(mag, 1u);
-            return;
-        }
-        if (acc->pending == 0) {
-            acc->first_ts_us = now_us;
-            gyr->first_ts_us = now_us;
-            mag->first_ts_us = now_us;
-        }
-        acc->ts_ring[acc->pending] = (uint32_t)now_us;
-        gyr->ts_ring[gyr->pending] = (uint32_t)now_us;
-        mag->ts_ring[mag->pending] = (uint32_t)now_us;
-        // ICM-20948 driver reports g / rad/s / uT (see imu_icm20948.cpp).
-        acc->ring[acc->pending * 3 + 0] = quantise_s16(sample->data.imu.ax, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        acc->ring[acc->pending * 3 + 1] = quantise_s16(sample->data.imu.ay, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        acc->ring[acc->pending * 3 + 2] = quantise_s16(sample->data.imu.az, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        gyr->ring[gyr->pending * 3 + 0] = quantise_s16(sample->data.imu.gx, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        gyr->ring[gyr->pending * 3 + 1] = quantise_s16(sample->data.imu.gy, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        gyr->ring[gyr->pending * 3 + 2] = quantise_s16(sample->data.imu.gz, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        mag->ring[mag->pending * 3 + 0] = quantise_s16(sample->data.imu.mx, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        mag->ring[mag->pending * 3 + 1] = quantise_s16(sample->data.imu.my, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        mag->ring[mag->pending * 3 + 2] = quantise_s16(sample->data.imu.mz, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        acc->pending++;
-        gyr->pending++;
-        mag->pending++;
+        // The three IMU streams are subscribed independently, so each one keeps its
+        // own fill count: bounding only the accelerometer let gyro/mag run past
+        // their rings whenever a host took acc alone. ICM-20948 driver reports
+        // g / rad/s / uT (see imu_icm20948.cpp).
+        imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
+                 sample->data.imu.ay, sample->data.imu.az, (float)SYNAPSE_RESEARCH_UNIT_MG);
+        imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
+                 sample->data.imu.gy, sample->data.imu.gz, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
+        imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
+                 sample->data.imu.my, sample->data.imu.mz, (float)SYNAPSE_RESEARCH_UNIT_CUT);
         break;
     }
     default:

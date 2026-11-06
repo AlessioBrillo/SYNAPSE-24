@@ -250,6 +250,8 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_open.argtypes = []
     service.synapse_host_bench_epoch_wraps.restype = ctypes.c_uint32
     service.synapse_host_bench_epoch_wraps.argtypes = []
+    service.synapse_host_bench_run_imu_subset.restype = ctypes.c_int
+    service.synapse_host_bench_run_imu_subset.argtypes = [ctypes.c_int, ctypes.c_int]
 
 
 def _stream_values(frames: list[tuple[RawHeader, np.ndarray]]) -> dict[int, int]:
@@ -397,6 +399,36 @@ def test_ring_overflow_is_counted_when_the_link_stalls(service: ctypes.CDLL) -> 
     service.synapse_host_bench_run(_MODE_TRANSMITTING | _MODE_BIO_ENABLED, 200)
     overflow = service.synapse_host_bench_ring_overflow()
     assert overflow > 0, "ring overflow not counted: 200 samples were fed with no link"
+
+
+@pytest.mark.parametrize(
+    ("mask", "streams"),
+    [
+        (0b001, {RawStream.ACC}),
+        (0b010, {RawStream.GYRO}),
+        (0b100, {RawStream.MAG}),
+        (0b101, {RawStream.ACC, RawStream.MAG}),
+    ],
+)
+def test_imu_streams_are_bounded_one_by_one(
+    service: ctypes.CDLL, mask: int, streams: set[RawStream]
+) -> None:
+    """A host may take any subset of acc/gyro/mag; each ring has its own bound.
+
+    300 samples is more than twice the ring depth (128): the old code checked only
+    the accelerometer ring, so with acc alone the gyro and mag rings were written
+    past their end after ~2.6 s, and with gyro alone the idle acc ring filled and
+    took the subscribed stream down with it (counted as link loss).
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_run_imu_subset(mask, 300)
+
+    values = _stream_values(_decoded_frames(service))
+    # Flush threshold 32 samples x 3 axes: nine flushes in 300 samples.
+    assert values == {int(s): 9 * 32 * 3 for s in streams}
+    # Nothing was subscribed that could not drain, so nothing is a loss.
+    assert service.synapse_host_bench_ring_overflow() == 0
 
 
 # ---------------------------------------------------------------------------
