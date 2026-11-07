@@ -225,7 +225,15 @@ jobs:
           esp_idf_version: v5.5.5
           target: esp32s3
           path: firmware/esp32_band
-          command: idf.py build
+          # band-core ran first and left its sdkconfig behind: without this the step rebuilt
+          # band-core under the name "band-full" (the same bug fixed in Woodpecker by #69).
+          command: |
+            idf.py fullclean
+            rm -f sdkconfig
+            idf.py build
+            if grep -q "^CONFIG_SYNAPSE_RR_ENABLE=y" sdkconfig; then
+              echo "band-full must build with the RR feature off"; exit 1
+            fi
 
       - name: Build band-full with the RR feature on (keeps the flagged code compiling)
         uses: espressif/esp-idf-ci-action@v1
