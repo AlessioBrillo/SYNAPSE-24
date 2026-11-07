@@ -25,6 +25,7 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   step (band-full, band-core, band-full with RR on). The fixture drift checks
   (`make_band_fixtures`, `make_consumer_vectors`, `make_band_sidecars`) run inside the suite
   (`tests/test_band_fixtures.py`, `tests/test_band_sidecars.py`).
+- **Firmware step (2026-11-06):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it (it needs the ESP-IDF image and more memory than this host has); the GitHub `Firmware Build (ESP-IDF)` job builds the same three configurations too, since 2026-11-07 with a clean `sdkconfig` before band-full.
 - **Status:** first green run recorded on branch `feat/device-loop-v1` (commit `3bf5eef`).
   The Python gate (ruff check/format, mypy, check_contract, check_baseline_claim,
   phase1 dry-run, full test suite 650+ tests, firmware host C gate) is green.
