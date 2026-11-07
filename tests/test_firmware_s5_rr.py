@@ -277,6 +277,25 @@ def test_the_dicrotic_wave_is_not_taken_for_a_beat(lib: ctypes.CDLL) -> None:
     assert hrv[1] == pytest.approx(float(np.std(truth[-32:], ddof=1)), abs=15.0)
 
 
+def test_a_median_learned_from_a_bad_start_does_not_lock_the_detector(lib: ctypes.CDLL) -> None:
+    """Slow 'beats' first (every other pulse missed), then the true 800 ms rhythm.
+
+    A median of ~1600 ms must not make the detector drop every true beat that arrives sooner than
+    0.6 x median: those beats are as high as the last one, so they are kept, rejected against the
+    median, counted, and after a few of them the history is relearned. Reporting 1600 ms for the
+    rest of the recording (half the true rate) is the failure.
+    """
+    slow = np.full(6, 1600.0)
+    fast = np.full(40, 800.0)
+    beats = _beats(np.concatenate([slow, fast]))
+    ir, ts = _signal(beats, seconds=float(beats[-1]) + 1.0, noise=15.0)
+    det = _Detector(lib)
+    det.feed(ir, ts)
+    tail = det.intervals_ms[-15:]
+    assert len(tail) == 15
+    assert all(abs(x - 800.0) < 40.0 for x in tail), f"locked on the wrong rhythm: {tail}"
+
+
 def test_peek_leaves_the_intervals_until_they_are_committed(lib: ctypes.CDLL) -> None:
     """A frame that cannot leave must not eat the intervals: peek, send, then commit."""
     ir, ts = _signal(_beats(np.full(12, 900.0)), seconds=12.0, noise=15.0)
@@ -378,7 +397,7 @@ def test_intervals_are_taken_only_when_a_frame_can_leave() -> None:
     # one gate, one timestamp: due() and push() cannot disagree
     assert "s_feat2_last_ms" in due
     assert "s_feat2_last_ms" in push
-    assert "synapse_ble_gatt_feature_v2_subscribed()" in due
+    assert "synapse_ble_gatt_feature_v2_ready()" in due
 
 
 def test_more_than_one_interval_per_frame_is_reported_not_hidden() -> None:

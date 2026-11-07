@@ -38,10 +38,11 @@
 #define SYNAPSE_RR_MIN_CLEAN_SHARE 0.75f /**< of the recent intervals, for RMSSD / SDNN to be reported */
 #define SYNAPSE_RR_MIN_AMPLITUDE 50.0f /**< ADC counts: a flatter pulse is not a pulse */
 #define SYNAPSE_RR_MAX_GAP_US 200000   /**< a longer silence between samples forgets the last beat */
-#define SYNAPSE_RR_REFRACTORY_SHARE 0.6f /**< of the recent median: the floor for the next peak */
-/** A peak this close behind the previous one and this much lower than it is a dicrotic wave. */
+#define SYNAPSE_RR_REFRACTORY_SHARE 0.6f /**< of the recent median: the echo window for the next peak */
+/** A peak inside the echo window (this, or 0.6 x median) that is lower than SHARE x the previous
+ *  one is a dicrotic wave. */
 #define SYNAPSE_RR_SECONDARY_WINDOW_MS 450.0f
-#define SYNAPSE_RR_SECONDARY_SHARE 0.75f
+#define SYNAPSE_RR_SECONDARY_SHARE 0.7f
 #define SYNAPSE_RR_RESYNC_AFTER 4u /**< consecutive rejected intervals before the history is dropped */
 #define SYNAPSE_RR_EXPIRE_US 5000000   /**< no beat for this long: the recent intervals are stale */
 
@@ -91,7 +92,8 @@ void synapse_rr_commit(synapse_rr_t *st);
 /** peek + commit, for callers that have nothing to wait for. */
 uint32_t synapse_rr_take(synapse_rr_t *st, uint16_t *out, uint8_t max);
 
-/** Forget the recent intervals when no beat has been seen for SYNAPSE_RR_EXPIRE_US. */
+/** Forget the recent intervals when no beat has been seen for SYNAPSE_RR_EXPIRE_US.
+ *  @p now_us must be on the same clock as the ts_us given to synapse_rr_push(). */
 void synapse_rr_expire(synapse_rr_t *st, int64_t now_us);
 
 /** RMSSD and SDNN (ms) over the recent clean intervals; false while there are too few. */

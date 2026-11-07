@@ -150,25 +150,27 @@ bool synapse_rr_push(synapse_rr_t *st, float ir, int64_t ts_us)
     const float half_span_us = (float)(st->t[2] - st->t[0]) * 0.5f;
     const int64_t peak_us = st->t[1] + (int64_t)(offset * half_span_us);
 
-    /* Refractory: the same beat seen twice, or the dicrotic wave on its shoulder (it comes
-     * 250-400 ms after the systolic peak and can clear the threshold). A fixed 300 ms let it
-     * through at normal heart rates; scaling to the recent rhythm rejects it without breaking
-     * the chain, so the real next beat still pairs with the real previous one. */
+    /* Two kinds of "too soon":
+     *  - under SYNAPSE_RR_MIN_MS (200 bpm) it is the same beat seen twice, or noise: dropped;
+     *  - the dicrotic wave comes 250-400 ms after the systolic peak and can clear the amplitude
+     *    threshold. It is LOWER than the peak it follows, while a real fast beat is about as
+     *    high as the last one. So a peak inside the recent-rhythm window (0.6 x median, at least
+     *    SYNAPSE_RR_SECONDARY_WINDOW_MS) is dropped only if it is clearly lower.
+     * A real beat that comes sooner than the median allows is NOT dropped here: it is kept, fails
+     * the closeness test below, and is counted as a rejection, so a median learned from a bad
+     * start (or a sudden rise in heart rate) is dropped after SYNAPSE_RR_RESYNC_AFTER of them
+     * instead of locking the detector onto every second beat. */
     const float median = st->have_prev ? recent_median(st) : 0.0f;
-    float refractory_ms = SYNAPSE_RR_MIN_MS;
-    if (SYNAPSE_RR_REFRACTORY_SHARE * median > refractory_ms) {
-        refractory_ms = SYNAPSE_RR_REFRACTORY_SHARE * median;
-    }
     if (st->have_prev) {
         const float since_ms = (float)(peak_us - st->prev_peak_us) * 1e-3f;
-        if (since_ms < refractory_ms) {
+        if (since_ms < SYNAPSE_RR_MIN_MS) {
             return false;
         }
-        /* Before the median exists nothing scales the refractory. The dicrotic wave is lower than
-         * the systolic peak it follows, while two fast beats in a row are about equally high: a
-         * clearly lower peak that close behind the previous one is its echo, not a beat. */
-        if (since_ms < SYNAPSE_RR_SECONDARY_WINDOW_MS &&
-            y1 < SYNAPSE_RR_SECONDARY_SHARE * st->prev_height) {
+        float echo_window_ms = SYNAPSE_RR_SECONDARY_WINDOW_MS;
+        if (SYNAPSE_RR_REFRACTORY_SHARE * median > echo_window_ms) {
+            echo_window_ms = SYNAPSE_RR_REFRACTORY_SHARE * median;
+        }
+        if (since_ms < echo_window_ms && y1 < SYNAPSE_RR_SECONDARY_SHARE * st->prev_height) {
             return false;
         }
     }
@@ -234,6 +236,8 @@ void synapse_rr_expire(synapse_rr_t *st, int64_t now_us)
         st->ring_n = 0; /* the old intervals describe a rhythm that is no longer being measured */
         st->ring_head = 0;
         st->have_prev = false;
+        st->reject_run = 0;
+        st->prev_height = 0.0f;
     }
 }
 

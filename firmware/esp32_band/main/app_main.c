@@ -379,12 +379,14 @@ void app_main(void)
             // clean reading: otherwise they stay NA. The intervals are looked at (peek) here and
             // consumed (commit) only once the frame was queued: a tick whose frame is held back
             // or refused must not eat them.
-            if (!synapse_ble_gatt_feature_v2_subscribed()) {
-                // Nobody to tell: do not pile up the history of the whole uptime for the first
-                // subscriber to receive as one frame.
+            if (!synapse_ble_gatt_feature_v2_ready()) {
+                // Nobody can be told (not subscribed, or an MTU too small for a frame): do not pile
+                // up the uptime's history for the first frame to carry as one rr_count.
                 synapse_rr_commit(&s_rr);
             }
             synapse_rr_expire(&s_rr, esp_timer_get_time());
+            // An unpublishable window (low SQI, motion) still sends its frame, with RR as NA: the
+            // intervals found in it are consumed with that frame on purpose, never reported late.
             bool rr_in_frame = false;
             if (synapse_ble_gatt_feature_v2_due()) {
                 rr_in_frame = true;
