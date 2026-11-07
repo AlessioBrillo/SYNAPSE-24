@@ -324,8 +324,11 @@ def _refine_peak_times(sig: np.ndarray, ts: np.ndarray, peaks: np.ndarray) -> np
     i = peaks[inner]
     y0, y1, y2 = sig[i - 1], sig[i], sig[i + 1]
     denom = y0 - 2.0 * y1 + y2
+    # A detector that filters internally can return an index on a slope of `sig`: the parabola is
+    # only meaningful around a true local maximum, anywhere else the index is left alone.
+    is_max = (y1 >= y0) & (y1 >= y2) & (denom < 0.0)
     with np.errstate(divide="ignore", invalid="ignore"):
-        offset = np.where(denom < 0.0, 0.5 * (y0 - y2) / denom, 0.0)
+        offset = np.where(is_max, 0.5 * (y0 - y2) / denom, 0.0)
     offset = np.clip(offset, -0.5, 0.5)  # a true local maximum is within half a sample
     half_span = (ts[i + 1] - ts[i - 1]) * 0.5
     times[inner] += offset * half_span

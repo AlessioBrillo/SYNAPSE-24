@@ -321,6 +321,19 @@ class ResearchStreamDecoder:
             if back <= OUT_OF_ORDER_WINDOW and not self._clock_restarted(header, back):
                 self.out_of_order[header.stream] = self.out_of_order.get(header.stream, 0) + 1
                 return False
+            if back > OUT_OF_ORDER_WINDOW and self._clock_moved_forward(header):
+                # 16 bits cannot tell "40000 frames lost" from "25536 frames back": the clock can.
+                # It kept running, so the band did not restart; this is a long outage, a loss.
+                self.drops.append(
+                    DropEvent(
+                        stream=header.stream,
+                        expected_seq=(previous + 1) & 0xFFFF,
+                        received_seq=header.sequence,
+                        gap=int(delta - 1),
+                    )
+                )
+                self.sequences[header.stream] = header.sequence
+                return True
             # Firmware restart, not loss: the sequence counts from zero again and the stream's
             # own clock restarts. The old code read every reconnect as "~65533 frames lost",
             # drowning the gate in phantom gaps (defect N2). Re-base the stream: a fresh sequence
@@ -340,6 +353,13 @@ class ResearchStreamDecoder:
             )
         self.sequences[header.stream] = header.sequence
         return True
+
+    def _clock_moved_forward(self, header: RawHeader) -> bool:
+        """True when the device clock is ahead of the last accepted frame of this stream."""
+        clock = self.clocks.get(header.stream)
+        if clock is None or clock._last_low is None:
+            return False  # nothing to judge by: the contract's rule stands (a restart)
+        return ((header.timestamp_us - clock._last_low) & 0xFFFFFFFF) < 0x80000000
 
     def _clock_restarted(self, header: RawHeader, back: int) -> bool:
         """True when the device clock fell further than ``back`` late frames would explain."""
@@ -457,6 +477,10 @@ class ResearchStreamDecoder:
     def restart_summary(self) -> dict[str, int]:
         """Per-stream count of firmware restarts (typed; not a loss)."""
         return {stream.name: count for stream, count in self.restarts.items()}
+
+    def out_of_order_summary(self) -> dict[str, int]:
+        """Per-stream count of repeated or late frames (neither a loss nor new data)."""
+        return {stream.name: count for stream, count in self.out_of_order.items()}
 
     def dropped_sample_summary(self) -> dict[str, int]:
         """Per-stream count of samples the pod reports as lost.

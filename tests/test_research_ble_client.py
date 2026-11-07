@@ -489,6 +489,20 @@ def test_a_late_or_repeated_frame_is_counted_apart_and_adds_nothing() -> None:
     assert decoder.drops[0].gap == 1
 
 
+def test_a_forward_jump_past_half_the_counter_with_a_running_clock_is_a_loss() -> None:
+    """16 bits cannot tell 40000 frames lost from 25536 frames back; the device clock can."""
+    decoder = ResearchStreamDecoder()
+    values = [100, 200]
+    decoder.feed(encode_frame(RawStream.ECG, 10, 1_000_000, 0, RawFormat.S16, values))
+    decoder.feed(encode_frame(RawStream.ECG, 40_010, 2_000_000_000, 0, RawFormat.S16, values))
+
+    assert decoder.restarts == {}, "the clock kept running: not a restart"
+    assert len(decoder.drops) == 1
+    assert decoder.drops[0].gap == 40_000 - 1
+    assert not decoder.is_clean()
+    assert decoder.out_of_order_summary() == {}
+
+
 def test_a_plain_giant_sequence_gap_is_still_a_gap() -> None:
     """Keep real losses visible under the restart rule.
 

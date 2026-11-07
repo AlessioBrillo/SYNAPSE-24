@@ -11,7 +11,7 @@ superficie Transport, la stessa estensione clock del research client, e
 dichiara solo quello che ha misurato. Nessuna feature analytics: la CLI
 non fa sync exchange, gli stamp del pod restano "pod-relative,
 wall-anchored", e la calibrazione host↔pod resta a MVP-1.4
-(`ClockExchange`).
+(`ClockExchange`, oggi in `synapse24.acquisition.pod_clock_model`).
 
 La misura di successo, verificabile:
 

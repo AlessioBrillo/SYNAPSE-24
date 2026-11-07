@@ -529,3 +529,15 @@ def test_peak_times_are_interpolated_between_samples() -> None:
     assert rmssd_true > 0.0
     err = np.sqrt(np.mean(np.diff(np.diff(refined)) ** 2)) - rmssd_true
     assert abs(err) < 0.004
+
+
+def test_a_peak_index_off_the_maximum_is_not_moved() -> None:
+    """The detector may return a sample on a slope; interpolating there would invent a shift."""
+    import numpy as np
+
+    from worker.hrv_worker import _refine_peak_times
+
+    ts = np.arange(0, 2.0, 0.02)
+    sig = np.sin(2 * np.pi * 0.5 * ts)  # rises over the first half second
+    on_slope = np.array([10])  # t = 0.2 s: neither neighbour is lower on both sides
+    assert _refine_peak_times(sig, ts, on_slope)[0] == ts[10]

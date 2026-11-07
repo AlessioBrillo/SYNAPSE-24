@@ -37,7 +37,7 @@ rovinano una sessione di sei ore prima che chi la esegue se ne accorga.
    sync exchange (Q2).** La prima delivery dà l'ancora wall; ogni sample
    è `ancora + (device_us − pod_origin)·1e⁻⁶`, spaziato intra-frame di
    `arange(n)/rate_misurata`. La calibrazione NTP host↔pod resta a
-   MVP-1.4 (`ClockExchange` nell'SDK). Motivo: il G1 misura zero drop e
+   MVP-1.4 (`ClockExchange` in `synapse24.acquisition.pod_clock_model`; l'SDK non ne ha una copia). Motivo: il G1 misura zero drop e
    timeline monotone, non la corrispondenza bidirezionale degli orologi;
    riscrivere lo stamp del pod con un offset **non** calibrato sarebbe
    più disonesto che dichiarare l'ancora.
@@ -97,6 +97,6 @@ rovinano una sessione di sei ore prima che chi la esegue se ne accorga.
   `tests/test_research_ble_client.py` pinano i punti 2, 3, 4 e 5.
 - `tools/check_baseline_claim.py` nel gate impedisce ai documenti di
   promettere ciò che l'artefatto non dichiara (punto 7).
-- MVP-1.4 eredita `ClockExchange` per rendere calibrato il punto 3; il
+- MVP-1.4 eredita `ClockExchange` (host: `pod_clock_model`) per rendere calibrato il punto 3; il
   passo OTA segue G1; il bonding resta esplicitamente rimandato dal
   piano.

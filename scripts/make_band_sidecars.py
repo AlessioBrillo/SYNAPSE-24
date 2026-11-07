@@ -117,7 +117,12 @@ def raw_session() -> list[tuple[int, bytes]]:
 
 
 def l1_session() -> list[tuple[int, bytes]]:
-    """60 feature frames at 1 Hz (two lost, one of an unknown version) and a status every 5 s."""
+    """60 feature frames at 1 Hz and a status every 5 s.
+
+    Two frames are lost on the link and one is of an unknown version. That one is skipped, but it
+    used a sequence number, so the answer key's ``lost_frames`` is 3 (2 + that frame), counted
+    apart as ``unknown_version_frames``.
+    """
     records: list[tuple[int, bytes]] = []
     sequence = 0
     for second in range(int(SECONDS)):

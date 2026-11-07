@@ -18,7 +18,7 @@ assumed), subscribes the raw-stream characteristics, and anchors the pod's
 (pod-boot-relative, 32-bit) frame stamps to the wall clock of the first
 frame. **No sync exchange is performed here**: the recorded timestamps are
 "pod-relative, wall-anchored", and the calibrated pod->host mapping stays a
-research-client concern (``synapse24.acquisition.pod_clock_model``)
+research-client concern (the host side owns it, not this package).
 """
 
 from __future__ import annotations

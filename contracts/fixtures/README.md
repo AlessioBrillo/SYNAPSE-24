@@ -27,7 +27,8 @@ monotonic clock since the recording began; the frame is exactly what was notifie
   dropped on the PPG stream, a repeated ACC frame and one frame of an unknown version.
 * `session_60s.synapse.bin` — consumer v2 records (`gatt_v2.json`): a feature frame per second (two
   lost on the link, one of an unknown version, a warm-up with sentinels) and a status record every
-  5 s; the two kinds are told apart by length (27 B and 40 B).
+  5 s. The answer key's `lost_frames` is 3, not 2: the unknown-version frame was skipped but used a
+  sequence number, so a reader sees a hole there too and counts that frame apart as unknown; the two kinds are told apart by length (27 B and 40 B).
 * `session_60s.expected.json` — the answer key: per stream the frames, values, lost frames, restarts,
   out-of-order frames, device-reported drops and the device timeline extended with the wrap flag.
 
