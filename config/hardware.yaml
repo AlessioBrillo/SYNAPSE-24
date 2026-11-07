@@ -211,6 +211,7 @@ ble:
     flags: {charging: 0, lead_off: 1, transmitting: 2, clock_wrapped: 3}
     sensor_health_bits: {ecg: 0, ppg: 1, imu: 2, temp: 3, power: 4}   # set = the sensor initialised
     stress_levels: {baseline: 0, stress: 1, artifact: 2, unknown: 3}   # 255 (na) = the model did not run
+    sport_types: {generic: 0, running: 1, cycling: 2, swimming: 3, sleep: 4}   # 255 (na) = not set
     feature:                         # notify, needs ATT MTU >= bytes + 3
       version: 2
       bytes: 27

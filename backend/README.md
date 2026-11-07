@@ -1,9 +1,10 @@
-# backend — STATUS: experimental, not verified in CI
+# backend: the local Data Plane
 
-This FastAPI service is a **developer convenience surface** for the frontend,
-not part of the G1 critical path. It has no test job in CI and is not
-exercised by the hardware-readiness gates.
+A FastAPI service that serves the session catalog, reports and job runs of this repository's
+recordings on loopback. It is **not** the product backend: accounts, consent and the system of
+record are Averyn's, and nothing here draws a chart (the local viewer was removed; ADR-0030 in
+the Averyn repository puts every view of the band's data there).
 
-Options are tracked (same as `frontend/README.md`): bring into CI with a
-minimal test job, or remove it once the live stack proves out. Do not treat
-anything in here as validated infrastructure until then.
+It is in the gate: `mypy` covers it and the coverage figure includes it (`tests/test_backend_*.py`,
+`tests/test_docs_interface.py`). The contract it exposes is `docs/contracts/AVERYN_INTERFACE.md`.
+Endpoints that need a live device (`/api/live/*`, `/api/control/*`) answer 501 on purpose.

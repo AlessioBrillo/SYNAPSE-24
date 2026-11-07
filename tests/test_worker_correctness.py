@@ -502,3 +502,42 @@ def test_a_missing_schema_is_reported_not_skipped_in_silence(
         hrv_worker._load_worker_schema.cache_clear()
     assert errors == []
     assert "NOT validated" in caplog.text
+
+
+def test_peak_times_are_interpolated_between_samples() -> None:
+    """At 50 Hz a beat found on a whole sample is off by up to 10 ms; the parabola removes it."""
+    import numpy as np
+
+    from worker.hrv_worker import _refine_peak_times
+
+    fs = 50.0
+    ts = np.arange(0, 60, 1.0 / fs)
+    rng = np.random.RandomState(4)
+    rr = np.clip(rng.normal(0.9, 0.05, 60), 0.6, 1.3)  # a variable rhythm, in seconds
+    beats = 1.0 + np.concatenate([[0.0], np.cumsum(rr)])
+    beats = beats[beats < 58.0]
+    sig = np.zeros_like(ts)
+    for tb in beats:
+        sig += np.exp(-0.5 * ((ts - tb) / 0.12) ** 2)
+    peaks = np.array([int(round((tb - ts[0]) * fs)) for tb in beats])
+
+    refined = _refine_peak_times(sig, ts, peaks)
+    plain = ts[peaks]
+    assert np.abs(refined - beats).max() < 0.003, "interpolated beats are within 3 ms"
+    assert np.abs(plain - beats).max() > 0.006, "the whole-sample times were not that good"
+    rmssd_true = float(np.sqrt(np.mean(np.diff(np.diff(beats)) ** 2)))
+    assert rmssd_true > 0.0
+    err = np.sqrt(np.mean(np.diff(np.diff(refined)) ** 2)) - rmssd_true
+    assert abs(err) < 0.004
+
+
+def test_a_peak_index_off_the_maximum_is_not_moved() -> None:
+    """The detector may return a sample on a slope; interpolating there would invent a shift."""
+    import numpy as np
+
+    from worker.hrv_worker import _refine_peak_times
+
+    ts = np.arange(0, 2.0, 0.02)
+    sig = np.sin(2 * np.pi * 0.5 * ts)  # rises over the first half second
+    on_slope = np.array([10])  # t = 0.2 s: neither neighbour is lower on both sides
+    assert _refine_peak_times(sig, ts, on_slope)[0] == ts[10]
