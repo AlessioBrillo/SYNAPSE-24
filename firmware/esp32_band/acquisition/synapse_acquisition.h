@@ -102,8 +102,8 @@ typedef struct {
     // Immobility detection (for T0->T1 promotion)
     uint32_t immobility_window_s;
     float accel_threshold_g;
-    uint8_t required_immobility_windows;
-    uint8_t immobility_counter;
+    uint16_t required_immobility_windows;  /* 1 Hz windows: 300 = 5 minutes */
+    uint16_t immobility_counter;
     int64_t last_motion_time_us;
     
     // Night window scheduler
