@@ -32,12 +32,12 @@
  *                               samples, not 12 values.
  *    12  ...  samples          sample_count values, little-endian two's compl.
  *
- * Loss reporting: the sequence number is incremented when a frame is BUILT,
- * not when the notification is accepted, so a frame the BLE stack refused
- * leaves a hole in the sequence that the host's gap detection sees. The
- * `dropped` byte carries the magnitude of the loss (samples lost since the
- * previous transmitted frame), so a consumer can tell a one-sample hiccup
- * from a whole frame that never left the pod.
+ * Loss reporting: the sequence number advances only when the BLE stack accepts
+ * the notification. A refused attempt is retried with the same number and its
+ * samples stay queued, so a hole in the sequence is a frame that left the pod
+ * and never arrived. Samples the pod itself had to discard (a full ring)
+ * travel in the `dropped` byte: samples lost since the previous transmitted
+ * frame, so a consumer can tell a one-sample hiccup from a whole lost frame.
  */
 
 #ifndef SYNAPSE_RAW_FRAME_H
@@ -128,9 +128,9 @@ uint16_t synapse_raw_max_samples(uint8_t format);
  * @brief Encode a frame of raw samples.
  *
  * @param stream_id       One of synapse_raw_stream_t.
- * @param sequence        Wrapping 16-bit sequence number. The caller
- *                        increments it when the frame is BUILT, so a frame the
- *                        BLE stack refuses still leaves a hole in the sequence.
+ * @param sequence        Wrapping 16-bit sequence number. The caller advances
+ *                        it only once the BLE stack accepted the frame; a
+ *                        refused attempt is re-encoded with the same number.
  * @param timestamp_us_lo Low 32 bits of the device microsecond timestamp of
  *                        the *first* sample in the frame.
  * @param flags           OR of SYNAPSE_RAW_FLAG_* bits.

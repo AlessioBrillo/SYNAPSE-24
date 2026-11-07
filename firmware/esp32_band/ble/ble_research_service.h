@@ -21,10 +21,10 @@
  *   - src/synapse24/hardware/raw_codec.py          (host decoder)
  * tools/check_contract.py rejects any UUID or stream-id drift between them.
  *
- * Loss reporting: the per-stream sequence number is consumed when a frame is
- * BUILT, not when the notification is accepted, so a frame the BLE stack
- * refuses leaves a hole the host's gap detection can see. The magnitude of
- * the loss travels in the frame header's `dropped` byte.
+ * Loss reporting: the per-stream sequence number advances only when the BLE
+ * stack accepts the notification; a refused frame is retried with the same
+ * number, so a hole is a frame lost after the stack took it. Samples the pod
+ * had to discard travel in the frame header's `dropped` byte.
  */
 
 #ifndef SYNAPSE_BLE_RESEARCH_SERVICE_H

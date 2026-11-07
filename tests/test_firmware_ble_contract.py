@@ -508,21 +508,6 @@ def test_the_fit_developer_field_names_match_the_contract() -> None:
 # ---------------------------------------------------------------------------
 # T6: the loss is visible to the host.
 # ---------------------------------------------------------------------------
-def test_the_sequence_is_consumed_when_the_frame_is_built() -> None:
-    """A frame the stack refuses must leave a hole in the sequence."""
-    source = _read(RESEARCH_C)
-    start = source.index("static void flush_stream(")
-    body = source[start : source.index("void synapse_research_service_submit(")]
-    assert "uint16_t sequence = stream->sequence++;" in body, (
-        "the sequence must be consumed when the frame is built, not when the "
-        "notification is accepted"
-    )
-    # The sequence must not be incremented a second time on success.
-    assert body.count("stream->sequence++") == 1, (
-        "the sequence must be incremented exactly once per frame"
-    )
-
-
 def test_the_dropped_counter_is_carried_by_the_header() -> None:
     """The loss magnitude travels in the frame header."""
     source = _read(RESEARCH_C)

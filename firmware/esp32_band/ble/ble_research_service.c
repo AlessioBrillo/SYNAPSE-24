@@ -475,11 +475,13 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
                               ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
                               : (uint8_t)stream->dropped_pending;
 
-        /* The sequence number is consumed when the frame is BUILT, not when the
-         * notification is accepted: a frame the BLE stack refuses must leave a
-         * hole in the sequence, otherwise the host sees an uninterrupted stream
-         * and cannot detect the loss at all. */
-        uint16_t sequence = stream->sequence++;
+        /* The sequence number advances only when the stack ACCEPTS the frame
+         * (below). A refused attempt keeps its samples queued and retries with
+         * the same number, so a hole in the host's sequence means a frame that
+         * left the pod and never arrived; data the pod had to discard is the
+         * `dropped` byte's business. Burning the number at build time made a
+         * refusal that the next tick repairs look like a loss. */
+        uint16_t sequence = stream->sequence;
 
         int rc = synapse_raw_frame_encode(
             stream->stream_id,
@@ -512,8 +514,8 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
             if (om == NULL) {
                 r->dropped_frames++;
                 // Transient (no mbuf for the notification): the samples are NOT
-                // lost — they stay queued and a later tick retries, so they must
-                // NOT travel in the `dropped` byte of the next frame.
+                // lost — they stay queued and a later tick retries with the same
+                // sequence number, so they must NOT travel in the `dropped` byte.
                 break;
             } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
                 r->dropped_frames++;
@@ -524,12 +526,14 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
                  * every refused notification; the host glue poisons the
                  * mbuf to prove its absence. */
                 /* Also transient: a saturated queue mid-connection-event eats
-                 * the frame but not the data. The sequence hole above is the
-                 * evidence the host sees; the samples ride the next tick. */
+                 * the frame but not the data. Nothing is consumed: the samples
+                 * and the sequence number ride the next tick. */
                 break;
             } else {
-                /* Actually transmitted: advance the wrap witness and clear the
-                 * loss byte — the loss it carried has reached the host. */
+                /* Accepted by the stack: consume the sequence number, advance
+                 * the wrap witness and clear the loss byte — the loss it
+                 * carried has reached the host. */
+                stream->sequence++;
                 stream->last_flushed_ts_low = ts_low;
                 stream->has_flushed = true;
                 stream->dropped_pending = 0;

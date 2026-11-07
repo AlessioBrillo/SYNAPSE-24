@@ -266,15 +266,16 @@ at both (they answer different questions):
 
 | Where | What it means | What to do when it is not zero |
 |---|---|---|
-| **Sequence gap** in the host log (`dropped_frames` of the gate report) | whole frames the BLE stack refused: the host sees a hole in the 16-bit sequence | a hole in the sequence is a radio/bandwidth problem: shorten the connection interval, subscribe to fewer streams, re-run |
-| **`dropped` byte** in the frame header (byte 11) | samples lost for that stream since the previous frame, saturated at 255 | the pod's ring overflowed (or a frame was refused): the flush threshold does not fit the radio budget — reduce the number of subscribed streams |
+| **Sequence gap** in the host log (`dropped_frames` of the gate report) | whole frames the stack accepted that never reached the host (a refused frame is retried with the same number): the host sees a hole in the 16-bit sequence | a hole in the sequence is a radio/bandwidth problem: shorten the connection interval, subscribe to fewer streams, re-run |
+| **`dropped` byte** in the frame header (byte 11) | samples lost for that stream since the previous frame, saturated at 255 | the pod's ring overflowed or a frame could not be encoded: the flush threshold does not fit the radio budget — reduce the number of subscribed streams |
+| **`dropped_frames`** in the Status record | notifications the BLE stack refused or had no buffer for. Nothing is lost by them (the frame is retried with the same sequence number and its samples stay queued), so neither a hole nor a `dropped` byte shows | a count that keeps growing is a congested link: it ends in a ring overflow and then in a `dropped` byte. Treat it as the early warning, not as a loss |
 
-The two counters are not independent: a refused frame leaves a hole in the
-sequence *and* is counted in the `dropped` byte of the next frame. A
-`dropped` byte **without** a hole means the pod lost samples before framing
-them (the ring overflowed). Both must be zero for the run to count, and the
-`dropped` byte is in *samples*, not in values: a refused frame of a
-3-channel stream loses 4 samples, not 12.
+The counters are not interchangeable. A hole in the sequence is a frame the
+stack accepted that never reached the host. A `dropped` byte is data the pod
+discarded itself (ring overflow), with or without a hole. A refused
+notification shows only in `dropped_frames`. All three must be zero for the
+run to count, and the `dropped` byte is in *samples*, not in values: a
+3-channel stream loses 4 samples, not 12 values.
 
 ### 5b. How to read the advertisement on the bench
 
