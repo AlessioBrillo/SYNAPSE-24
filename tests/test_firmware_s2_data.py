@@ -36,7 +36,7 @@ def fm(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         build(
             tmp_path_factory.mktemp("feature_map"),
             [GLUE],
-            extra_includes=[str(BAND / "main")],
+            extra_includes=[str(BAND / "main"), str(BAND / "ble")],
         )
     )
     if lib is None:
@@ -48,6 +48,10 @@ def fm(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     lib.host_is_fresh.restype = ctypes.c_int
     lib.host_is_fresh.argtypes = [ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
     lib.host_ppg_max_age_us.restype = ctypes.c_int64
+    lib.host_hr_flags.restype = ctypes.c_uint8
+    lib.host_hr_flags.argtypes = [ctypes.c_int]
+    lib.host_hr_is_readable.restype = ctypes.c_int
+    lib.host_hr_is_readable.argtypes = [ctypes.c_int64, ctypes.c_int64]
     return lib
 
 
@@ -96,6 +100,23 @@ def test_a_ppg_reading_goes_stale(fm: ctypes.CDLL) -> None:
     assert fm.host_is_fresh(now, now - max_age - 1, max_age) == 0  # the finger may be long gone
     assert fm.host_is_fresh(now, 0, max_age) == 0  # never stamped: not a reading
     assert fm.host_is_fresh(now, now + 1, max_age) == 0  # a stamp from the future is a bug
+
+
+def test_the_standard_heart_rate_reports_the_sensor_contact(fm: ctypes.CDLL) -> None:
+    """Bits 1-2 of 0x2A37 are 0b11 (supported, detected): the value exists only with a finger on."""
+    assert fm.host_hr_flags(0) == 0b0000_0111
+    assert fm.host_hr_flags(1) == 0b0001_0111  # RR present adds bit 4 and nothing else
+    assert (fm.host_hr_flags(0) >> 1) & 0b11 == 0b11
+
+
+def test_a_heart_rate_read_needs_a_fresh_measurement(fm: ctypes.CDLL) -> None:
+    """0x2A37 has no 'not available' code, so a stale or never-built value must not be readable."""
+    now = 100_000_000
+    assert fm.host_hr_is_readable(now, 0) == 0, "never measured: 65535 bpm would read as a value"
+    assert fm.host_hr_is_readable(now, now - 1_000_000) == 1
+    assert fm.host_hr_is_readable(now, now - 3_000_000) == 1
+    assert fm.host_hr_is_readable(now, now - 3_000_001) == 0, "the finger left, the old value stays"
+    assert fm.host_hr_is_readable(now, now + 1) == 0, "a stamp from the future is a bug"
 
 
 def test_app_main_applies_the_freshness_rule_to_the_ppg_values() -> None:

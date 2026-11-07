@@ -89,10 +89,23 @@ static void on_transmit_request(bool on)
     (void)synapse_research_service_set_transmitting(on);
 }
 
+// What is present on the pod: the sensors that initialised, plus the power monitor (INA219).
+static uint8_t device_health_mask(void)
+{
+    uint8_t mask = synapse_sensors_health_mask();
+    if (synapse_sensors_temperature_ok()) {
+        mask |= SYNAPSE_V2_HEALTH_TEMP;
+    }
+    if (synapse_power_has_measured_current()) {
+        mask |= SYNAPSE_V2_HEALTH_POWER;
+    }
+    return mask;
+}
+
 static void fill_status(synapse_status_v2_t *st)
 {
-    st->tier = 0;  // ponytail: the acquisition FSM does not expose its tier yet
-    st->sensor_health = synapse_sensors_health_mask();
+    st->tier = (uint8_t)synapse_acquisition_get_tier();
+    st->sensor_health = device_health_mask();
     st->flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
     st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
@@ -359,7 +372,7 @@ void app_main(void)
             v2.ecg_quality = ecg_quality;
             v2.motion_artifact = ppg_map;  // v1's ppg_map: the PPG window is motion-corrupted
             if (stress.valid) v2.stress_level = stress_level;  // otherwise it stays NA (null)
-            v2.sensor_health = synapse_sensors_health_mask();
+            v2.sensor_health = device_health_mask();
             if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
 #if defined(CONFIG_SYNAPSE_RR_ENABLE)
             // RR and HRV leave only with a frame that really goes out and only from a fresh,

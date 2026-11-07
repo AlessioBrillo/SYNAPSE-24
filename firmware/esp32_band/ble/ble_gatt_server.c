@@ -18,6 +18,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "ble_gatt_server.h"
+#include "synapse_hr_measurement.h"
 #include "ble_gatt_server_priv.h"
 #include "ble_research_service.h"
 #include "synapse_contract_generated.h"
@@ -47,6 +48,7 @@ static uint8_t s_batt_level = 100;
 static bool s_batt_notify_pending = false;
 static uint16_t s_last_hr_bpm = 0xFFFF;
 static uint16_t s_last_rr_ms = 0xFFFF;
+static int64_t s_last_hr_us = 0;  // when notify_hr() last saw a valid measurement
 static char s_mfr_name[32] = "Synapse";
 static char s_model_num[32] = "Band v1";
 static char s_serial_num[32] = "SYN-000000";
@@ -194,10 +196,15 @@ static uint16_t rr_ms_to_1024(uint16_t rr_ms) {
 static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        // 0x2A37 has no "not available" code: 65535 bpm (the initial value) or a value the
+        // finger left behind would read as a measurement. No fresh measurement, no read.
+        if (s_last_hr_bpm == 0xFFFF ||
+            !synapse_hr_is_readable(esp_timer_get_time(), s_last_hr_us)) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
         uint8_t val[1 + 2 + 2]; // flags + HR16 (+ RR16 when present)
-        uint8_t flags = 0x01;   // bit0: 16-bit Heart Rate Measurement Value
         uint16_t rr = s_last_rr_ms;
-        if (rr != 0xFFFF) flags |= 0x10; // RR interval present
+        uint8_t flags = synapse_hr_flags(rr != 0xFFFF);
         val[0] = flags;
         val[1] = (uint8_t)(s_last_hr_bpm & 0xFF);
         val[2] = (uint8_t)((s_last_hr_bpm >> 8) & 0xFF);
@@ -243,10 +250,10 @@ esp_err_t synapse_ble_gatt_notify_hr(uint16_t hr_bpm, uint16_t rr_interval_ms) {
     // for a notification) sees the same measurement the notify path sends.
     s_last_hr_bpm = hr_bpm;
     s_last_rr_ms = rr_interval_ms;
+    s_last_hr_us = esp_timer_get_time();
     if (s_hr_handle == 0 || !s_hr_subscribed) return ESP_ERR_INVALID_STATE;
-    // Standard 0x2A37 flags: bit0 = 16-bit HR value, bit4 = RR interval present.
-    uint8_t flags = 0x01; // 16-bit HR value
-    if (rr_interval_ms != 0xFFFF) flags |= 0x10; // RR interval present
+    // Standard 0x2A37 flags: 16-bit HR, sensor contact supported + detected, RR if present.
+    const uint8_t flags = synapse_hr_flags(rr_interval_ms != 0xFFFF);
     uint8_t val[1 + 2 + 2]; // flags + HR16 [+ RR16]
     uint8_t n = 0;
     val[n++] = flags;
@@ -900,7 +907,11 @@ esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec) {
     rec->sequence = s_feat2_seq;
     if (s_batt_known) {
         rec->battery_pct = s_batt_level;
-        if (s_batt_charging) rec->flags |= SYNAPSE_V2_FLAG_CHARGING;
+        // CHARGING is meaningful only when the power monitor exists (contract: read it only
+        // when the POWER bit of sensor_health is set); never set it from an unmeasured state.
+        if (s_batt_charging && (rec->sensor_health & SYNAPSE_V2_HEALTH_POWER)) {
+            rec->flags |= SYNAPSE_V2_FLAG_CHARGING;
+        }
     }
     uint8_t buf[SYNAPSE_CONTRACT_V2_FEATURE_BYTES];
     size_t n = synapse_feature_v2_encode(rec, buf, sizeof(buf));

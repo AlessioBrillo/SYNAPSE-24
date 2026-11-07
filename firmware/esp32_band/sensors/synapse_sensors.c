@@ -102,6 +102,15 @@ static void note_init(sensor_type_t type, const char *name, esp_err_t err) {
         ESP_LOGE(TAG, "%s init failed: %s (continuing without it)", name, esp_err_to_name(err));
     }
 }
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
+static bool s_temp_ok = false;
+static void note_temp_init(esp_err_t err) {
+    s_temp_ok = (err == ESP_OK);
+    if (!s_temp_ok) {
+        ESP_LOGE(TAG, "Temperature init failed: %s (continuing without it)", esp_err_to_name(err));
+    }
+}
+#endif
 static void ecg_init_wrap(void *ctx) {
     note_init(SENSOR_TYPE_ECG, "ECG", ecg_ad8232_init((const ecg_ad8232_config_t *)ctx));
 }
@@ -159,6 +168,14 @@ static void spawn_or_log(esp_err_t err, const char *name) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "%s disabled: %s", name, esp_err_to_name(err));
     }
+}
+
+bool synapse_sensors_temperature_ok(void) {
+#ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
+    return s_temp_ok;
+#else
+    return false;
+#endif
 }
 
 uint8_t synapse_sensors_health_mask(void) {
@@ -255,13 +272,15 @@ esp_err_t synapse_sensors_init(void) {
     spawn_or_log(register_and_spawn(2, &imu_sensor, 4096, SENSOR_TASK_PRIO_IMU), "IMU");
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
-    // Initialize GPS
-    ESP_ERROR_CHECK(gps_max_m10s_init(&g_sensors.gps_config));
+    // Initialize GPS: a missing chip must not take the whole band down at boot.
+    if (gps_max_m10s_init(&g_sensors.gps_config) != ESP_OK) {
+        ESP_LOGE(TAG, "GPS init failed (continuing without it)");
+    }
 #endif
 
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
-    // Initialize Temperature
-    ESP_ERROR_CHECK(temp_tmp117_init(&g_sensors.temp_config));
+    // Initialize Temperature: fail soft like ECG/PPG/IMU, and say so in sensor_health.
+    note_temp_init(temp_tmp117_init(&g_sensors.temp_config));
 #endif
 
     // Initialize latest data

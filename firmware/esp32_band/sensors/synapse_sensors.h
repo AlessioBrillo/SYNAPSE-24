@@ -119,6 +119,9 @@ esp_err_t synapse_sensors_get_gps(gps_data_t *gps);
 esp_err_t synapse_sensors_get_temp(temp_data_t *temp);
 #endif
 
+/** True when the temperature sensor initialised (CONFIG_SYNAPSE_FEATURE_TEMPERATURE). */
+bool synapse_sensors_temperature_ok(void);
+
 /** Bitmask of sensors whose init succeeded (bit n = sensor_type_t n). */
 uint8_t synapse_sensors_health_mask(void);
 
