@@ -307,15 +307,18 @@ esp_err_t ppg_sqi_get_latest(ppg_sqi_result_t* result) {
     if (!result) return ESP_ERR_INVALID_ARG;
     if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
     
-    uint32_t before, after;
-    do {
-        before = s_seq;
+    // Bounded: a reader that outranks the writer and arrives between its two increments would
+    // otherwise spin forever (the writer cannot run), and trip the task watchdog.
+    for (int attempt = 0; attempt < 8; attempt++) {
+        const uint32_t before = s_seq;
         __sync_synchronize();
         *result = s_ctx.last_result;
         __sync_synchronize();
-        after = s_seq;
-    } while ((before & 1u) != 0u || before != after);
-    return ESP_OK;
+        if ((before & 1u) == 0u && before == s_seq) {
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t ppg_sqi_reset(void) {

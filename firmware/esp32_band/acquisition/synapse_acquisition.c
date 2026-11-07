@@ -73,7 +73,7 @@ esp_err_t synapse_acquisition_init(EventGroupHandle_t system_events) {
     g_acq.consecutive_clean_windows = 0;
     
     // Immobility config
-    g_acq.immobility_window_s = 30;
+    g_acq.immobility_window_s = 1;  // the IMU quality module publishes once per second
     g_acq.accel_threshold_g = 0.02f;
     g_acq.required_immobility_windows = 300;  // 5 minutes of 1 Hz IMU windows
     g_acq.immobility_counter = 0;
@@ -168,13 +168,19 @@ void synapse_acquisition_tick(void) {
     }
 
     imu_quality_t imu = {0};
-    if (synapse_signal_quality_get_imu(&imu) == ESP_OK &&
-        synapse_window_is_new(&s_last_imu_us, imu.timestamp_us)) {
-        // imu.is_stationary is computed inside imu_processor from dyn_acc_g
-        // (gravity removed), so it is safe to use directly as the immobility
-        // signal. motion_intensity still includes ~1 g at rest and is only
-        // logged here for diagnostics.
-        synapse_acquisition_update_immobility(imu.motion_intensity, imu.is_stationary);
+    if (synapse_signal_quality_get_imu(&imu) == ESP_OK) {
+        if (!synapse_window_is_current(now_us, imu.timestamp_us)) {
+            // A stalled or dead IMU is not stillness: without this the counter keeps the value
+            // it had when the readings stopped, and a count at the threshold stays "immobile".
+            if (g_acq.immobility_counter != 0) {
+                synapse_acquisition_update_immobility(0.0f, false);
+            }
+        } else if (synapse_window_is_new(&s_last_imu_us, imu.timestamp_us)) {
+            // imu.is_stationary is computed inside imu_processor from dyn_acc_g (gravity
+            // removed), so it is safe to use directly as the immobility signal. motion_intensity
+            // still includes ~1 g at rest and is only logged here for diagnostics.
+            synapse_acquisition_update_immobility(imu.motion_intensity, imu.is_stationary);
+        }
     }
 }
 

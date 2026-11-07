@@ -102,6 +102,9 @@ static void note_init(sensor_type_t type, const char *name, esp_err_t err) {
         ESP_LOGE(TAG, "%s init failed: %s (continuing without it)", name, esp_err_to_name(err));
     }
 }
+#ifdef CONFIG_SYNAPSE_FEATURE_GPS
+static bool s_gps_ok = false;
+#endif
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
 static bool s_temp_ok = false;
 static void note_temp_init(esp_err_t err) {
@@ -273,7 +276,8 @@ esp_err_t synapse_sensors_init(void) {
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Initialize GPS: a missing chip must not take the whole band down at boot.
-    if (gps_max_m10s_init(&g_sensors.gps_config) != ESP_OK) {
+    s_gps_ok = (gps_max_m10s_init(&g_sensors.gps_config) == ESP_OK);
+    if (!s_gps_ok) {
         ESP_LOGE(TAG, "GPS init failed (continuing without it)");
     }
 #endif
@@ -409,6 +413,7 @@ esp_err_t synapse_sensors_get_sample(synapse_sensor_sample_t *sample) {
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
 esp_err_t synapse_sensors_get_gps(gps_data_t *gps) {
     if (!gps) return ESP_ERR_INVALID_ARG;
+    if (!s_gps_ok) return ESP_ERR_INVALID_STATE;  // init failed: never read an unstarted driver
     return gps_max_m10s_get_latest(gps);
 }
 #endif
@@ -460,7 +465,7 @@ void synapse_sensors_update_aux_data(void) {
 #ifdef SYNAPSE_HAS_AUX_SENSORS
  #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     gps_data_t gps;
-    if (gps_max_m10s_get_latest(&gps) == ESP_OK) {
+    if (s_gps_ok && gps_max_m10s_get_latest(&gps) == ESP_OK) {
         if (xSemaphoreTake(g_sensors.data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             g_sensors.latest_gps = gps;
             xSemaphoreGive(g_sensors.data_mutex);
