@@ -598,11 +598,19 @@ def test_a_refused_notification_does_not_burn_a_sequence_number(
     assert service.synapse_host_bench_dropped_frames() > 0, "the knob refused nothing"
 
     sequences: dict[int, list[int]] = {}
-    for header, _s in _decoded_frames(service):
+    ecg: list[int] = []
+    for header, samples in _decoded_frames(service):
         sequences.setdefault(header.stream, []).append(header.sequence)
+        # a refusal loses nothing, so no frame may claim a loss
+        assert header.dropped == 0, f"stream {header.stream}: dropped={header.dropped}"
+        if header.stream == RawStream.ECG:
+            ecg.extend(int(v) for v in samples)
     assert sequences, "nothing was transmitted"
     for stream, numbers in sequences.items():
         assert numbers == list(range(len(numbers))), f"stream {stream}: {numbers}"
+    # the retried frames carry the same samples once, in order (the bench feeds a rising ramp)
+    assert ecg, "no ECG delivered"
+    assert all(b > a for a, b in zip(ecg, ecg[1:], strict=False)), "ECG repeated or reordered"
     assert service.synapse_host_bench_ring_overflow() == 0
 
 
