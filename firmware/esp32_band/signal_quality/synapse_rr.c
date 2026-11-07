@@ -150,33 +150,60 @@ bool synapse_rr_push(synapse_rr_t *st, float ir, int64_t ts_us)
     const float half_span_us = (float)(st->t[2] - st->t[0]) * 0.5f;
     const int64_t peak_us = st->t[1] + (int64_t)(offset * half_span_us);
 
-    if (st->have_prev && (float)(peak_us - st->prev_peak_us) < SYNAPSE_RR_MIN_MS * 1000.0f) {
-        return false; /* refractory: the same beat seen twice, or noise on its shoulder */
+    /* Refractory: the same beat seen twice, or the dicrotic wave on its shoulder (it comes
+     * 250-400 ms after the systolic peak and can clear the threshold). A fixed 300 ms let it
+     * through at normal heart rates; scaling to the recent rhythm rejects it without breaking
+     * the chain, so the real next beat still pairs with the real previous one. */
+    const float median = st->have_prev ? recent_median(st) : 0.0f;
+    float refractory_ms = SYNAPSE_RR_MIN_MS;
+    if (SYNAPSE_RR_REFRACTORY_SHARE * median > refractory_ms) {
+        refractory_ms = SYNAPSE_RR_REFRACTORY_SHARE * median;
+    }
+    if (st->have_prev) {
+        const float since_ms = (float)(peak_us - st->prev_peak_us) * 1e-3f;
+        if (since_ms < refractory_ms) {
+            return false;
+        }
+        /* Before the median exists nothing scales the refractory. The dicrotic wave is lower than
+         * the systolic peak it follows, while two fast beats in a row are about equally high: a
+         * clearly lower peak that close behind the previous one is its echo, not a beat. */
+        if (since_ms < SYNAPSE_RR_SECONDARY_WINDOW_MS &&
+            y1 < SYNAPSE_RR_SECONDARY_SHARE * st->prev_height) {
+            return false;
+        }
     }
     st->amplitude = st->amplitude > 0.0f ? 0.8f * st->amplitude + 0.2f * y1 : y1;
 
     bool produced = false;
     if (st->have_prev) {
         const float rr_ms = (float)(peak_us - st->prev_peak_us) * 1e-3f;
-        const float median = recent_median(st);
         const bool possible = rr_ms >= SYNAPSE_RR_MIN_MS && rr_ms <= SYNAPSE_RR_MAX_MS;
         const bool close = median <= 0.0f || fabsf(rr_ms - median) <= SYNAPSE_RR_TOLERANCE * median;
         if (possible && close) {
             ring_push(st, rr_ms);
             report(st, rr_ms);
             st->accepted++;
+            st->reject_run = 0;
             produced = true;
         } else {
             ring_push(st, 0.0f); /* the chain is broken here: no pair may span it */
             st->rejected++;
+            if (++st->reject_run >= SYNAPSE_RR_RESYNC_AFTER) {
+                /* Every beat is "wrong" against the median: the median is, not the beats
+                 * (it was learned from a bad start). Forget it and learn again. */
+                st->ring_n = 0;
+                st->ring_head = 0;
+                st->reject_run = 0;
+            }
         }
     }
     st->have_prev = true;
     st->prev_peak_us = peak_us;
+    st->prev_height = y1;
     return produced;
 }
 
-uint32_t synapse_rr_take(synapse_rr_t *st, uint16_t *out, uint8_t max)
+uint32_t synapse_rr_peek(const synapse_rr_t *st, uint16_t *out, uint8_t max)
 {
     const uint32_t total = st->pending_total;
     const uint32_t held = total < SYNAPSE_RR_PENDING ? total : SYNAPSE_RR_PENDING;
@@ -186,8 +213,28 @@ uint32_t synapse_rr_take(synapse_rr_t *st, uint16_t *out, uint8_t max)
             out[i] = st->pending[held - copy + i];
         }
     }
-    st->pending_total = 0;
     return total;
+}
+
+void synapse_rr_commit(synapse_rr_t *st)
+{
+    st->pending_total = 0;
+}
+
+uint32_t synapse_rr_take(synapse_rr_t *st, uint16_t *out, uint8_t max)
+{
+    const uint32_t total = synapse_rr_peek(st, out, max);
+    synapse_rr_commit(st);
+    return total;
+}
+
+void synapse_rr_expire(synapse_rr_t *st, int64_t now_us)
+{
+    if (st->have_prev && now_us - st->prev_peak_us > SYNAPSE_RR_EXPIRE_US) {
+        st->ring_n = 0; /* the old intervals describe a rhythm that is no longer being measured */
+        st->ring_head = 0;
+        st->have_prev = false;
+    }
 }
 
 bool synapse_rr_hrv(const synapse_rr_t *st, float *rmssd_ms, float *sdnn_ms)

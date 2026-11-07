@@ -38,6 +38,12 @@
 #define SYNAPSE_RR_MIN_CLEAN_SHARE 0.75f /**< of the recent intervals, for RMSSD / SDNN to be reported */
 #define SYNAPSE_RR_MIN_AMPLITUDE 50.0f /**< ADC counts: a flatter pulse is not a pulse */
 #define SYNAPSE_RR_MAX_GAP_US 200000   /**< a longer silence between samples forgets the last beat */
+#define SYNAPSE_RR_REFRACTORY_SHARE 0.6f /**< of the recent median: the floor for the next peak */
+/** A peak this close behind the previous one and this much lower than it is a dicrotic wave. */
+#define SYNAPSE_RR_SECONDARY_WINDOW_MS 450.0f
+#define SYNAPSE_RR_SECONDARY_SHARE 0.75f
+#define SYNAPSE_RR_RESYNC_AFTER 4u /**< consecutive rejected intervals before the history is dropped */
+#define SYNAPSE_RR_EXPIRE_US 5000000   /**< no beat for this long: the recent intervals are stale */
 
 typedef struct {
     /* conditioning */
@@ -53,6 +59,7 @@ typedef struct {
     float amplitude;
     bool have_prev;
     int64_t prev_peak_us;
+    float prev_height; /* conditioned height of that peak */
     /* intervals (ms): 0 marks a break (a rejected interval or a gap) */
     float ring[SYNAPSE_RR_RING];
     uint8_t ring_n;
@@ -63,6 +70,7 @@ typedef struct {
     /* diagnostics */
     uint32_t accepted;
     uint32_t rejected;
+    uint8_t reject_run; /**< consecutive rejected intervals */
 } synapse_rr_t;
 
 void synapse_rr_init(synapse_rr_t *st);
@@ -71,10 +79,20 @@ void synapse_rr_init(synapse_rr_t *st);
 bool synapse_rr_push(synapse_rr_t *st, float ir, int64_t ts_us);
 
 /**
- * Hand over the intervals found since the last call, oldest first, in 1/1024 s. Returns how many
- * there were in total (it can exceed @p max: only the newest @p max are copied), and clears them.
+ * Look at the intervals found since the last commit, oldest first, in 1/1024 s. Returns how many
+ * there were in total (it can exceed @p max: only the newest @p max are copied). Nothing is
+ * cleared: an interval is consumed only once a frame carrying it has left (synapse_rr_commit).
  */
+uint32_t synapse_rr_peek(const synapse_rr_t *st, uint16_t *out, uint8_t max);
+
+/** Mark every interval seen by the last peek as reported (or as not worth keeping). */
+void synapse_rr_commit(synapse_rr_t *st);
+
+/** peek + commit, for callers that have nothing to wait for. */
 uint32_t synapse_rr_take(synapse_rr_t *st, uint16_t *out, uint8_t max);
+
+/** Forget the recent intervals when no beat has been seen for SYNAPSE_RR_EXPIRE_US. */
+void synapse_rr_expire(synapse_rr_t *st, int64_t now_us);
 
 /** RMSSD and SDNN (ms) over the recent clean intervals; false while there are too few. */
 bool synapse_rr_hrv(const synapse_rr_t *st, float *rmssd_ms, float *sdnn_ms);

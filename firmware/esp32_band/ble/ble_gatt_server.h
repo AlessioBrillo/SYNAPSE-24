@@ -283,8 +283,12 @@ esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms
  */
 esp_err_t synapse_ble_gatt_push_feature_v2(synapse_feature_v2_t *rec);
 
-/** True when push_feature_v2() would send a frame now: connected, subscribed, rate gate open.
- *  Anything that is consumed when it is reported (RR intervals) must be taken only then. */
+/** True while a client is connected and subscribed to the v2 feature characteristic. */
+bool synapse_ble_gatt_feature_v2_subscribed(void);
+
+/** True when push_feature_v2() would send a frame now: subscribed, MTU large enough, rate gate
+ *  open. Anything that is consumed when it is reported (RR intervals) must be committed only
+ *  after push_feature_v2() returned ESP_OK. */
 bool synapse_ble_gatt_feature_v2_due(void);
 
 /** @brief Notify the status record (at most 1 Hz, only when subscribed). */

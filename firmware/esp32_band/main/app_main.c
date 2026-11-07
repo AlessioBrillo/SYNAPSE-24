@@ -362,11 +362,21 @@ void app_main(void)
             v2.sensor_health = synapse_sensors_health_mask();
             if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
 #if defined(CONFIG_SYNAPSE_RR_ENABLE)
-            // RR and HRV leave only with a frame that really goes out (the intervals are consumed
-            // when reported) and only from a fresh, clean reading: otherwise they stay NA.
+            // RR and HRV leave only with a frame that really goes out and only from a fresh,
+            // clean reading: otherwise they stay NA. The intervals are looked at (peek) here and
+            // consumed (commit) only once the frame was queued: a tick whose frame is held back
+            // or refused must not eat them.
+            if (!synapse_ble_gatt_feature_v2_subscribed()) {
+                // Nobody to tell: do not pile up the history of the whole uptime for the first
+                // subscriber to receive as one frame.
+                synapse_rr_commit(&s_rr);
+            }
+            synapse_rr_expire(&s_rr, esp_timer_get_time());
+            bool rr_in_frame = false;
             if (synapse_ble_gatt_feature_v2_due()) {
+                rr_in_frame = true;
                 uint16_t rr_units[4];
-                const uint32_t n_rr = synapse_rr_take(&s_rr, rr_units, 4);
+                const uint32_t n_rr = synapse_rr_peek(&s_rr, rr_units, 4);
                 const int publishable = synapse_rr_publishable(
                     ppg_sqi != SYNAPSE_NA_U8, ppg.sqi, ppg.motion_artifact_prob);
                 if (publishable && n_rr > 0) {
@@ -383,7 +393,14 @@ void app_main(void)
                 }
             }
 #endif
-            (void)synapse_ble_gatt_push_feature_v2(&v2);
+            const esp_err_t feature_rc = synapse_ble_gatt_push_feature_v2(&v2);
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+            if (rr_in_frame && feature_rc == ESP_OK) {
+                synapse_rr_commit(&s_rr);
+            }
+#else
+            (void)feature_rc;
+#endif
             (void)synapse_ble_gatt_push_status();
         }
         // --------------------------------------------------------------------

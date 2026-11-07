@@ -868,9 +868,15 @@ static esp_err_t notify_flat(uint16_t handle, const uint8_t *buf, size_t n) {
 
 static uint32_t s_feat2_last_ms = 0;
 
-bool synapse_ble_gatt_feature_v2_due(void) {
+bool synapse_ble_gatt_feature_v2_subscribed(void) {
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return false;
-    if (!s_feat2_subscribed || s_feat2_handle == 0) return false;
+    return s_feat2_subscribed && s_feat2_handle != 0;
+}
+
+bool synapse_ble_gatt_feature_v2_due(void) {
+    if (!synapse_ble_gatt_feature_v2_subscribed()) return false;
+    // Same MTU floor as push_feature_v2(): a frame that cannot be sent is not "due".
+    if (g_mtu < SYNAPSE_CONTRACT_V2_FEATURE_BYTES + 3u) return false;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     return now_ms - s_feat2_last_ms >= 1000u / s_feat2_rate_hz;
 }
