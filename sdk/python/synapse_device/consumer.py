@@ -1,6 +1,6 @@
 """Consumer contract v2: decode/encode the feature, status, metadata and control frames.
 
-The layouts mirror ``contracts/gatt_v2.json`` (contract 2.1, generated from
+The layouts mirror ``contracts/gatt_v2.json`` (contract 2.2, generated from
 ``config/hardware.yaml``). ``tests/test_consumer_v2_parity.py`` checks this table
 against that JSON and the firmware encoder byte for byte, so the three cannot
 drift apart silently.

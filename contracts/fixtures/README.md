@@ -15,3 +15,22 @@ screens that consume the contract before a real band exists. Nothing in it is a 
 Regenerate with `uv run python scripts/make_band_fixtures.py`; `--check` fails on drift. The bytes
 come from `synapse_device.codec.encode_frame` and `synapse_device.consumer.encode_feature`, never
 from a hand-written struct.
+
+## Phone sidecars (`session_60s.*`)
+
+What the phone writes while recording, as Averyn stores it (ADR-0030): one append-only file per
+kind, each record `u16 length | i64 t_rx_ns | frame bytes` (little endian; `t_rx_ns` is the phone's
+monotonic clock since the recording began; the frame is exactly what was notified).
+
+* `session_60s.synapse-raw.bin` — raw research frames (`raw_frame_v1.json`): a minute of ECG, PPG,
+  ACC, GYRO and MAG with an ECG band restart, four lost ECG frames, nine samples the band reports
+  dropped on the PPG stream, a repeated ACC frame and one frame of an unknown version.
+* `session_60s.synapse.bin` — consumer v2 records (`gatt_v2.json`): a feature frame per second (two
+  lost on the link, one of an unknown version, a warm-up with sentinels) and a status record every
+  5 s; the two kinds are told apart by length (27 B and 40 B).
+* `session_60s.expected.json` — the answer key: per stream the frames, values, lost frames, restarts,
+  out-of-order frames, device-reported drops and the device timeline extended with the wrap flag.
+
+Regenerate with `uv run python scripts/make_band_sidecars.py`; `--check` fails on drift. Reading the
+files by hand is part of `tests/test_band_sidecars.py`, which checks the key against the faults that
+were injected, not against the oracle that computed it.
