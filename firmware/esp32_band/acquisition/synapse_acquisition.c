@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "synapse_acquisition.h"
+#include "synapse_window.h"
 #include "synapse_night_window.h"
 #include "synapse_config.h"
 #include "synapse_sensors.h"
@@ -74,7 +75,7 @@ esp_err_t synapse_acquisition_init(EventGroupHandle_t system_events) {
     // Immobility config
     g_acq.immobility_window_s = 30;
     g_acq.accel_threshold_g = 0.02f;
-    g_acq.required_immobility_windows = 10;  // 5 minutes at 30s windows
+    g_acq.required_immobility_windows = 300;  // 5 minutes of 1 Hz IMU windows
     g_acq.immobility_counter = 0;
     g_acq.last_motion_time_us = esp_timer_get_time();
     
@@ -139,24 +140,36 @@ esp_err_t synapse_acquisition_deinit(void) {
 }
 
 void synapse_acquisition_tick(void) {
-    // Called from main loop every 10ms. Feeds the latest signal-quality
-    // readings into the motion gate and immobility detectors so the FSM
-    // (running at 1Hz in its own task) can promote/demote tiers.
+    // Called from main loop every 10ms. Feeds the latest signal-quality readings into the motion
+    // gate and immobility detectors so the FSM (running at 1Hz in its own task) can promote or
+    // demote tiers.
     //
-    // Signal quality is updated at ~1Hz by imu/ppg processors, so the same
-    // values are seen across several ticks — which is exactly what the
-    // consecutive-window gate needs.
+    // The same reading is seen on many ticks. The gate and the immobility count are in WINDOWS,
+    // so each reading is counted once, when its timestamp changes; counting ticks made the
+    // 5-minute immobility requirement pass in 100 ms.
     if (!g_acq.running) {
         return;
     }
+    static int64_t s_last_ppg_us = 0;
+    static int64_t s_last_imu_us = 0;
+    const int64_t now_us = esp_timer_get_time();
 
     ppg_quality_t ppg = {0};
-    if (synapse_signal_quality_get_ppg(&ppg) == ESP_OK && ppg.valid) {
-        synapse_acquisition_update_motion_gate(ppg.sqi, ppg.motion_artifact_prob);
+    if (synapse_signal_quality_get_ppg(&ppg) == ESP_OK) {
+        if (ppg.valid && synapse_window_is_current(now_us, ppg.timestamp_us)) {
+            if (synapse_window_is_new(&s_last_ppg_us, ppg.timestamp_us)) {
+                synapse_acquisition_update_motion_gate(ppg.sqi, ppg.motion_artifact_prob);
+            }
+        } else if (g_acq.motion_gate_armed || g_acq.consecutive_clean_windows > 0) {
+            // `valid` is never cleared by the quality module: a finger that left the sensor
+            // must not keep the gate armed on the last good reading.
+            synapse_acquisition_update_motion_gate(0.0f, 1.0f);
+        }
     }
 
     imu_quality_t imu = {0};
-    if (synapse_signal_quality_get_imu(&imu) == ESP_OK) {
+    if (synapse_signal_quality_get_imu(&imu) == ESP_OK &&
+        synapse_window_is_new(&s_last_imu_us, imu.timestamp_us)) {
         // imu.is_stationary is computed inside imu_processor from dyn_acc_g
         // (gravity removed), so it is safe to use directly as the immobility
         // signal. motion_intensity still includes ~1 g at rest and is only
@@ -247,7 +260,9 @@ void synapse_acquisition_update_immobility(float motion_intensity, bool is_stati
     // directly; it is retained for diagnostics / future thresholding.
     (void)motion_intensity;
     if (is_stationary) {
-        g_acq.immobility_counter++;
+        if (g_acq.immobility_counter < UINT16_MAX) {
+            g_acq.immobility_counter++;
+        }
         g_acq.last_motion_time_us = esp_timer_get_time();
     } else {
         g_acq.immobility_counter = 0;

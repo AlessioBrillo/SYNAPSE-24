@@ -36,7 +36,7 @@ def fm(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
         build(
             tmp_path_factory.mktemp("feature_map"),
             [GLUE],
-            extra_includes=[str(BAND / "main"), str(BAND / "ble")],
+            extra_includes=[str(BAND / "main"), str(BAND / "ble"), str(BAND / "acquisition")],
         )
     )
     if lib is None:
@@ -48,6 +48,10 @@ def fm(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     lib.host_is_fresh.restype = ctypes.c_int
     lib.host_is_fresh.argtypes = [ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
     lib.host_ppg_max_age_us.restype = ctypes.c_int64
+    lib.host_window_is_new.restype = ctypes.c_int
+    lib.host_window_is_new.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_int64]
+    lib.host_window_is_current.restype = ctypes.c_int
+    lib.host_window_is_current.argtypes = [ctypes.c_int64, ctypes.c_int64]
     lib.host_hr_flags.restype = ctypes.c_uint8
     lib.host_hr_flags.argtypes = [ctypes.c_int]
     lib.host_hr_is_readable.restype = ctypes.c_int
@@ -100,6 +104,34 @@ def test_a_ppg_reading_goes_stale(fm: ctypes.CDLL) -> None:
     assert fm.host_is_fresh(now, now - max_age - 1, max_age) == 0  # the finger may be long gone
     assert fm.host_is_fresh(now, 0, max_age) == 0  # never stamped: not a reading
     assert fm.host_is_fresh(now, now + 1, max_age) == 0  # a stamp from the future is a bug
+
+
+def test_a_quality_window_is_counted_once_however_often_the_fsm_ticks(fm: ctypes.CDLL) -> None:
+    """The FSM ticks every 10 ms, the quality module publishes once per window.
+
+    Counting ticks made 'five minutes of stillness' pass in 100 ms: 500 ticks over 5 windows
+    must count 5 windows.
+    """
+    last = ctypes.c_int64(0)
+    counted = 0
+    stamp = 1_000_000
+    for tick in range(500):
+        if tick % 100 == 0:  # a new reading every 100 ticks
+            stamp += 1_000_000
+        counted += fm.host_window_is_new(ctypes.byref(last), stamp)
+    assert counted == 5
+    assert fm.host_window_is_new(ctypes.byref(last), 0) == 0, "an unstamped reading is no window"
+
+
+def test_a_stale_quality_reading_is_not_current(fm: ctypes.CDLL) -> None:
+    now = 100_000_000
+    assert fm.host_window_is_current(now, now - 1_000_000) == 1
+    assert fm.host_window_is_current(now, now - 5_000_000) == 1
+    assert fm.host_window_is_current(now, now - 5_000_001) == 0, (
+        "the finger left; `valid` stays set"
+    )
+    assert fm.host_window_is_current(now, 0) == 0
+    assert fm.host_window_is_current(now, now + 1) == 0
 
 
 def test_the_standard_heart_rate_reports_the_sensor_contact(fm: ctypes.CDLL) -> None:

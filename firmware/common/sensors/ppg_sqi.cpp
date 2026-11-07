@@ -7,6 +7,24 @@ static const char* TAG = "ppg_sqi";
 
 static ppg_sqi_ctx_t s_ctx = {};
 
+// last_result is written by the sensor task and read from others (get_latest). A seqlock keeps a
+// reader from seeing half an update without making the host-compiled sensor code depend on
+// FreeRTOS: odd = a write is in flight, and a reader retries until it sees the same even value
+// before and after the copy. One writer only.
+static volatile uint32_t s_seq = 0;
+
+static void publish_result(float sqi, float pi, float map, int64_t timestamp_us)
+{
+    s_seq = s_seq + 1u;
+    __sync_synchronize();
+    s_ctx.last_result.sqi = sqi;
+    s_ctx.last_result.perfusion_index = pi;
+    s_ctx.last_result.motion_artifact_prob = map;
+    s_ctx.last_result.timestamp_us = timestamp_us;
+    __sync_synchronize();
+    s_seq = s_seq + 1u;
+}
+
 #define PPG_SQI_PERFUSION_WEIGHT    0.25f
 #define PPG_SQI_ENTROPY_WEIGHT      0.25f
 #define PPG_SQI_SNR_WEIGHT          0.30f
@@ -271,17 +289,11 @@ esp_err_t ppg_sqi_process_sample(float red, float ir, int64_t timestamp_us, ppg_
                                 PPG_SQI_PEAK_REG_WEIGHT * peak_reg);
             map = clamp01f(map);
             
-            s_ctx.last_result.sqi = sqi;
-            s_ctx.last_result.perfusion_index = pi;
-            s_ctx.last_result.motion_artifact_prob = map;
-            s_ctx.last_result.timestamp_us = timestamp_us;
+            publish_result(sqi, pi, map, timestamp_us);
         }
     } else {
         // Not enough data yet
-        s_ctx.last_result.sqi = 0.0f;
-        s_ctx.last_result.perfusion_index = 0.0f;
-        s_ctx.last_result.motion_artifact_prob = 1.0f;
-        s_ctx.last_result.timestamp_us = timestamp_us;
+        publish_result(0.0f, 0.0f, 1.0f, timestamp_us);
     }
     
     if (result) {
@@ -295,7 +307,14 @@ esp_err_t ppg_sqi_get_latest(ppg_sqi_result_t* result) {
     if (!result) return ESP_ERR_INVALID_ARG;
     if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
     
-    *result = s_ctx.last_result;
+    uint32_t before, after;
+    do {
+        before = s_seq;
+        __sync_synchronize();
+        *result = s_ctx.last_result;
+        __sync_synchronize();
+        after = s_seq;
+    } while ((before & 1u) != 0u || before != after);
     return ESP_OK;
 }
 
