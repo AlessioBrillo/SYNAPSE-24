@@ -279,7 +279,7 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     t0, t1 = float(ts[0]), float(ts[-1])
     # Absolute time of every beat, read from the stream's own timestamps. `t0 + index / fs`
     # assumed no sample was ever lost: after a gap every later beat was placed too early.
-    peak_times = ts[r_peaks] if len(r_peaks) else np.array([], dtype=np.float64)
+    peak_times = _refine_peak_times(sig, ts, r_peaks)
 
     out = []
     for w0, w1 in window_bounds(t0, t1, window_s):
@@ -298,12 +298,38 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     return out
 
 
+# These three are the OFFLINE analysis of a recorded window, deliberately looser than the device's
+# real-time detector (firmware synapse_rr.h: 300-2000 ms, 20 %, 75 %): the recording is complete,
+# there is no latency to protect and a wider net keeps more windows. They are not meant to agree.
 #: Beat-to-beat intervals outside this range are not a resting heart (24-240 bpm).
 _RR_PLAUSIBLE_MS = (250.0, 2500.0)
 #: An interval this far from the window's median is an ectopic beat or a detector miss.
 _RR_MEDIAN_TOLERANCE = 0.30
 #: A window with fewer clean intervals than this share is not analysed.
 _RR_MIN_CLEAN_SHARE = 0.80
+
+
+def _refine_peak_times(sig: np.ndarray, ts: np.ndarray, peaks: np.ndarray) -> np.ndarray:
+    """Instants of the beats, interpolated between samples.
+
+    A detector returns whole sample indices. At 50 Hz (the band's PPG) that quantises every beat
+    to 20 ms, which alone puts about 14 ms of error on RMSSD, as large as the variability being
+    measured. A parabola through the peak and its two neighbours places the maximum between
+    samples; the stream's own timestamps give the instants, so a gap is still a long interval.
+    """
+    if len(peaks) == 0:
+        return np.array([], dtype=np.float64)
+    times = ts[peaks].astype(np.float64)
+    inner = (peaks > 0) & (peaks < len(sig) - 1)
+    i = peaks[inner]
+    y0, y1, y2 = sig[i - 1], sig[i], sig[i + 1]
+    denom = y0 - 2.0 * y1 + y2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        offset = np.where(denom < 0.0, 0.5 * (y0 - y2) / denom, 0.0)
+    offset = np.clip(offset, -0.5, 0.5)  # a true local maximum is within half a sample
+    half_span = (ts[i + 1] - ts[i - 1]) * 0.5
+    times[inner] += offset * half_span
+    return np.asarray(times, dtype=np.float64)
 
 
 def _finite(value: float) -> float | None:
