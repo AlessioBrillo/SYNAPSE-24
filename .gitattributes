@@ -1,0 +1,4 @@
+# Contracts are hashed (Averyn pins their sha256): the bytes in a checkout must be the bytes
+# in the index, on every platform.
+contracts/** text eol=lf
+contracts/fixtures/*.bin binary

@@ -44,6 +44,12 @@ def lib(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     d.host_rr_push.restype = ctypes.c_int
     d.host_rr_take.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint16), ctypes.c_uint8]
     d.host_rr_take.restype = ctypes.c_uint32
+    d.host_rr_peek.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint16), ctypes.c_uint8]
+    d.host_rr_peek.restype = ctypes.c_uint32
+    d.host_rr_commit.argtypes = [ctypes.c_void_p]
+    d.host_rr_commit.restype = None
+    d.host_rr_expire.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+    d.host_rr_expire.restype = None
     d.host_rr_hrv.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_float),
@@ -80,13 +86,24 @@ class _Detector:
 
 
 def _signal(
-    beat_times_s: np.ndarray, seconds: float, *, noise: float = 30.0, seed: int = 1
+    beat_times_s: np.ndarray,
+    seconds: float,
+    *,
+    noise: float = 30.0,
+    seed: int = 1,
+    dicrotic: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Reflective IR PPG at 50 Hz: the count FALLS on each pulse (a 120 ms-wide systolic wave)."""
+    """Reflective IR PPG at 50 Hz: the count FALLS on each pulse (a 120 ms-wide systolic wave).
+
+    ``dicrotic`` adds the second wave that real pulses have, 350 ms after each systolic peak, at
+    that share of its height.
+    """
     t = np.arange(int(seconds * FS)) / FS
     pulse = np.zeros_like(t)
     for tb in beat_times_s:
         pulse += np.exp(-0.5 * ((t - tb) / 0.12) ** 2)
+        if dicrotic:
+            pulse += dicrotic * np.exp(-0.5 * ((t - tb - 0.35) / 0.08) ** 2)
     rng = np.random.RandomState(seed)
     ir = BASE - PULSE * pulse + rng.normal(0.0, noise, t.size)
     return ir, T0_US + (t * 1e6).astype(np.int64)
@@ -242,6 +259,73 @@ def test_the_pending_queue_keeps_the_newest_and_says_how_many_there_were(
     assert lib.host_rr_take(state, out, 3) == 0, "taking clears the queue"
 
 
+def test_the_dicrotic_wave_is_not_taken_for_a_beat(lib: ctypes.CDLL) -> None:
+    """A second wave 350 ms after each peak, at 60 % of its height, clears the amplitude threshold.
+
+    With a fixed 300 ms refractory it became a beat of its own: two short intervals per heartbeat,
+    each rejected against the median, so the chain broke every time and no statistic ever came out.
+    """
+    truth = _variable_rr(70, sd=50.0, seed=3)
+    ir, ts = _signal(_beats(truth), seconds=72.0, noise=20.0, seed=2, dicrotic=0.6)
+    det = _Detector(lib)
+    det.feed(ir, ts)
+    assert len(det.intervals_ms) > 20, "no intervals"
+    assert min(det.intervals_ms) > 500.0, "an interval shorter than a real beat was reported"
+    assert lib.host_rr_rejected(det.state) <= 3
+    hrv = det.hrv()
+    assert hrv is not None, "the dicrotic wave silenced the statistics"
+    assert hrv[1] == pytest.approx(float(np.std(truth[-32:], ddof=1)), abs=15.0)
+
+
+def test_a_median_learned_from_a_bad_start_does_not_lock_the_detector(lib: ctypes.CDLL) -> None:
+    """Slow 'beats' first (every other pulse missed), then the true 800 ms rhythm.
+
+    A median of ~1600 ms must not make the detector drop every true beat that arrives sooner than
+    0.6 x median: those beats are as high as the last one, so they are kept, rejected against the
+    median, counted, and after a few of them the history is relearned. Reporting 1600 ms for the
+    rest of the recording (half the true rate) is the failure.
+    """
+    slow = np.full(6, 1600.0)
+    fast = np.full(40, 800.0)
+    beats = _beats(np.concatenate([slow, fast]))
+    ir, ts = _signal(beats, seconds=float(beats[-1]) + 1.0, noise=15.0)
+    det = _Detector(lib)
+    det.feed(ir, ts)
+    tail = det.intervals_ms[-15:]
+    assert len(tail) == 15
+    assert all(abs(x - 800.0) < 40.0 for x in tail), f"locked on the wrong rhythm: {tail}"
+
+
+def test_peek_leaves_the_intervals_until_they_are_committed(lib: ctypes.CDLL) -> None:
+    """A frame that cannot leave must not eat the intervals: peek, send, then commit."""
+    ir, ts = _signal(_beats(np.full(12, 900.0)), seconds=12.0, noise=15.0)
+    state = ctypes.create_string_buffer(int(lib.host_rr_size()))
+    lib.host_rr_init(state)
+    for v, t in zip(ir, ts, strict=True):
+        lib.host_rr_push(state, float(v), int(t))
+    out = (ctypes.c_uint16 * 4)()
+    first = lib.host_rr_peek(state, out, 4)
+    assert first > 0
+    assert lib.host_rr_peek(state, out, 4) == first, "peeking consumed the intervals"
+    lib.host_rr_commit(state)
+    assert lib.host_rr_peek(state, out, 4) == 0, "commit left intervals behind"
+
+
+def test_stale_intervals_expire_when_the_beats_stop(lib: ctypes.CDLL) -> None:
+    """The finger leaves the sensor: RMSSD/SDNN must not describe a rhythm nobody is measuring."""
+    truth = _variable_rr(70, sd=50.0, seed=3)
+    beats = _beats(truth)
+    ir, ts = _signal(beats, seconds=float(beats[-1]) + 1.0, noise=20.0, seed=2)
+    det = _Detector(lib)
+    det.feed(ir, ts)
+    assert det.hrv() is not None
+    last = T0_US + int(beats[-1] * 1e6)  # the instant of the last beat
+    lib.host_rr_expire(det.state, last + 2_000_000)
+    assert det.hrv() is not None, "two seconds of silence is not yet stale"
+    lib.host_rr_expire(det.state, last + 8_000_000)
+    assert det.hrv() is None, "intervals from before the silence still feed the statistics"
+
+
 # --- the feature is off by default and wired as a flag --------------------------------------------------------
 
 
@@ -265,7 +349,7 @@ def test_app_main_only_uses_it_behind_the_flag_and_gates_it_on_quality() -> None
     assert "#define SYNAPSE_RR_MIN_SQI 0.5f" in helper
     assert "#define SYNAPSE_RR_MAX_MOTION 0.3f" in helper
     assert "synapse_rr_publishable(" in main
-    assert "synapse_rr_take(" in block
+    assert "synapse_rr_peek(" in block
     assert "synapse_rr_hrv(" in block
     # the library is part of the component either way (it is small and tested)
     cmake = (BAND / "signal_quality" / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -297,8 +381,14 @@ def test_intervals_are_taken_only_when_a_frame_can_leave() -> None:
     """They are consumed when reported: taking them on a tick whose frame is held back loses them."""
     main = (BAND / "main" / "app_main.c").read_text(encoding="utf-8").replace("\r\n", "\n")
     block = main[main.index("if (synapse_ble_gatt_feature_v2_due())") :]
-    block = block[: block.index("(void)synapse_ble_gatt_push_feature_v2(&v2);")]
-    assert "synapse_rr_take(&s_rr, rr_units, 4)" in block
+    block = block[
+        : block.index("const esp_err_t feature_rc = synapse_ble_gatt_push_feature_v2(&v2);")
+    ]
+    assert "synapse_rr_peek(&s_rr, rr_units, 4)" in block
+    assert "synapse_rr_take(" not in block, "taking would consume the intervals before the push"
+    after = main[main.index("(void)feature_rc") - 400 : main.index("(void)feature_rc")]
+    assert "rr_in_frame && feature_rc == ESP_OK" in after
+    assert "synapse_rr_commit(&s_rr);" in after
     gatt = (BAND / "ble" / "ble_gatt_server.c").read_text(encoding="utf-8").replace("\r\n", "\n")
     due = gatt[gatt.index("bool synapse_ble_gatt_feature_v2_due(void) {") :]
     due = due[: due.index("\n}\n")]
@@ -307,7 +397,7 @@ def test_intervals_are_taken_only_when_a_frame_can_leave() -> None:
     # one gate, one timestamp: due() and push() cannot disagree
     assert "s_feat2_last_ms" in due
     assert "s_feat2_last_ms" in push
-    assert "s_feat2_subscribed" in due
+    assert "synapse_ble_gatt_feature_v2_ready()" in due
 
 
 def test_more_than_one_interval_per_frame_is_reported_not_hidden() -> None:

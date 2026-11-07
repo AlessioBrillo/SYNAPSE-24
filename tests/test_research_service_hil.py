@@ -384,8 +384,13 @@ def test_device_clock_wraps_monotonically() -> None:
 
 def test_decoder_reset_survives_a_reconnect() -> None:
     """A pod that reconnects restarts its sequences; that is not a loss."""
+    # A rebooted pod's clock restarts from its uptime, far below where it was.
     frames = [
-        encode_frame(RawStream.ECG, seq, 1000 + seq, 0, RawFormat.S16, [10, 20, 30])
+        encode_frame(RawStream.ECG, seq, 5_000_000 + seq * 6000, 0, RawFormat.S16, [10, 20, 30])
+        for seq in (0, 1, 2, 3)
+    ]
+    rebooted = [
+        encode_frame(RawStream.ECG, seq, 40_000 + seq * 6000, 0, RawFormat.S16, [10, 20, 30])
         for seq in (0, 1, 2, 3)
     ]
 
@@ -397,7 +402,7 @@ def test_decoder_reset_survives_a_reconnect() -> None:
     # compared sequence 0 against the previous session's 3 and reported
     # ~65533 lost frames per stream (defect N2). A restart is now a TYPED
     # event: counted in `restarts`, and never a fabricated loss.
-    for frame in frames:
+    for frame in rebooted:
         decoder.feed(frame)
     assert decoder.restarts == {RawStream.ECG: 1}, "the restart must be visible"
     assert decoder.drops == [], "a restart must not be counted as loss"

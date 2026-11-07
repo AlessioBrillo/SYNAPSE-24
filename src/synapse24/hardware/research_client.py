@@ -96,6 +96,10 @@ LSL_STREAM_NAMES: dict[RawStream, str] = {
     RawStream.SYNC: "SYNAPSE_SYNC_T0",
 }
 
+# contracts/raw_frame_v1.json: a step back of up to this many frames is a repeat or a late frame
+# (out of order); a longer one is a restart of the band.
+OUT_OF_ORDER_WINDOW = 64
+
 # The largest pod-time step between two consecutive accepted frames that the
 # numeric wrap witness still covers (defect N5). A backward step spanning this
 # much of the counter can only be a roll. On a live link it cannot be a delayed
@@ -252,6 +256,9 @@ class ResearchStreamDecoder:
     # expected and must never be read as a loss of ~65k frames — but it must
     # not be swallowed either, so it is typed here for the session report.
     restarts: dict[RawStream, int] = field(default_factory=dict)
+    # Per-stream count of repeated or late frames (a step back of up to OUT_OF_ORDER_WINDOW):
+    # neither a loss nor new data.
+    out_of_order: dict[RawStream, int] = field(default_factory=dict)
     # Maximum number of values kept per stream (0 = unlimited). The live
     # path sets it: the session is written by the spool (on disk), so the
     # decoder only needs the recent window.
@@ -278,7 +285,8 @@ class ResearchStreamDecoder:
             raise
 
         if header.sample_count and header.stream in STREAM_CHANNELS:
-            self._check_sequence(header)
+            if not self._check_sequence(header):
+                return header  # a repeat or a late frame: counted apart, adds no samples
             self._buffer(header, samples)
             self.frames_seen += 1
             # Wire truth: header + count values of the declared format.
@@ -289,31 +297,52 @@ class ResearchStreamDecoder:
             self.frames_rejected += 1
         return header
 
-    def _check_sequence(self, header: RawHeader) -> None:
+    def _check_sequence(self, header: RawHeader) -> bool:
+        """The sequence rule of ``contracts/raw_frame_v1.json``. False: do not use this frame.
+
+        A repeat or an older value is not a gap and its samples are not appended; a step back of up
+        to ``OUT_OF_ORDER_WINDOW`` frames is out of order, a longer one is a restart of the band
+        (its clock restarts too). The counter never moves back on an out-of-order frame.
+
+        The contract alone recognises a restart only once the counter was past the window. This
+        decoder also sees the device clock, so a smaller step back counts as a restart when the
+        clock fell by much more than ``back`` frames of that stream could explain
+        (:meth:`_clock_restarted`); otherwise every frame of a band that rebooted early would be
+        ignored as late until its counter passed the old one.
+        """
         previous = self.sequences.get(header.stream)
         if previous is None:
             self.sequences[header.stream] = header.sequence
-            return
-        # 16-bit sequence: detect a forward jump, tolerating the wrap itself.
+            return True
+        # 16-bit sequence: the forward distance, tolerating the wrap itself.
         delta = (header.sequence - previous) & 0xFFFF
-        if delta > 1:
-            clock = self.clocks.get(header.stream)
-            regressed = (
-                clock is not None
-                and clock._last_low is not None
-                and header.timestamp_us < clock._last_low
-            )
-            if delta > 0x8000 and regressed:
-                # Firmware restart, not loss: sequence counts from zero again
-                # while the stream's own clock stepped backwards — the pod
-                # rebooted (or the link re-formed without reset()). The old
-                # code read every reconnect as "~65533 frames lost", drowning
-                # the gate in phantom gaps (defect N2). Re-base the stream:
-                # a fresh sequence baseline and a fresh wrap count.
-                self.restarts[header.stream] = self.restarts.get(header.stream, 0) + 1
+        if delta == 0 or delta >= 0x8000:
+            back = (previous - header.sequence) & 0xFFFF
+            if back <= OUT_OF_ORDER_WINDOW and not self._clock_restarted(header, back):
+                self.out_of_order[header.stream] = self.out_of_order.get(header.stream, 0) + 1
+                return False
+            if back > OUT_OF_ORDER_WINDOW and self._clock_moved_forward(header):
+                # 16 bits cannot tell "40000 frames lost" from "25536 frames back": the clock can.
+                # It kept running, so the band did not restart; this is a long outage, a loss.
+                self.drops.append(
+                    DropEvent(
+                        stream=header.stream,
+                        expected_seq=(previous + 1) & 0xFFFF,
+                        received_seq=header.sequence,
+                        gap=int(delta - 1),
+                    )
+                )
                 self.sequences[header.stream] = header.sequence
-                self.clocks.pop(header.stream, None)
-                return
+                return True
+            # Firmware restart, not loss: the sequence counts from zero again and the stream's
+            # own clock restarts. The old code read every reconnect as "~65533 frames lost",
+            # drowning the gate in phantom gaps (defect N2). Re-base the stream: a fresh sequence
+            # baseline and a fresh wrap count.
+            self.restarts[header.stream] = self.restarts.get(header.stream, 0) + 1
+            self.sequences[header.stream] = header.sequence
+            self.clocks.pop(header.stream, None)
+            return True
+        if delta > 1:
             self.drops.append(
                 DropEvent(
                     stream=header.stream,
@@ -323,6 +352,27 @@ class ResearchStreamDecoder:
                 )
             )
         self.sequences[header.stream] = header.sequence
+        return True
+
+    def _clock_moved_forward(self, header: RawHeader) -> bool:
+        """True when the device clock is ahead of the last accepted frame of this stream."""
+        clock = self.clocks.get(header.stream)
+        if clock is None or clock._last_low is None:
+            return False  # nothing to judge by: the contract's rule stands (a restart)
+        return ((header.timestamp_us - clock._last_low) & 0xFFFFFFFF) < 0x80000000
+
+    def _clock_restarted(self, header: RawHeader, back: int) -> bool:
+        """True when the device clock fell further than ``back`` late frames would explain."""
+        clock = self.clocks.get(header.stream)
+        rate_hz = self._rate_for(header.stream)
+        channels = STREAM_CHANNELS.get(header.stream, 1)
+        if clock is None or clock._last_low is None or rate_hz <= 0 or header.sample_count == 0:
+            return False  # nothing to judge by: the contract's rule stands
+        fell_us = (clock._last_low - header.timestamp_us) & 0xFFFFFFFF
+        if fell_us >= 0x80000000:
+            return False  # the clock moved forward: not a restart
+        frame_us = (header.sample_count // channels) * 1_000_000.0 / rate_hz
+        return fell_us > (back + 2) * frame_us
 
     def _buffer(self, header: RawHeader, samples: np.ndarray) -> None:
         channels = STREAM_CHANNELS.get(header.stream, 1)
@@ -428,6 +478,10 @@ class ResearchStreamDecoder:
         """Per-stream count of firmware restarts (typed; not a loss)."""
         return {stream.name: count for stream, count in self.restarts.items()}
 
+    def out_of_order_summary(self) -> dict[str, int]:
+        """Per-stream count of repeated or late frames (neither a loss nor new data)."""
+        return {stream.name: count for stream, count in self.out_of_order.items()}
+
     def dropped_sample_summary(self) -> dict[str, int]:
         """Per-stream count of samples the pod reports as lost.
 
@@ -459,6 +513,7 @@ class ResearchStreamDecoder:
         self.drops.clear()
         self.dropped_samples.clear()
         self.restarts.clear()
+        self.out_of_order.clear()
         self.frames_seen = 0
         self.frames_rejected = 0
         self.bytes_seen = 0

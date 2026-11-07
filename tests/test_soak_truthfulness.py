@@ -169,7 +169,7 @@ class TestGateReportV2:
 
         decoder = ResearchStreamDecoder()
         values = [100, 200]
-        decoder.feed(encode_frame(RawStream.ECG, 5, 12_000, 0, RawFormat.S16, values))
+        decoder.feed(encode_frame(RawStream.ECG, 5, 5_000_000, 0, RawFormat.S16, values))
         decoder.feed(encode_frame(RawStream.ECG, 0, 6_000, 0, RawFormat.S16, values))
 
         assert decoder.restart_summary() == {"ECG": 1}

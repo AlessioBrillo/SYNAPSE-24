@@ -14,13 +14,18 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   gate, not a replacement for the server run.
 - **Server:** push the branch; the check is `ci/woodpecker/push/ci` (`gh pr checks <n> --watch`).
 - **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band.
-- **Gate steps (2026-10-20):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
+- **Gate steps (2026-11-07):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
+  `generate_contracts --check` (the generated contract files do not drift from `config/hardware.yaml`),
   `check_interfaces` (FIT developer fields, GATT UUIDs, worker payloads), `check_baseline_claim`,
-  phase1 dry-run, the SDK suite (`sdk/python/tests`), the format conformance
+  phase1 dry-run, the format conformance
   (`tests/test_format_conformance.py`: `fitdecode` reads the FIT files, `pyxdf` the XDF ones),
-  the full test suite with coverage over `src`, `worker`, `sdk/python` and `backend`, and the
-  firmware host C gate (raw-frame parity, research service, PPG SQI, BLE contract).
-- **Firmware step (2026-11-06):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it: the GitHub `Firmware Build (ESP-IDF)` job is the only place the band compiles.
+  the full test suite with coverage over `src`, `worker` and `backend` (>= 80 %; the SDK is **not**
+  in this figure), the SDK suite with its own >= 80 % over `sdk/python`, the firmware host C gate
+  (raw-frame parity, research service, PPG SQI, BLE contract) and the `firmware-band` ESP-IDF
+  step (band-full, band-core, band-full with RR on). The fixture drift checks
+  (`make_band_fixtures`, `make_consumer_vectors`, `make_band_sidecars`) run inside the suite
+  (`tests/test_band_fixtures.py`, `tests/test_band_sidecars.py`).
+- **Firmware step (2026-11-06):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it (it needs the ESP-IDF image and more memory than this host has); the GitHub `Firmware Build (ESP-IDF)` job builds the same three configurations too, since 2026-11-07 with a clean `sdkconfig` before band-full.
 - **Status:** first green run recorded on branch `feat/device-loop-v1` (commit `3bf5eef`).
   The Python gate (ruff check/format, mypy, check_contract, check_baseline_claim,
   phase1 dry-run, full test suite 650+ tests, firmware host C gate) is green.

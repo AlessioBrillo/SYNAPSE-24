@@ -310,6 +310,40 @@ static void research_note_drop(synapse_research_stream_t *stream, uint16_t sampl
 }
 
 /**
+ * A stream buffers samples only while something can drain it: transmitting is on
+ * and the host subscribed to THIS stream. Buffering for an unsubscribed stream
+ * only filled its ring, and counted every later sample as a link loss.
+ * (`connected` is not tested: a subscription dies with the link.)
+ */
+static bool stream_accepts(const synapse_research_stream_t *stream)
+{
+    return s_research.transmitting && stream->enabled;
+}
+
+/** Append one 3-axis sample to its own stream, with its own bound.
+ *  Returns true when the sample was lost to a full ring. */
+static bool imu_push(synapse_research_stream_t *s, int64_t now_us, float x, float y, float z,
+                     float unit)
+{
+    if (!stream_accepts(s)) {
+        return false;
+    }
+    if (s->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
+        research_note_drop(s, 1u);
+        return true;
+    }
+    if (s->pending == 0) {
+        s->first_ts_us = now_us;
+    }
+    s->ts_ring[s->pending] = (uint32_t)now_us;
+    s->ring[s->pending * 3 + 0] = quantise_s16(x, unit);
+    s->ring[s->pending * 3 + 1] = quantise_s16(y, unit);
+    s->ring[s->pending * 3 + 2] = quantise_s16(z, unit);
+    s->pending++;
+    return false;
+}
+
+/**
  * Values one notification may carry for @p stream at the NEGOTIATED MTU.
  *
  * The 244-byte payload belongs to a 247-byte MTU; sizing the frames from it
@@ -441,11 +475,13 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
                               ? (uint8_t)SYNAPSE_RAW_DROPPED_MAX
                               : (uint8_t)stream->dropped_pending;
 
-        /* The sequence number is consumed when the frame is BUILT, not when the
-         * notification is accepted: a frame the BLE stack refuses must leave a
-         * hole in the sequence, otherwise the host sees an uninterrupted stream
-         * and cannot detect the loss at all. */
-        uint16_t sequence = stream->sequence++;
+        /* The sequence number advances only when the stack ACCEPTS the frame
+         * (below). A refused attempt keeps its samples queued and retries with
+         * the same number, so a hole in the host's sequence means a frame that
+         * left the pod and never arrived; data the pod had to discard is the
+         * `dropped` byte's business. Burning the number at build time made a
+         * refusal that the next tick repairs look like a loss. */
+        uint16_t sequence = stream->sequence;
 
         int rc = synapse_raw_frame_encode(
             stream->stream_id,
@@ -478,8 +514,8 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
             if (om == NULL) {
                 r->dropped_frames++;
                 // Transient (no mbuf for the notification): the samples are NOT
-                // lost — they stay queued and a later tick retries, so they must
-                // NOT travel in the `dropped` byte of the next frame.
+                // lost — they stay queued and a later tick retries with the same
+                // sequence number, so they must NOT travel in the `dropped` byte.
                 break;
             } else if (ble_gatts_notify_custom(r->conn_handle, stream_handle(stream), om) != 0) {
                 r->dropped_frames++;
@@ -490,12 +526,14 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
                  * every refused notification; the host glue poisons the
                  * mbuf to prove its absence. */
                 /* Also transient: a saturated queue mid-connection-event eats
-                 * the frame but not the data. The sequence hole above is the
-                 * evidence the host sees; the samples ride the next tick. */
+                 * the frame but not the data. Nothing is consumed: the samples
+                 * and the sequence number ride the next tick. */
                 break;
             } else {
-                /* Actually transmitted: advance the wrap witness and clear the
-                 * loss byte — the loss it carried has reached the host. */
+                /* Accepted by the stack: consume the sequence number, advance
+                 * the wrap witness and clear the loss byte — the loss it
+                 * carried has reached the host. */
+                stream->sequence++;
                 stream->last_flushed_ts_low = ts_low;
                 stream->has_flushed = true;
                 stream->dropped_pending = 0;
@@ -579,6 +617,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     switch (sample->type) {
     case SENSOR_TYPE_ECG: {
         synapse_research_stream_t *s = &s_research.streams[STREAM_ECG];
+        if (!stream_accepts(s)) {
+            break;
+        }
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -602,6 +643,9 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     }
     case SENSOR_TYPE_PPG: {
         synapse_research_stream_t *s = &s_research.streams[STREAM_PPG];
+        if (!stream_accepts(s)) {
+            break;
+        }
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -617,37 +661,24 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         break;
     }
     case SENSOR_TYPE_IMU: {
-        synapse_research_stream_t *acc = &s_research.streams[STREAM_ACC];
-        synapse_research_stream_t *gyr = &s_research.streams[STREAM_GYRO];
-        synapse_research_stream_t *mag = &s_research.streams[STREAM_MAG];
-        if (acc->pending >= SYNAPSE_RESEARCH_RING_DEPTH) {
+        // The three IMU streams are subscribed independently, so each one keeps its
+        // own fill count: bounding only the accelerometer let gyro/mag run past
+        // their rings whenever a host took acc alone. ICM-20948 driver reports
+        // g / rad/s / uT (see imu_icm20948.cpp).
+        // `|` and not `||`: all three streams must be pushed. One IMU sample is one
+        // loss for the shared counter however many of its streams overflowed.
+        bool lost = imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
+                             sample->data.imu.ay, sample->data.imu.az,
+                             (float)SYNAPSE_RESEARCH_UNIT_MG);
+        lost |= imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
+                         sample->data.imu.gy, sample->data.imu.gz,
+                         (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
+        lost |= imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
+                         sample->data.imu.my, sample->data.imu.mz,
+                         (float)SYNAPSE_RESEARCH_UNIT_CUT);
+        if (lost) {
             s_research.ring_overflow++;
-            research_note_drop(acc, 1u);
-            research_note_drop(gyr, 1u);
-            research_note_drop(mag, 1u);
-            return;
         }
-        if (acc->pending == 0) {
-            acc->first_ts_us = now_us;
-            gyr->first_ts_us = now_us;
-            mag->first_ts_us = now_us;
-        }
-        acc->ts_ring[acc->pending] = (uint32_t)now_us;
-        gyr->ts_ring[gyr->pending] = (uint32_t)now_us;
-        mag->ts_ring[mag->pending] = (uint32_t)now_us;
-        // ICM-20948 driver reports g / rad/s / uT (see imu_icm20948.cpp).
-        acc->ring[acc->pending * 3 + 0] = quantise_s16(sample->data.imu.ax, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        acc->ring[acc->pending * 3 + 1] = quantise_s16(sample->data.imu.ay, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        acc->ring[acc->pending * 3 + 2] = quantise_s16(sample->data.imu.az, (float)SYNAPSE_RESEARCH_UNIT_MG);
-        gyr->ring[gyr->pending * 3 + 0] = quantise_s16(sample->data.imu.gx, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        gyr->ring[gyr->pending * 3 + 1] = quantise_s16(sample->data.imu.gy, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        gyr->ring[gyr->pending * 3 + 2] = quantise_s16(sample->data.imu.gz, (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        mag->ring[mag->pending * 3 + 0] = quantise_s16(sample->data.imu.mx, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        mag->ring[mag->pending * 3 + 1] = quantise_s16(sample->data.imu.my, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        mag->ring[mag->pending * 3 + 2] = quantise_s16(sample->data.imu.mz, (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        acc->pending++;
-        gyr->pending++;
-        mag->pending++;
         break;
     }
     default:

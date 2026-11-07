@@ -80,7 +80,7 @@ jobs:
             -I main -I config -I sensors -I acquisition -I signal_quality -I edge_ai \
             -I power -I ble -I fit -I provisioning -I ota \
             -I ../common/sensors -I ../common/scheduler -I ../common/sync \
-            -I ../common/ble -I ../common/triage -I ../common/power \
+            -I ../common/ble -I ../common/triage \
             --inline-suppr --error-exitcode=1 \
             $SRCS 2>&1 | tee cppcheck.log
           if grep -q "error:" cppcheck.log; then
@@ -103,12 +103,9 @@ jobs:
             echo "clang-tidy passed (zero warnings)"
           fi
 
-      - name: Run unit tests (host simulation)
-        working-directory: firmware/${{ matrix.variant }}
-        run: |
-          . ~/esp-idf/export.sh
-          idf.py -D TEST_BUILD=1 build 2>&1 | tail -30
-          echo "Test build successful"
+# The firmware unit tests are the host C tests of the Woodpecker gate (tests/firmware_host):
+      # a step here that built with an option no CMakeLists reads and piped into `tail` could
+      # not fail, and said 'Test build successful'.
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

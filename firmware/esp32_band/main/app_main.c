@@ -89,10 +89,23 @@ static void on_transmit_request(bool on)
     (void)synapse_research_service_set_transmitting(on);
 }
 
+// What is present on the pod: the sensors that initialised, plus the power monitor (INA219).
+static uint8_t device_health_mask(void)
+{
+    uint8_t mask = synapse_sensors_health_mask();
+    if (synapse_sensors_temperature_ok()) {
+        mask |= SYNAPSE_V2_HEALTH_TEMP;
+    }
+    if (synapse_power_has_measured_current()) {
+        mask |= SYNAPSE_V2_HEALTH_POWER;
+    }
+    return mask;
+}
+
 static void fill_status(synapse_status_v2_t *st)
 {
-    st->tier = 0;  // ponytail: the acquisition FSM does not expose its tier yet
-    st->sensor_health = synapse_sensors_health_mask();
+    st->tier = (uint8_t)synapse_acquisition_get_tier();
+    st->sensor_health = device_health_mask();
     st->flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
     st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
@@ -359,14 +372,26 @@ void app_main(void)
             v2.ecg_quality = ecg_quality;
             v2.motion_artifact = ppg_map;  // v1's ppg_map: the PPG window is motion-corrupted
             if (stress.valid) v2.stress_level = stress_level;  // otherwise it stays NA (null)
-            v2.sensor_health = synapse_sensors_health_mask();
+            v2.sensor_health = device_health_mask();
             if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
 #if defined(CONFIG_SYNAPSE_RR_ENABLE)
-            // RR and HRV leave only with a frame that really goes out (the intervals are consumed
-            // when reported) and only from a fresh, clean reading: otherwise they stay NA.
+            // RR and HRV leave only with a frame that really goes out and only from a fresh,
+            // clean reading: otherwise they stay NA. The intervals are looked at (peek) here and
+            // consumed (commit) only once the frame was queued: a tick whose frame is held back
+            // or refused must not eat them.
+            if (!synapse_ble_gatt_feature_v2_ready()) {
+                // Nobody can be told (not subscribed, or an MTU too small for a frame): do not pile
+                // up the uptime's history for the first frame to carry as one rr_count.
+                synapse_rr_commit(&s_rr);
+            }
+            synapse_rr_expire(&s_rr, esp_timer_get_time());
+            // An unpublishable window (low SQI, motion) still sends its frame, with RR as NA: the
+            // intervals found in it are consumed with that frame on purpose, never reported late.
+            bool rr_in_frame = false;
             if (synapse_ble_gatt_feature_v2_due()) {
+                rr_in_frame = true;
                 uint16_t rr_units[4];
-                const uint32_t n_rr = synapse_rr_take(&s_rr, rr_units, 4);
+                const uint32_t n_rr = synapse_rr_peek(&s_rr, rr_units, 4);
                 const int publishable = synapse_rr_publishable(
                     ppg_sqi != SYNAPSE_NA_U8, ppg.sqi, ppg.motion_artifact_prob);
                 if (publishable && n_rr > 0) {
@@ -383,7 +408,14 @@ void app_main(void)
                 }
             }
 #endif
-            (void)synapse_ble_gatt_push_feature_v2(&v2);
+            const esp_err_t feature_rc = synapse_ble_gatt_push_feature_v2(&v2);
+#if defined(CONFIG_SYNAPSE_RR_ENABLE)
+            if (rr_in_frame && feature_rc == ESP_OK) {
+                synapse_rr_commit(&s_rr);
+            }
+#else
+            (void)feature_rc;
+#endif
             (void)synapse_ble_gatt_push_status();
         }
         // --------------------------------------------------------------------

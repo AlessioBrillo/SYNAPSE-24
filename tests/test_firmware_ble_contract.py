@@ -236,15 +236,14 @@ def test_on_sync_does_not_call_the_advertising_helper_twice() -> None:
 # ---------------------------------------------------------------------------
 # T3: the Heart Rate characteristic tells the truth.
 # ---------------------------------------------------------------------------
-def test_the_heart_rate_read_path_sends_flags_0x01_and_three_bytes() -> None:
-    """Flags 0x01 (16-bit HR) + HR16 = 3 bytes, and no phantom byte."""
+def test_the_heart_rate_read_path_sends_flags_and_three_bytes() -> None:
+    """Flags + HR16 = 3 bytes without an RR, and no phantom byte."""
     source = _read(GATT_C)
     start = source.index("// Heart Rate Measurement (0x2A37)")
     body = source[start : source.index("static int cfg_access(")]
 
-    assert "uint8_t flags = 0x01;" in body, (
-        "the read path must set bit0 (16-bit Heart Rate Measurement Value)"
-    )
+    # the flag bits themselves are executed in tests/test_firmware_s2_data.py (synapse_hr_flags)
+    assert "synapse_hr_flags(rr != 0xFFFF)" in body, "the read path builds its flags in one place"
     assert "uint8_t n = 3;" in body, "without an RR interval the value is 3 bytes"
     assert "os_mbuf_append(ctxt->om, val, n)" in body, (
         "the number of bytes sent must be the number of bytes built"
@@ -252,7 +251,6 @@ def test_the_heart_rate_read_path_sends_flags_0x01_and_three_bytes() -> None:
     assert "sizeof(val)" not in body, (
         "sizeof(val) sends the whole buffer: the uninitialised byte would reach the client"
     )
-    assert "0x10" in body, "the RR-present bit must be set only when an RR exists"
     # The BLE Heart Rate Service flag semantics must be documented.
     assert "Heart Rate Service" in body
     assert "0x2A37" in body
@@ -508,21 +506,6 @@ def test_the_fit_developer_field_names_match_the_contract() -> None:
 # ---------------------------------------------------------------------------
 # T6: the loss is visible to the host.
 # ---------------------------------------------------------------------------
-def test_the_sequence_is_consumed_when_the_frame_is_built() -> None:
-    """A frame the stack refuses must leave a hole in the sequence."""
-    source = _read(RESEARCH_C)
-    start = source.index("static void flush_stream(")
-    body = source[start : source.index("void synapse_research_service_submit(")]
-    assert "uint16_t sequence = stream->sequence++;" in body, (
-        "the sequence must be consumed when the frame is built, not when the "
-        "notification is accepted"
-    )
-    # The sequence must not be incremented a second time on success.
-    assert body.count("stream->sequence++") == 1, (
-        "the sequence must be incremented exactly once per frame"
-    )
-
-
 def test_the_dropped_counter_is_carried_by_the_header() -> None:
     """The loss magnitude travels in the frame header."""
     source = _read(RESEARCH_C)

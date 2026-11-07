@@ -450,8 +450,10 @@ def test_firmware_restart_is_a_typed_event_not_65k_lost_frames() -> None:
     """
     decoder = ResearchStreamDecoder()
     values = [100, 200]
-    decoder.feed(encode_frame(RawStream.ECG, 10, 1_000_000, 0, RawFormat.S16, values))
-    decoder.feed(encode_frame(RawStream.ECG, 11, 1_002_000, 0, RawFormat.S16, values))
+    # The counter is past the out-of-order window (64): below it, a step back is a late frame
+    # (raw_frame_v1.json), so a restart is only recognisable from 65 frames on.
+    decoder.feed(encode_frame(RawStream.ECG, 100, 1_000_000, 0, RawFormat.S16, values))
+    decoder.feed(encode_frame(RawStream.ECG, 101, 1_002_000, 0, RawFormat.S16, values))
 
     # The pod restarts mid-link: sequence 0, pod clock back at ~4 ms.
     decoder.feed(encode_frame(RawStream.ECG, 0, 4_000, 0, RawFormat.S16, values))
@@ -459,6 +461,46 @@ def test_firmware_restart_is_a_typed_event_not_65k_lost_frames() -> None:
     assert decoder.restarts == {RawStream.ECG: 1}
     assert decoder.drops == [], f"a restart must not be a loss: {decoder.drops}"
     assert decoder.is_clean()
+
+
+def test_a_late_or_repeated_frame_is_counted_apart_and_adds_nothing() -> None:
+    """The contract's rule: a step back of up to 64 frames is out of order, not a restart.
+
+    The old rule called every step back with an older timestamp a restart, threw the stream's
+    clock away, and appended the late frame's samples a second time.
+    """
+    decoder = ResearchStreamDecoder()
+    values = [100, 200]
+    for seq in (10, 11, 13):  # 12 is late: it arrives after 13
+        decoder.feed(
+            encode_frame(RawStream.ECG, seq, 1_000_000 + seq * 1000, 0, RawFormat.S16, values)
+        )
+    seen = decoder.frames_seen
+    decoder.feed(encode_frame(RawStream.ECG, 12, 1_012_000, 0, RawFormat.S16, values))  # late
+    decoder.feed(encode_frame(RawStream.ECG, 13, 1_013_000, 0, RawFormat.S16, values))  # repeat
+
+    assert decoder.out_of_order == {RawStream.ECG: 2}
+    assert decoder.restarts == {}, "a late frame is not a band restart"
+    assert decoder.frames_seen == seen, "neither adds samples"
+    assert decoder.sequences[RawStream.ECG] == 13, "the counter does not move back"
+    assert len(decoder.drops) == 1, (
+        "12 was counted missing when 13 arrived; the rule does not retract"
+    )
+    assert decoder.drops[0].gap == 1
+
+
+def test_a_forward_jump_past_half_the_counter_with_a_running_clock_is_a_loss() -> None:
+    """16 bits cannot tell 40000 frames lost from 25536 frames back; the device clock can."""
+    decoder = ResearchStreamDecoder()
+    values = [100, 200]
+    decoder.feed(encode_frame(RawStream.ECG, 10, 1_000_000, 0, RawFormat.S16, values))
+    decoder.feed(encode_frame(RawStream.ECG, 40_010, 2_000_000_000, 0, RawFormat.S16, values))
+
+    assert decoder.restarts == {}, "the clock kept running: not a restart"
+    assert len(decoder.drops) == 1
+    assert decoder.drops[0].gap == 40_000 - 1
+    assert not decoder.is_clean()
+    assert decoder.out_of_order_summary() == {}
 
 
 def test_a_plain_giant_sequence_gap_is_still_a_gap() -> None:

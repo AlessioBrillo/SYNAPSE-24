@@ -250,6 +250,8 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_open.argtypes = []
     service.synapse_host_bench_epoch_wraps.restype = ctypes.c_uint32
     service.synapse_host_bench_epoch_wraps.argtypes = []
+    service.synapse_host_bench_run_imu_subset.restype = ctypes.c_int
+    service.synapse_host_bench_run_imu_subset.argtypes = [ctypes.c_int, ctypes.c_int]
 
 
 def _stream_values(frames: list[tuple[RawHeader, np.ndarray]]) -> dict[int, int]:
@@ -399,6 +401,50 @@ def test_ring_overflow_is_counted_when_the_link_stalls(service: ctypes.CDLL) -> 
     assert overflow > 0, "ring overflow not counted: 200 samples were fed with no link"
 
 
+@pytest.mark.parametrize(
+    ("mask", "streams"),
+    [
+        (0b001, {RawStream.ACC}),
+        (0b010, {RawStream.GYRO}),
+        (0b100, {RawStream.MAG}),
+        (0b101, {RawStream.ACC, RawStream.MAG}),
+    ],
+)
+def test_imu_streams_are_bounded_one_by_one(
+    service: ctypes.CDLL, mask: int, streams: set[RawStream]
+) -> None:
+    """A host may take any subset of acc/gyro/mag; each ring has its own bound.
+
+    300 samples is more than twice the ring depth (128): the old code checked only
+    the accelerometer ring, so with acc alone the gyro and mag rings were written
+    past their end after ~2.6 s, and with gyro alone the idle acc ring filled and
+    took the subscribed stream down with it (counted as link loss).
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_run_imu_subset(mask, 300)
+
+    values = _stream_values(_decoded_frames(service))
+    # Flush threshold 32 samples x 3 axes: nine flushes in 300 samples.
+    assert values == {int(s): 9 * 32 * 3 for s in streams}
+    # Nothing was subscribed that could not drain, so nothing is a loss.
+    assert service.synapse_host_bench_ring_overflow() == 0
+
+
+def test_a_stalled_imu_counts_one_loss_per_sample_not_per_stream(service: ctypes.CDLL) -> None:
+    """All three IMU streams subscribed, link down: the rings fill (depth 128).
+
+    Each of the 300 samples past the ring is ONE lost IMU sample for the shared
+    counter, even though three streams dropped it; the per-stream `dropped` byte
+    carries the per-stream count.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    sent = service.synapse_host_bench_run_imu_subset(0b1111, 300)
+    assert sent == 0
+    assert service.synapse_host_bench_ring_overflow() == 300 - 128
+
+
 # ---------------------------------------------------------------------------
 # MTU negotiation: the frame size belongs to the link, not to the 244-byte
 # assumption, and every failure path must leave the data queued (or counted),
@@ -532,6 +578,40 @@ def test_refused_notifications_stay_queued_and_never_double_free(
         "samples should be queued in the ring, not overflowed"
     )
     assert service.synapse_host_bench_double_free() == 0, "the service freed a stack mbuf"
+
+
+@pytest.mark.parametrize("fail_every", [2, 3])
+def test_a_refused_notification_does_not_burn_a_sequence_number(
+    service: ctypes.CDLL, fail_every: int
+) -> None:
+    """A refusal is retried with the same number: no hole, nothing lost.
+
+    Burning the number when the frame was built made a refusal that the next
+    tick repairs look like a lost frame to the host. MTU 23 gives many small
+    frames, so several attempts fail along the way.
+    """
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_set_mtu(23)
+    service.synapse_host_bench_set_notify_fail_every(fail_every)
+    service.synapse_host_bench_run(_MODE_OPEN, 200)
+    assert service.synapse_host_bench_dropped_frames() > 0, "the knob refused nothing"
+
+    sequences: dict[int, list[int]] = {}
+    ecg: list[int] = []
+    for header, samples in _decoded_frames(service):
+        sequences.setdefault(header.stream, []).append(header.sequence)
+        # a refusal loses nothing, so no frame may claim a loss
+        assert header.dropped == 0, f"stream {header.stream}: dropped={header.dropped}"
+        if header.stream == RawStream.ECG:
+            ecg.extend(int(v) for v in samples)
+    assert sequences, "nothing was transmitted"
+    for stream, numbers in sequences.items():
+        assert numbers == list(range(len(numbers))), f"stream {stream}: {numbers}"
+    # the retried frames carry the same samples once, in order (the bench feeds a rising ramp)
+    assert ecg, "no ECG delivered"
+    assert all(b > a for a, b in zip(ecg, ecg[1:], strict=False)), "ECG repeated or reordered"
+    assert service.synapse_host_bench_ring_overflow() == 0
 
 
 def test_mbuf_exhaustion_counts_drops_and_never_double_frees(service: ctypes.CDLL) -> None:

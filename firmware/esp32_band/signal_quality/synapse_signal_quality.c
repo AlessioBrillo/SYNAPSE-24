@@ -194,22 +194,29 @@ esp_err_t synapse_signal_quality_get_all(synapse_signal_quality_t *quality) {
     return ESP_ERR_TIMEOUT;
 }
 
+// The predicates below read through the mutexed getters: the structs are written from the sensor
+// task, and a bare read of a multi-field struct can see half of an update. A reading that cannot
+// be fetched is "not acceptable" / "not stationary", never a guess.
 bool synapse_signal_quality_ppg_acceptable(void) {
-    return g_latest_ppg_quality.valid && 
-           g_latest_ppg_quality.sqi >= PPG_SQI_THRESHOLD &&
-           g_latest_ppg_quality.motion_artifact_prob <= PPG_MAP_THRESHOLD;
+    ppg_quality_t q;
+    return synapse_signal_quality_get_ppg(&q) == ESP_OK && q.valid &&
+           q.sqi >= PPG_SQI_THRESHOLD && q.motion_artifact_prob <= PPG_MAP_THRESHOLD;
 }
 
 bool synapse_signal_quality_ecg_acceptable(void) {
-    return g_latest_ecg_quality.quality >= ECG_QUALITY_THRESHOLD && !g_latest_ecg_quality.lead_off;
+    ecg_quality_t q;
+    return synapse_signal_quality_get_ecg(&q) == ESP_OK &&
+           q.quality >= ECG_QUALITY_THRESHOLD && !q.lead_off;
 }
 
 bool synapse_signal_quality_imu_stationary(void) {
-    return g_latest_imu_quality.is_stationary;
+    imu_quality_t q;
+    return synapse_signal_quality_get_imu(&q) == ESP_OK && q.is_stationary;
 }
 
 float synapse_signal_quality_get_sleep_probability(void) {
-    return g_latest_imu_quality.sleep_probability;
+    imu_quality_t q;
+    return synapse_signal_quality_get_imu(&q) == ESP_OK ? q.sleep_probability : 0.0f;
 }
 
 esp_err_t synapse_signal_quality_deinit(void) {
