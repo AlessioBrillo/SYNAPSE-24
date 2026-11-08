@@ -107,3 +107,39 @@ def test_control_writes() -> None:
         consumer.encode_control("start", 1)
     with pytest.raises(consumer.ConsumerCodecError, match="unknown"):
         consumer.encode_control("reboot")
+
+
+def test_parse_control_is_the_inverse_of_encode_control() -> None:
+    for op, arg in (
+        ("start", None),
+        ("stop", None),
+        ("set_feature_rate", 5),
+        ("set_time", 1 << 41),
+    ):
+        assert consumer.parse_control(consumer.encode_control(op, arg)) == (op, arg)
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        (b"", "bad_length"),
+        (bytes([0x7F]), "bad_opcode"),
+        (bytes([1, 0]), "bad_length"),
+        (bytes([3]), "bad_length"),
+        (bytes([3, 0]), "bad_argument"),
+        (bytes([3, 6]), "bad_argument"),
+        (bytes([4]) + bytes(7), "bad_length"),
+        (bytes([4]) + (consumer.SET_TIME_MIN_EPOCH_MS - 1).to_bytes(8, "little"), "bad_argument"),
+    ],
+)
+def test_parse_control_refuses_with_the_contract_error(payload: bytes, error: str) -> None:
+    with pytest.raises(consumer.ControlError) as caught:
+        consumer.parse_control(payload)
+    assert caught.value.code == consumer.CONTROL_ERRORS[error]
+
+
+def test_the_heart_rate_measurement_is_the_standard_value() -> None:
+    assert consumer.encode_hr_measurement(72) == bytes([0x07, 72, 0])
+    assert consumer.encode_hr_measurement(72, 800) == bytes([0x17, 72, 0, 0x20, 0x03])
+    with pytest.raises(consumer.ConsumerCodecError):
+        consumer.encode_hr_measurement(0xFFFF)  # 65535 bpm is the 'never measured' value

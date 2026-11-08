@@ -23,14 +23,18 @@ __all__ = [
     "STATUS_BYTES",
     "STATUS_FIELDS",
     "STATUS_VERSION",
+    "CONTROL_ERRORS",
     "ConsumerCodecError",
+    "ControlError",
     "StreamMeta",
     "decode_feature",
     "decode_status",
     "decode_stream_metadata",
     "encode_control",
     "encode_feature",
+    "encode_hr_measurement",
     "encode_status",
+    "parse_control",
 ]
 
 
@@ -243,3 +247,59 @@ def encode_control(op: str, arg: int | None = None) -> bytes:
     if arg is not None:
         raise ConsumerCodecError(f"{op} takes no argument")
     return bytes((_OPCODES[op],))
+
+
+CONTROL_ERRORS: Final = {"bad_opcode": 1, "bad_length": 2, "bad_argument": 3}
+_OP_NAMES: Final = {code: name for name, code in _OPCODES.items()}
+
+
+class ControlError(ConsumerCodecError):
+    """A control write the band refuses; ``code`` is the contract error (``CONTROL_ERRORS``)."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def parse_control(data: bytes) -> tuple[str, int | None]:
+    """Parse a control write as the band does: ``(op, arg)``, or raise :class:`ControlError`.
+
+    Same rules and the same order of checks as ``synapse_control_apply`` in the firmware
+    (``tests/test_consumer_v2_parity.py`` runs both on the same payloads).
+    """
+    data = bytes(data)
+    if not data:
+        raise ControlError(CONTROL_ERRORS["bad_length"], "empty control write")
+    op = _OP_NAMES.get(data[0])
+    if op is None:
+        raise ControlError(CONTROL_ERRORS["bad_opcode"], f"unknown opcode {data[0]}")
+    want = {"start": 1, "stop": 1, "set_feature_rate": 2, "set_time": 9}[op]
+    if len(data) != want:
+        raise ControlError(CONTROL_ERRORS["bad_length"], f"{op} takes {want} bytes")
+    if op == "set_feature_rate":
+        if not 1 <= data[1] <= FEATURE_RATE_MAX_HZ:
+            raise ControlError(CONTROL_ERRORS["bad_argument"], f"{data[1]} Hz is out of range")
+        return op, data[1]
+    if op == "set_time":
+        epoch_ms = int.from_bytes(data[1:], "little")
+        if epoch_ms < SET_TIME_MIN_EPOCH_MS:
+            raise ControlError(CONTROL_ERRORS["bad_argument"], f"{epoch_ms} ms is before 2020")
+        return op, epoch_ms
+    return op, None
+
+
+def encode_hr_measurement(bpm: int, rr_raw: int | None = None) -> bytes:
+    """Build the standard Heart Rate Measurement (0x2A37) value the band notifies.
+
+    Flags as ``synapse_hr_flags``: 16-bit value, sensor contact detected (0b11), and bit 4 when an
+    RR interval follows. ``rr_raw`` is in 1/1024 s, the unit of the characteristic.
+    """
+    if not 0 <= bpm <= 0xFFFE:
+        raise ConsumerCodecError(f"heart rate {bpm} bpm is outside 0..65534")
+    flags = 0x07 | (0x10 if rr_raw is not None else 0)
+    out = bytes((flags,)) + bpm.to_bytes(2, "little")
+    if rr_raw is None:
+        return out
+    if not 0 <= rr_raw <= 0xFFFE:
+        raise ConsumerCodecError(f"RR {rr_raw} is outside 0..65534 (1/1024 s)")
+    return out + rr_raw.to_bytes(2, "little")

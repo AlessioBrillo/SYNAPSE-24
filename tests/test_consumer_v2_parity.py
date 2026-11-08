@@ -430,6 +430,41 @@ def test_the_control_point_refuses_bad_writes_without_side_effects(fw: ctypes.CD
     assert _apply(fw, b"")[0] == errors["bad_length"]
 
 
+def test_the_sdk_control_parser_agrees_with_the_firmware(fw: ctypes.CDLL) -> None:
+    """The virtual band refuses what the band refuses, with the same error code."""
+    payloads = [
+        b"",
+        bytes([0x7F]),
+        bytes([0]),
+        consumer.encode_control("start"),
+        consumer.encode_control("stop"),
+        bytes([1, 0]),
+        bytes([2, 9]),
+        bytes([3]),
+        *(bytes([3, hz]) for hz in range(8)),
+        bytes([3, 1, 1]),
+        consumer.encode_control("set_time", 1_798_848_000_123),
+        bytes([4]) + bytes(7),
+        bytes([4]) + bytes(9),
+        bytes([4]) + (consumer.SET_TIME_MIN_EPOCH_MS - 1).to_bytes(8, "little"),
+        bytes([4]) + consumer.SET_TIME_MIN_EPOCH_MS.to_bytes(8, "little"),
+    ]
+    for payload in payloads:
+        c_error, calls = _apply(fw, payload)
+        try:
+            op, arg = consumer.parse_control(payload)
+            py_error = 0
+        except consumer.ControlError as exc:
+            py_error, op, arg = exc.code, None, None
+        assert py_error == c_error, payload.hex()
+        if c_error == 0:
+            assert len(calls) == 1, payload.hex()  # the firmware acted exactly once
+            if op == "set_time":
+                assert calls[0] == ("time", arg)
+        else:
+            assert calls == [], payload.hex()
+
+
 def test_the_v1_feature_frame_is_23_bytes_as_compiled(tmp_path: Path) -> None:
     """sizeof() from the real header, against the manifest: the 26 that was documented was wrong."""
     import yaml
