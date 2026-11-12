@@ -16,6 +16,7 @@ reference. A skip here is not a pass.
 from __future__ import annotations
 
 import ctypes
+import json
 import sys
 from pathlib import Path
 
@@ -91,3 +92,13 @@ def test_rmssd_uses_adjacent_clean_intervals_only() -> None:
     gap[2:] += 5.0  # a missed beat after the second interval: that pair is not adjacent
     assert rp._rmssd(gap, rr) == pytest.approx(20.0)  # the other three pairs still count
     assert np.isnan(rp._rmssd(t[:2], rr[:2]))
+
+
+def test_a_window_with_no_usable_rmssd_gives_valid_json_not_nan() -> None:
+    """Intervals 5 s apart are never adjacent: no RMSSD, which must come out as null, not NaN."""
+    band = [(1.0 + 5.0 * k, 800.0) for k in range(6)]
+    ecg = np.arange(0.0, 31.0, 0.8)
+    out = rp.compare_windows(band, ecg, 30.0)
+    assert out["windows_compared"] == 1
+    assert out["rmssd_band_ms_median"] is None
+    json.dumps(out, allow_nan=False)

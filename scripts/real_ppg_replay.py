@@ -99,6 +99,10 @@ def firmware_intervals(
     for i, value in enumerate(ir):
         lib.host_rr_push(state, float(value), T0_US + i * 1_000_000 // PPG_FS)
         total = lib.host_rr_take(state, out, 8)
+        if (
+            total > 8
+        ):  # take() reports how many there were: more than the buffer means a lost interval
+            raise RuntimeError(f"{total} intervals at once at sample {i}: the buffer holds 8")
         found += [(i / PPG_FS, out[k] * 1000.0 / 1024.0) for k in range(min(total, 8))]
     counters = {
         "accepted": int(lib.host_rr_accepted(state)),
@@ -124,10 +128,21 @@ def _rmssd(
     return float(np.sqrt(np.mean(d**2))) if len(d) >= 3 else float("nan")
 
 
+def _median_or_none(values: list[float]) -> float | None:
+    """Median of the finite values, rounded; None (valid JSON, unlike NaN) when there are none."""
+    finite = [v for v in values if np.isfinite(v)]
+    return round(float(np.median(finite)), 1) if finite else None
+
+
 def compare_windows(
     band: list[tuple[float, float]], ecg_peaks_s: npt.NDArray[np.float64], seconds: float
 ) -> dict[str, Any]:
-    """Per 30 s window: heart rate (median interval) and RMSSD, band vs ECG."""
+    """Per 30 s window: heart rate (median interval) and RMSSD, band vs ECG.
+
+    A band interval is stamped with the sample at which the peak was confirmed (one sample, 20 ms, after
+    the peak), an ECG interval with its R peak: an interval within that margin of a window edge may fall
+    in a different window for the two. With 16 windows and medians that moves nothing measurable.
+    """
     rows: list[dict[str, float]] = []
     silent = 0
     for w0 in np.arange(0.0, seconds - WINDOW_S + 1e-9, WINDOW_S):
@@ -156,12 +171,8 @@ def compare_windows(
         "windows_band_silent": silent,
         "hr_median_abs_error_bpm": round(float(np.median(np.abs(hr_err))), 2) if rows else None,
         "hr_within_5bpm": round(float(np.mean(np.abs(hr_err) <= 5.0)), 3) if rows else None,
-        "rmssd_band_ms_median": round(float(np.nanmedian([r["rmssd_band_ms"] for r in rows])), 1)
-        if rows
-        else None,
-        "rmssd_ecg_ms_median": round(float(np.nanmedian([r["rmssd_ecg_ms"] for r in rows])), 1)
-        if rows
-        else None,
+        "rmssd_band_ms_median": _median_or_none([r["rmssd_band_ms"] for r in rows]),
+        "rmssd_ecg_ms_median": _median_or_none([r["rmssd_ecg_ms"] for r in rows]),
     }
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -121,3 +122,53 @@ def test_the_capture_can_be_the_xdf_the_validator_writes(tmp_path: Path) -> None
     )
     with pytest.raises(ValueError, match="no SYNAPSE_ECG_T0"):
         g1.load_capture(tmp_path / "other.xdf", FS)
+
+
+def test_the_nominal_gain_is_one_number_everywhere() -> None:
+    """The scripts repeat the manifest's gain: they must not drift from it (nor from each other)."""
+    manifest = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+    ecg = next(
+        p["metadata"]["ecg_config"]
+        for p in manifest["pods"]
+        if "ecg_config" in p.get("metadata", {})
+    )
+    assert g1.NOMINAL_GAIN == rsr.NOMINAL_GAIN == ecg["gain"]
+
+
+def test_a_capture_that_is_not_one_channel_is_refused(tmp_path: Path) -> None:
+    two = tmp_path / "two.npy"
+    np.save(two, np.zeros((1000, 2)))
+    with pytest.raises(ValueError, match="one channel"):
+        g1.load_capture(two, FS)
+    one = tmp_path / "one.npy"
+    np.save(one, np.arange(10.0).reshape(-1, 1))
+    values, _ = g1.load_capture(one, FS)
+    assert values.shape == (10,)
+
+
+def test_an_xdf_with_dropped_samples_is_refused_not_fitted(tmp_path: Path) -> None:
+    pytest.importorskip("pyxdf", reason="pyxdf is a project dependency")
+    from synapse_device.xdf_writer import write_xdf
+
+    wire = _bench_sine(true_gain=600.0)
+    t = np.arange(wire.size) / FS
+    keep = np.r_[0:2000, 2500 : wire.size]  # a 1 s hole
+    write_xdf(
+        tmp_path / "hole.xdf",
+        [
+            {
+                "name": g1.ECG_STREAM,
+                "type": "ECG",
+                "channel_count": 1,
+                "sampling_rate": FS,
+                "channel_format": "float32",
+                "channel_names": ["ecg_uv"],
+                "channel_units": ["uV"],
+                "source_id": "bench",
+                "data": wire[keep].reshape(-1, 1),
+                "timestamps": t[keep],
+            }
+        ],
+    )
+    with pytest.raises(ValueError, match="gaps"):
+        g1.load_capture(tmp_path / "hole.xdf", FS)

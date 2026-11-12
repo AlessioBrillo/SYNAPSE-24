@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from scipy.signal import resample_poly
+from scipy.signal import lfilter, resample_poly
 
 ROOT = Path(__file__).resolve().parents[1]
 for _p in (ROOT, ROOT / "sdk" / "python"):
@@ -65,7 +65,12 @@ ADC_MAX = 4095  # ESP32-S3 ADC1, 12 bit
 # are per chip. The AD8232 output rests on about Vcc/2. Measure both on the bench (BRINGUP_SOP 4a).
 ADC_FULL_SCALE_MV = 3100.0
 MIDRAIL_MV = 1650.0
-CALIBRATION_SAMPLES = 500  # the driver averages the first second to find the mid-rail
+CALIBRATION_SAMPLES = (
+    500  # the driver averages the first second to find the mid-rail, and emits none of it
+)
+MIDRAIL_TRACK_ALPHA = 1.0 / 5000.0  # then follows it with a ~10 s time constant (ecg_ad8232.cpp)
+MIN_SECONDS = 5.0  # of ECG after the calibration second: less is not a recording to score
+MAX_BEAT_LOSS = 0.03  # Se/PPV the chain may cost against the untouched recording (a beat or two)
 # AD8232 breakout nominal, the same number as config/hardware.yaml ecg_config.gain and the Kconfig default.
 NOMINAL_GAIN = 1100.0
 FRAME_SAMPLES = 100  # 0.2 s of ECG per notification; the frame limit for s16 is 116
@@ -81,9 +86,11 @@ def ecg_to_wire_uv(
 ) -> tuple[npt.NDArray[np.int16], float]:
     """What the band puts in the ECG frames for ``mv`` at the electrodes: s16 microvolts.
 
-    Mirrors ``ecg_ad8232.cpp``: front end -> 12-bit ADC (rails at 0 and full scale) -> mid-rail taken as
-    the mean of the first second -> divided by the *configured* gain -> x1000, rounded, clipped to s16.
-    Returns (microvolts, share of samples that hit the ADC rails or the s16 limit).
+    Mirrors ``ecg_ad8232.cpp``: front end -> 12-bit ADC (rails at 0 and full scale) -> the first second
+    is only used to find the mid-rail and is NOT emitted -> from then on the mid-rail follows the signal
+    slowly (a ~0.016 Hz high-pass) -> (adc - mid-rail) / *configured* gain -> x1000, rounded, clipped to
+    s16. So the output starts ``CALIBRATION_SAMPLES`` samples after the input.
+    Returns (microvolts, share of emitted samples that hit the ADC rails or the s16 limit).
     """
     ratio = Fraction(ECG_FS, fs_in)
     x = resample_poly(mv, ratio.numerator, ratio.denominator)
@@ -91,7 +98,19 @@ def ecg_to_wire_uv(
     railed = (adc_mv < 0) | (adc_mv > ADC_FULL_SCALE_MV)
     lsb = ADC_FULL_SCALE_MV / ADC_MAX
     adc_mv = np.rint(np.clip(adc_mv, 0, ADC_FULL_SCALE_MV) / lsb) * lsb
-    midrail = float(np.mean(adc_mv[:CALIBRATION_SAMPLES]))
+    if len(adc_mv) < CALIBRATION_SAMPLES + MIN_SECONDS * ECG_FS:
+        raise ValueError(
+            f"{len(adc_mv) / ECG_FS:.1f} s of ECG: need the 1 s calibration plus {MIN_SECONDS:.0f} s"
+        )
+    midrail0 = float(np.mean(adc_mv[:CALIBRATION_SAMPLES]))
+    adc_mv, railed = adc_mv[CALIBRATION_SAMPLES:], railed[CALIBRATION_SAMPLES:]
+    # mid[n] = mid[n-1] + alpha * (adc[n] - mid[n-1]), updated before the sample is used, as in the driver
+    midrail = lfilter(
+        [MIDRAIL_TRACK_ALPHA],
+        [1.0, -(1.0 - MIDRAIL_TRACK_ALPHA)],
+        adc_mv,
+        zi=[(1.0 - MIDRAIL_TRACK_ALPHA) * midrail0],
+    )[0]
     uv = np.rint((adc_mv - midrail) / configured_gain * 1000.0)
     saturated = railed | (np.abs(uv) > 32767)
     return np.clip(uv, -32768, 32767).astype(np.int16), float(np.mean(saturated))
@@ -182,7 +201,9 @@ def replay_ecg(
     wire, clipped = ecg_to_wire_uv(mv, fs_in, true_gain=true_gain, configured_gain=configured_gain)
     frames = firmware_frames(lib, wire)
     received = phone_decode(frames)
-    ref_out = np.rint(reference_peaks * ECG_FS / fs_in).astype(np.int64)
+    # the band emits nothing during the mid-rail calibration second: its clock starts that much later
+    ref_out = np.rint(reference_peaks * ECG_FS / fs_in).astype(np.int64) - CALIBRATION_SAMPLES
+    ref_out = ref_out[(ref_out >= 0) & (ref_out < len(wire))]
     before = detect_r_peaks_neurokit(mv, fs_in)
     after = detect_r_peaks_neurokit(received.astype(np.float64), ECG_FS)
     return {
@@ -195,6 +216,15 @@ def replay_ecg(
         "untouched_recording": _score(before, reference_peaks, fs_in),
         "after_the_chain": _score(after, ref_out, ECG_FS),
     }
+
+
+def beats_lost(result: dict[str, Any]) -> bool:
+    """True if the chain cost more beat sensitivity or PPV than ``MAX_BEAT_LOSS``."""
+    before, after = result["untouched_recording"], result["after_the_chain"]
+    return (
+        after["sensitivity"] < before["sensitivity"] - MAX_BEAT_LOSS
+        or after["ppv"] < before["ppv"] - MAX_BEAT_LOSS
+    )
 
 
 def main() -> int:
@@ -218,20 +248,24 @@ def main() -> int:
                 "host policy blocked the freshly built codec; rerun in the gate's Linux container"
             )
             return 3
-        result = replay_ecg(
-            mv[:n],
-            ref,
-            meta["fs"],
-            lib,
-            true_gain=args.true_gain,
-            configured_gain=args.configured_gain,
-        )
+        try:
+            result = replay_ecg(
+                mv[:n],
+                ref,
+                meta["fs"],
+                lib,
+                true_gain=args.true_gain,
+                configured_gain=args.configured_gain,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            return 2
     result["record"] = args.record
     text = json.dumps(result, indent=2)
     print(text)
     if args.out:
         args.out.write_text(text + "\n", encoding="utf-8")
-    return 0 if result["bit_exact"] else 1
+    return 0 if result["bit_exact"] and not beats_lost(result) else 1
 
 
 if __name__ == "__main__":

@@ -19,15 +19,15 @@ Il piano prevedeva anche WESAD per il PPG. **Non è ottenibile in automatico**: 
 
 ## Numeri misurati
 
-**ECG** (60 s, gain vero e configurato 1100×): il framing è bit-esatto e senza buchi; i timestamp dei frame sono il clock dei campioni.
+**ECG** (60 s, gain vero e configurato 1100×; il modello segue il driver: il primo secondo calibra il mid-rail e non viene emesso, poi il mid-rail segue il segnale con ~10 s di costante di tempo): il framing è bit-esatto e senza buchi; i timestamp dei frame sono il clock dei campioni. Il codice di uscita della CLI è ≠ 0 anche se la catena costa più di 0,03 di sensibilità o PPV (`MAX_BEAT_LOSS`).
 
 | Record MIT-BIH | Battiti | Se/PPV originale | Se/PPV dopo la catena |
 |---|---|---|---|
-| 100 | 74 | 0,987 / 1,000 | 0,987 / 1,000 |
-| 105 | 83 | 1,000 / 1,000 | 0,988 / 1,000 |
-| 108 | 58 | 0,345 / 0,351 | 0,379 / 0,407 |
+| 100 | 74 | 0,987 / 1,000 | 0,986 / 1,000 |
+| 105 | 83 | 1,000 / 1,000 | 0,976 / 1,000 |
+| 108 | 58 | 0,345 / 0,351 | 0,439 / 0,455 |
 
-Nel 105 la catena perde 1 battito su 83 e satura lo 0,2 % dei campioni (il QRS supera i circa ±1,3 mV che lascia un gain di 1100×); con un clone a 2200× (1,3 % saturato nel 100) i battiti si trovano ancora. Un `SYNAPSE_ECG_GAIN` sbagliato scala l'ampiezza sul filo di 1100/valore e non cambia i battiti (test). Il 108 è già difficile per il rilevatore sull'originale e non dice nulla sulla band.
+Nel 105 la catena perde 2-3 battiti su 82 (il primo secondo non esce dalla band: serve a trovare il mid-rail) e satura lo 0,2 % dei campioni (il QRS supera i circa ±1,3 mV che lascia un gain di 1100×); con un clone a 2200× (1,3 % saturato nel 100) i battiti si trovano ancora. Un `SYNAPSE_ECG_GAIN` sbagliato scala l'ampiezza sul filo di 1100/valore e non cambia i battiti (test). Il 108 è già difficile per il rilevatore sull'originale e non dice nulla sulla band.
 
 **PPG** (BIDMC, 480 s, 16 finestre da 30 s per record, `synapse_rr.c` com'è):
 

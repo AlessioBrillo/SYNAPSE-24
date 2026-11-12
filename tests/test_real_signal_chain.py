@@ -54,7 +54,10 @@ def test_the_framing_is_lossless_and_ordered(codec, recordings, record) -> None:
     assert result["bit_exact"], "the phone must read back exactly the values the band sent"
     # A nominal 1100x leaves +-1.3 mV before the ADC rails: record 105 clips 0.2 % of its samples.
     assert result["saturated_fraction"] < 0.01, result
-    assert result["frames"] == -(-int(30 * rsr.ECG_FS) // rsr.FRAME_SAMPLES)
+    emitted = (
+        int(30 * rsr.ECG_FS) - rsr.CALIBRATION_SAMPLES
+    )  # the first second only finds the mid-rail
+    assert result["frames"] == -(-emitted // rsr.FRAME_SAMPLES)
 
 
 @pytest.mark.parametrize("record", RECORDS)
@@ -65,8 +68,7 @@ def test_the_beats_survive_the_chain(codec, recordings, record) -> None:
     assert before["sensitivity"] >= 0.95, "fixture must be detectable"
     assert before["ppv"] >= 0.95, "fixture must be detectable"
     # Resampling to 500 Hz and the 12-bit ADC may cost the odd beat, never a visible share of them.
-    assert after["sensitivity"] >= before["sensitivity"] - 0.03, result
-    assert after["ppv"] >= before["ppv"] - 0.03, result
+    assert not rsr.beats_lost(result), result
 
 
 def test_frame_timestamps_are_the_sample_clock(codec, recordings) -> None:
@@ -88,7 +90,7 @@ def test_a_hole_in_the_sequence_is_refused(codec, recordings) -> None:
 
 
 def test_the_adc_clips_instead_of_wrapping() -> None:
-    wire, saturated = rsr.ecg_to_wire_uv(np.array([0.0, 50.0, -50.0] * 400), 360)
+    wire, saturated = rsr.ecg_to_wire_uv(np.array([0.0, 50.0, -50.0] * 800), 360)
     assert saturated > 0
     assert np.abs(wire).max() < 2000, (
         "bounded by the ADC rails (about +1.3 / -1.5 mV), never wrapped"
@@ -108,3 +110,36 @@ def test_a_wrong_configured_gain_scales_the_amplitude_not_the_beats(
     bad = rsr.replay_ecg(mv, ref, fs, codec, configured_gain=600.0)["after_the_chain"]
     assert bad["sensitivity"] == good["sensitivity"]
     assert bad["ppv"] == good["ppv"]
+
+
+def test_the_first_second_is_calibration_and_the_beats_are_scored_on_the_shifted_clock(
+    codec, recordings
+) -> None:
+    mv, ref, fs = recordings["100"]
+    wire, _ = rsr.ecg_to_wire_uv(mv, fs)
+    assert len(wire) == int(30 * rsr.ECG_FS) - rsr.CALIBRATION_SAMPLES
+    after = rsr.replay_ecg(mv, ref, fs, codec)["after_the_chain"]
+    # a reference left on the unshifted clock would be 1 s off and match nothing
+    assert after["sensitivity"] > 0.9
+
+
+def test_the_midrail_follows_a_slow_drift_like_the_driver() -> None:
+    t = np.arange(0, 40, 1 / 360)
+    drift_mv = 0.4 * t / 40  # +0.4 mV over 40 s, on top of a flat trace: the driver tracks it out
+    wire, _ = rsr.ecg_to_wire_uv(drift_mv, 360)
+    assert abs(float(wire[-1])) < 0.4 * 1000 * 0.5, "a static mid-rail would leave the whole 400 uV"
+
+
+def test_a_recording_too_short_to_score_is_refused_with_a_message() -> None:
+    with pytest.raises(ValueError, match="calibration"):
+        rsr.ecg_to_wire_uv(np.zeros(360 * 3), 360)
+
+
+def test_beats_lost_flags_a_collapse_not_a_beat() -> None:
+    ok = {
+        "untouched_recording": {"sensitivity": 1.0, "ppv": 1.0},
+        "after_the_chain": {"sensitivity": 0.988, "ppv": 1.0},
+    }
+    bad = {**ok, "after_the_chain": {"sensitivity": 0.4, "ppv": 0.5}}
+    assert not rsr.beats_lost(ok)
+    assert rsr.beats_lost(bad)

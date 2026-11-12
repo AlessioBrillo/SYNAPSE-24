@@ -38,14 +38,31 @@ ECG_STREAM = "SYNAPSE_ECG_T0"  # config/hardware.yaml ecg_config.lsl_stream
 
 
 def load_capture(path: Path, fs: float) -> tuple[npt.NDArray[np.float64], float]:
-    """(ECG values in µV, sampling rate) from a ``.npy`` or an ``.xdf``."""
+    """(ECG values in µV, sampling rate) from a ``.npy`` or an ``.xdf``.
+
+    Refuses what the fits below cannot handle: more than one channel, or an XDF with dropped samples
+    (they assume uniform sampling, and a hole would give a wrong frequency or amplitude).
+    """
     if path.suffix.lower() != ".xdf":
-        return np.load(path).astype(np.float64), fs
+        x = np.load(path).astype(np.float64)
+        if x.ndim == 2 and x.shape[1] == 1:
+            x = x[:, 0]
+        if x.ndim != 1:
+            raise ValueError(f"{path}: expected one channel of ECG values, got shape {x.shape}")
+        return x, fs
     from synapse24.export import load_xdf_streams  # noqa: PLC0415 - needs pyxdf, only for XDF
 
     for stream in load_xdf_streams(path):
-        if stream.name == ECG_STREAM:
-            return stream.data[:, 0].astype(np.float64), float(stream.nominal_srate or fs)
+        if stream.name != ECG_STREAM:
+            continue
+        rate = float(stream.nominal_srate or stream.sample_rate_hz or fs)
+        dt = np.diff(stream.timestamps)
+        if dt.size and dt.max() > 2.5 * np.median(dt):
+            raise ValueError(
+                f"{ECG_STREAM} has gaps (longest {dt.max() * 1000:.0f} ms, typical "
+                f"{np.median(dt) * 1000:.1f} ms): the capture is not usable for a gain or a noise figure"
+            )
+        return stream.data[:, 0].astype(np.float64), rate
     raise ValueError(f"no {ECG_STREAM} stream in {path}")
 
 
