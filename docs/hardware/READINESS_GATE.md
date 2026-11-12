@@ -140,9 +140,17 @@ loudly on unverified input. MIT-BIH (integral) passes every gate.
 
 This does not touch the G1 critical path (the raw streaming path), but it
 does contradict the README's "Phase 0 COMPLETE / WESAD ≥80%" claim on this
-machine, so it is recorded here and tracked as an issue: re-download the
-datasets (`scripts/download_datasets.py`) and make the baseline script fail
-closed on unverified data rather than scoring it 0.
+machine.
+
+**Update 2026-11-12.** The fail-closed half is done: `validate_baseline.py`
+calls `require_verified_datasets` and exits 2 on unverified input
+(`tests/test_validate_baseline_fail_closed.py`). The data half is not:
+`data/wesad/` is empty, because the UCI mirrors in `download_wesad` do not
+serve the zip automatically and `WESAD_CHECKSUMS` still holds placeholders.
+Manual fix: accept the licence at <https://archive.ics.uci.edu/dataset/465/wesad>,
+download the zip and extract it so that `data/wesad/WESAD/S2/S2.pkl` exists
+(that file is what `verify_all_datasets` checks), then record the zip's SHA-256
+in `WESAD_CHECKSUMS`.
 
 ### MVP live-path closure (what was added after G0)
 

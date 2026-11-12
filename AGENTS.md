@@ -13,6 +13,7 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   `GATE SEQUENCE: ALL GREEN` only if every step passed. It is the local equivalent of the
   gate, not a replacement for the server run.
 - **Server:** push the branch; the check is `ci/woodpecker/push/ci` (`gh pr checks <n> --watch`).
+- **Real-signal chain (MVP-1.8):** `tests/test_real_signal_chain.py` (ECG MIT-BIH through the C raw-frame encoder, fixture `tests/fixtures/mitbih_ecg_30s.npz`) runs in the suite; it needs the host C codec like the other C host tests, so a "policy blocked" skip there is not a pass. The PPG half needs WESAD and is open: `docs/increments/MVP1_8_REAL_SIGNAL.md`.
 - **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band, and the radio side of the virtual band (`scripts/virtual_band.py`, `check_phone_capture.py pull`: manual, see `docs/hardware/VIRTUAL_BAND_RUNBOOK.md`; their pure cores `virtual_band_core.py` and `check_phone_capture.py` are tested in the suite).
 - **Gate steps (2026-11-07):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
   `generate_contracts --check` (the generated contract files do not drift from `config/hardware.yaml`),
