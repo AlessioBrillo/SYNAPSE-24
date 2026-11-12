@@ -29,6 +29,7 @@ Thumbs.db
 # Data directories (large files)
 data/wesad/
 data/mitbih/
+data/bidmc/
 data/sleep_edf/
 data/processed/
 data/live_validation/
