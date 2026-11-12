@@ -6,9 +6,11 @@ reference beats, the PLETH is turned into the reflective 50 Hz IR counts the ban
 
 What this shows: the detector, written and tuned on synthetic pulses, finds the right heart rate on real
 pulses. What it does not show: a MAX30102 on a wrist (BIDMC is a transmissive oximeter on bed-ridden ICU
-patients). Record 02 is kept as a *characterisation*: the RMSSD there is wrong by a factor of five, which
-is why ``CONFIG_SYNAPSE_RR_ENABLE`` stays off. When the detector is fixed that test fails: flip it then.
-A skip here is not a pass.
+patients). Record 02 is kept as a *characterisation*: the pulse-to-pulse RMSSD of the PPG there is about
+5x the ECG's. It is not the firmware's filters: an offline zero-phase detector (peak or max-upslope, at 50
+or 125 Hz) gives ~40 ms as well, so the PRV of that pulse really differs from the ECG HRV (cause not
+established). That is why ``CONFIG_SYNAPSE_RR_ENABLE`` stays off until a wrist bench run against a
+reference. A skip here is not a pass.
 """
 
 from __future__ import annotations
@@ -67,8 +69,8 @@ def test_rmssd_agrees_with_the_ecg_where_the_pulse_is_clean(results, record) -> 
     assert abs(r["rmssd_band_ms_median"] - r["rmssd_ecg_ms_median"]) <= 5.0, r
 
 
-def test_known_limit_rmssd_is_wrong_on_record_02(results) -> None:
-    """Characterisation, not a requirement: the band over-reports RMSSD here by about 5x."""
+def test_known_limit_ppg_rmssd_differs_from_ecg_on_record_02(results) -> None:
+    """Characterisation, not a requirement: the PPG's RMSSD here is about 5x the ECG's."""
     r = results["02"]
     assert r["rmssd_band_ms_median"] > 3 * r["rmssd_ecg_ms_median"], r
 

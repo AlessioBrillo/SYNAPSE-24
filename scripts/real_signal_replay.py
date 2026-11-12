@@ -1,18 +1,26 @@
 """Recorded physiological signal through the band's own code (MVP-1.8).
 
-The firmware does no ECG DSP: the AD8232 trace leaves the band raw (500 Hz, 12-bit ADC counts as
-s16) in frames built by ``firmware/common/ble/synapse_raw_frame.c``. This script puts a real MIT-BIH
-ECG through exactly that path and asks the only question the bench would ask: *after the ADC and the
+The firmware does no ECG DSP: the AD8232 trace leaves the band at 500 Hz in frames built by
+``firmware/common/ble/synapse_raw_frame.c``. The value in the frame is *already electrode-referred
+microvolts*, computed by ``firmware/common/sensors/ecg_ad8232.cpp`` as
+``(adc_mV - midrail_mV) / SYNAPSE_ECG_GAIN`` and sent as ``round(mV * 1000)`` in an s16. This script puts a
+real MIT-BIH ECG through that path and asks the only question the bench would ask: *after the ADC and the
 radio framing, are the beats still there?*
 
-    MIT-BIH mV @360 Hz -> 500 Hz -> 12-bit ADC counts -> C encoder (firmware) -> frames
-        -> SDK decoder (phone side) -> R-peak detector -> Se/PPV against the cardiologist annotations
+    MIT-BIH mV @360 Hz -> 500 Hz -> front end (gain, mid-rail, 12-bit ADC, clipping) -> firmware's
+        gain and s16 uV -> C encoder (firmware) -> frames -> SDK decoder (phone side)
+        -> R-peak detector -> Se/PPV against the cardiologist annotations
 
 The same detector is also run on the untouched recording, so a loss caused by the chain shows up as a
 difference between the two rows, not as a property of the detector.
 
-What this does NOT prove: the AD8232 analog front end, its real gain/offset/noise, the lead-off
-behaviour, or the radio. ``COUNTS_PER_MV`` is a stand-in until ``ecg_config.gain_measured`` exists.
+Two gains, on purpose: ``true_gain`` is what the analog front end really does, ``configured_gain`` is what
+the firmware divides by. They are equal only if ``SYNAPSE_ECG_GAIN`` was measured on the bench; until then
+the amplitude on the wire is off by their ratio (and a nominal 1100x leaves only about +-1.3 mV before the
+ADC rails, which clips a large QRS).
+
+What this does NOT prove: the AD8232 itself, its real offset/noise, the lead-off behaviour, or the radio.
+The ADC range (``ADC_FULL_SCALE_MV``) and mid-rail (``MIDRAIL_MV``) are nominal values.
 
     uv run python scripts/real_signal_replay.py --record 100 --seconds 60
 """
@@ -53,26 +61,40 @@ from tests.firmware_host import build, try_load  # noqa: E402
 
 ECG_FS = 500
 ADC_MAX = 4095  # ESP32-S3 ADC1, 12 bit
-ADC_MIDSCALE = 2048
+# ponytail: nominal. ADC_ATTEN_DB_12 reads about 0..3.1 V; the real range and the curve-fitting calibration
+# are per chip. The AD8232 output rests on about Vcc/2. Measure both on the bench (BRINGUP_SOP 4a).
+ADC_FULL_SCALE_MV = 3100.0
+MIDRAIL_MV = 1650.0
+CALIBRATION_SAMPLES = 500  # the driver averages the first second to find the mid-rail
+# AD8232 breakout nominal, the same number as config/hardware.yaml ecg_config.gain and the Kconfig default.
+NOMINAL_GAIN = 1100.0
 FRAME_SAMPLES = 100  # 0.2 s of ECG per notification; the frame limit for s16 is 116
-# ponytail: nominal stand-in (~breakout gain 100 into a 3.1 V range). Replace with the bench value in
-# config/hardware.yaml ecg_config.gain_measured once the kit exists; the knob is the point, not 132.
-COUNTS_PER_MV = 132.0
 RAW_SRC = ROOT / "firmware" / "common" / "ble" / "synapse_raw_frame.c"
 
 
-def ecg_to_adc_counts(
+def ecg_to_wire_uv(
     mv: npt.NDArray[np.float64],
     fs_in: int,
     *,
-    counts_per_mv: float = COUNTS_PER_MV,
+    true_gain: float = NOMINAL_GAIN,
+    configured_gain: float = NOMINAL_GAIN,
 ) -> tuple[npt.NDArray[np.int16], float]:
-    """Resample to 500 Hz and quantize like a 12-bit ADC. Returns (counts, clipped fraction)."""
+    """What the band puts in the ECG frames for ``mv`` at the electrodes: s16 microvolts.
+
+    Mirrors ``ecg_ad8232.cpp``: front end -> 12-bit ADC (rails at 0 and full scale) -> mid-rail taken as
+    the mean of the first second -> divided by the *configured* gain -> x1000, rounded, clipped to s16.
+    Returns (microvolts, share of samples that hit the ADC rails or the s16 limit).
+    """
     ratio = Fraction(ECG_FS, fs_in)
-    resampled = resample_poly(mv, ratio.numerator, ratio.denominator)
-    raw = np.rint(resampled * counts_per_mv + ADC_MIDSCALE)
-    clipped = float(np.mean((raw < 0) | (raw > ADC_MAX)))
-    return np.clip(raw, 0, ADC_MAX).astype(np.int16), clipped
+    x = resample_poly(mv, ratio.numerator, ratio.denominator)
+    adc_mv = MIDRAIL_MV + true_gain * x
+    railed = (adc_mv < 0) | (adc_mv > ADC_FULL_SCALE_MV)
+    lsb = ADC_FULL_SCALE_MV / ADC_MAX
+    adc_mv = np.rint(np.clip(adc_mv, 0, ADC_FULL_SCALE_MV) / lsb) * lsb
+    midrail = float(np.mean(adc_mv[:CALIBRATION_SAMPLES]))
+    uv = np.rint((adc_mv - midrail) / configured_gain * 1000.0)
+    saturated = railed | (np.abs(uv) > 32767)
+    return np.clip(uv, -32768, 32767).astype(np.int16), float(np.mean(saturated))
 
 
 def load_codec(out_dir: Path) -> ctypes.CDLL | None:
@@ -98,14 +120,14 @@ def load_codec(out_dir: Path) -> ctypes.CDLL | None:
 
 def firmware_frames(
     lib: ctypes.CDLL,
-    counts: npt.NDArray[np.int16],
+    samples: npt.NDArray[np.int16],
     *,
     per_frame: int = FRAME_SAMPLES,
 ) -> list[bytes]:
-    """Frame ``counts`` with the firmware's C encoder, as the band would notify them."""
+    """Frame s16 ``samples`` with the firmware's C encoder, as the band would notify them."""
     frames: list[bytes] = []
-    for seq, start in enumerate(range(0, len(counts), per_frame)):
-        chunk = np.ascontiguousarray(counts[start : start + per_frame], dtype="<i2")
+    for seq, start in enumerate(range(0, len(samples), per_frame)):
+        chunk = np.ascontiguousarray(samples[start : start + per_frame], dtype="<i2")
         ts_us = start * 1_000_000 // ECG_FS
         wrapped = FLAG_TS_EPOCH_WRAPPED if ts_us >> 32 else 0
         out = ctypes.create_string_buffer(256)
@@ -153,11 +175,12 @@ def replay_ecg(
     fs_in: int,
     lib: ctypes.CDLL,
     *,
-    counts_per_mv: float = COUNTS_PER_MV,
+    true_gain: float = NOMINAL_GAIN,
+    configured_gain: float = NOMINAL_GAIN,
 ) -> dict[str, Any]:
     """Run one recording through the chain and score beats before and after it."""
-    counts, clipped = ecg_to_adc_counts(mv, fs_in, counts_per_mv=counts_per_mv)
-    frames = firmware_frames(lib, counts)
+    wire, clipped = ecg_to_wire_uv(mv, fs_in, true_gain=true_gain, configured_gain=configured_gain)
+    frames = firmware_frames(lib, wire)
     received = phone_decode(frames)
     ref_out = np.rint(reference_peaks * ECG_FS / fs_in).astype(np.int64)
     before = detect_r_peaks_neurokit(mv, fs_in)
@@ -165,9 +188,10 @@ def replay_ecg(
     return {
         "reference_beats": int(len(reference_peaks)),
         "frames": len(frames),
-        "bit_exact": bool(np.array_equal(received, counts)),
-        "clipped_fraction": round(clipped, 6),
-        "counts_per_mv": counts_per_mv,
+        "bit_exact": bool(np.array_equal(received, wire)),
+        "saturated_fraction": round(clipped, 6),
+        "true_gain": true_gain,
+        "configured_gain": configured_gain,
         "untouched_recording": _score(before, reference_peaks, fs_in),
         "after_the_chain": _score(after, ref_out, ECG_FS),
     }
@@ -178,7 +202,8 @@ def main() -> int:
     ap.add_argument("--record", default="100")
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--data-dir", type=Path, default=ROOT / "data" / "mitbih")
-    ap.add_argument("--counts-per-mv", type=float, default=COUNTS_PER_MV)
+    ap.add_argument("--true-gain", type=float, default=NOMINAL_GAIN)
+    ap.add_argument("--configured-gain", type=float, default=NOMINAL_GAIN)
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
 
@@ -193,7 +218,14 @@ def main() -> int:
                 "host policy blocked the freshly built codec; rerun in the gate's Linux container"
             )
             return 3
-        result = replay_ecg(mv[:n], ref, meta["fs"], lib, counts_per_mv=args.counts_per_mv)
+        result = replay_ecg(
+            mv[:n],
+            ref,
+            meta["fs"],
+            lib,
+            true_gain=args.true_gain,
+            configured_gain=args.configured_gain,
+        )
     result["record"] = args.record
     text = json.dumps(result, indent=2)
     print(text)

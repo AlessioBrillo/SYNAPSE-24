@@ -1,19 +1,23 @@
-"""The two ECG bench numbers of BRINGUP_SOP §4a, computed from raw ADC counts.
+"""The two ECG bench numbers of BRINGUP_SOP §4a, computed from the ECG stream the host receives.
 
-1. noise floor: electrodes shorted, 60 s, standard deviation of the stream in counts;
-2. gain: a known sine into the electrodes (e.g. 1 mVpp at 10 Hz) -> counts per mV *at the input*.
+The band does not send ADC counts: it sends electrode-referred microvolts, computed as
+``(adc_mV - midrail) / SYNAPSE_ECG_GAIN`` (``firmware/common/sensors/ecg_ad8232.cpp``). So a wrong
+``SYNAPSE_ECG_GAIN`` scales the whole ECG, and the stream itself is what measures it:
 
-The second number is exactly the ``--counts-per-mv`` knob of ``real_signal_replay.py``. Converting it to
-the SOP's ``gain_measured`` (V out / V in) needs the ADC's mV per count, which depends on the attenuation
-the firmware sets and is not guessed here: pass ``--adc-mv-per-count`` when it is known.
+1. noise floor: electrodes shorted (RA/LA/RL together), 60 s, standard deviation in µV;
+2. gain: a known sine into the electrodes (e.g. 1 mVpp at 10 Hz). The stream shows ``r`` times the applied
+   amplitude, with ``r = true_gain / configured_gain``, hence ``gain_measured = r * configured_gain`` and
+   the Kconfig value ``CONFIG_SYNAPSE_ECG_GAIN = round(gain_measured * 100)``.
 
 No pass/fail thresholds: neither READINESS_GATE.md nor the SOP defines any, and a made-up one would read
 as a requirement. The numbers are what G1 asks for.
 
     uv run python scripts/g1_measure.py noise capture.npy
-    uv run python scripts/g1_measure.py gain  capture.npy --freq 10 --applied-mvpp 1 [--adc-mv-per-count X]
+    uv run python scripts/g1_measure.py gain  capture.npy --freq 10 --applied-mvpp 1 [--configured-gain 1100]
 
-``capture.npy`` is a 1-D array of ECG ADC counts at ``--fs`` (default 500 Hz).
+``capture`` is either a ``.npy`` (1-D array of the ECG stream values, µV, at ``--fs``, default 500 Hz) or
+the ``.xdf`` the live validator / LabRecorder wrote: the ``SYNAPSE_ECG_T0`` stream, first channel, at its
+nominal rate.
 """
 
 from __future__ import annotations
@@ -28,30 +32,47 @@ import numpy as np
 import numpy.typing as npt
 
 MIN_SNR_DB = 10.0  # below this the "sine" is not in the data and a gain would be a fiction
+S16_LIMIT = 32767  # the wire value saturates here: a clipped sine measures a gain that is too low
+NOMINAL_GAIN = 1100.0  # config/hardware.yaml ecg_config.gain, the Kconfig default
+ECG_STREAM = "SYNAPSE_ECG_T0"  # config/hardware.yaml ecg_config.lsl_stream
 
 
-def noise_floor_counts(counts: npt.ArrayLike) -> dict[str, float]:
-    """Std of a shorted-input recording, in counts (SOP §4a.1)."""
-    x = np.asarray(counts, dtype=np.float64)
+def load_capture(path: Path, fs: float) -> tuple[npt.NDArray[np.float64], float]:
+    """(ECG values in µV, sampling rate) from a ``.npy`` or an ``.xdf``."""
+    if path.suffix.lower() != ".xdf":
+        return np.load(path).astype(np.float64), fs
+    from synapse24.export import load_xdf_streams  # noqa: PLC0415 - needs pyxdf, only for XDF
+
+    for stream in load_xdf_streams(path):
+        if stream.name == ECG_STREAM:
+            return stream.data[:, 0].astype(np.float64), float(stream.nominal_srate or fs)
+    raise ValueError(f"no {ECG_STREAM} stream in {path}")
+
+
+def noise_floor_uv(wire_uv: npt.ArrayLike) -> dict[str, float]:
+    """Std of a shorted-input recording, in µV at the configured gain (SOP §4a.1)."""
+    x = np.asarray(wire_uv, dtype=np.float64)
     if x.size < 2:
         raise ValueError("need at least two samples")
-    return {"std_counts": float(np.std(x, ddof=1)), "mean_counts": float(np.mean(x))}
+    return {"std_uv": float(np.std(x, ddof=1)), "mean_uv": float(np.mean(x))}
 
 
 def gain_from_sine(
-    counts: npt.ArrayLike,
+    wire_uv: npt.ArrayLike,
     fs: float,
     freq_hz: float,
     applied_mvpp: float,
     *,
-    adc_mv_per_count: float | None = None,
+    configured_gain: float = NOMINAL_GAIN,
 ) -> dict[str, Any]:
-    """Counts per mV at the input, from a known sine (SOP §4a.2).
+    """Real front-end gain from a known sine (SOP §4a.2).
 
     Least-squares fit of ``a*sin + b*cos + c`` at the known frequency: it ignores the DC offset and
     the noise, and does not need a whole number of periods.
     """
-    x = np.asarray(counts, dtype=np.float64)
+    x = np.asarray(wire_uv, dtype=np.float64)
+    if np.any(np.abs(x) >= S16_LIMIT):
+        raise ValueError("the stream hit the s16 limit: reduce the applied amplitude (or the gain)")
     t = np.arange(x.size) / fs
     basis = np.column_stack(
         [np.sin(2 * np.pi * freq_hz * t), np.cos(2 * np.pi * freq_hz * t), np.ones_like(t)]
@@ -66,16 +87,16 @@ def gain_from_sine(
             f"no {freq_hz} Hz sine in the capture (SNR {snr_db:.1f} dB < {MIN_SNR_DB} dB): "
             "wrong frequency, input not connected, or the ADC is saturated"
         )
-    counts_per_mv = 2 * amplitude / applied_mvpp
-    out: dict[str, Any] = {
-        "counts_per_mv": counts_per_mv,
-        "amplitude_counts": amplitude,
+    ratio = 2 * amplitude / (applied_mvpp * 1000.0)  # stream pp (µV) / applied pp (µV)
+    gain_measured = ratio * configured_gain
+    return {
+        "gain_measured": gain_measured,
+        "sdkconfig_ecg_gain": round(gain_measured * 100),
+        "stream_over_applied": ratio,
+        "amplitude_uv": amplitude,
         "snr_db": snr_db,
-        "offset_counts": float(coef[2]),
+        "offset_uv": float(coef[2]),
     }
-    if adc_mv_per_count is not None:
-        out["gain_measured"] = counts_per_mv * adc_mv_per_count  # mV out per mV in
-    return out
 
 
 def main() -> int:
@@ -85,18 +106,18 @@ def main() -> int:
     ap.add_argument("--fs", type=float, default=500.0)
     ap.add_argument("--freq", type=float, default=10.0)
     ap.add_argument("--applied-mvpp", type=float, default=1.0)
-    ap.add_argument("--adc-mv-per-count", type=float)
+    ap.add_argument("--configured-gain", type=float, default=NOMINAL_GAIN)
     args = ap.parse_args()
-    counts = np.load(args.capture)
+    wire, fs = load_capture(args.capture, args.fs)
     if args.what == "noise":
-        result = noise_floor_counts(counts)
+        result = noise_floor_uv(wire)
     else:
         result = gain_from_sine(
-            counts,
-            args.fs,
+            wire,
+            fs,
             args.freq,
             args.applied_mvpp,
-            adc_mv_per_count=args.adc_mv_per_count,
+            configured_gain=args.configured_gain,
         )
     print(json.dumps(result, indent=2))
     return 0
