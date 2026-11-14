@@ -377,3 +377,18 @@ def test_a_job_id_follows_the_content_not_the_path(svc: DataPlaneService, tmp_pa
     c = svc.run_job("stress_daily", str(first))
     assert c["job_id"] != a["job_id"], "a rewritten file kept the id of the old content"
     assert c["file_sha256"] != a["file_sha256"]
+
+
+def test_unreadable_files_do_not_share_one_job_id(
+    svc: DataPlaneService, tmp_path: Path, monkeypatch
+) -> None:
+    """With no digest the id would be the same for every file of a job type."""
+    a = tmp_path / "a.fit"
+    b = tmp_path / "b.fit"
+    write_dev_fit(a, [{"timestamp": i, "dev": {0: 0}} for i in range(4)])
+    write_dev_fit(b, [{"timestamp": i, "dev": {0: 1}} for i in range(4)])
+    monkeypatch.setattr(svc, "file_sha256", lambda _path: "")  # as when the read fails
+
+    ids = {svc.run_job("stress_daily", str(p))["job_id"] for p in (a, b)}
+
+    assert len(ids) == 2

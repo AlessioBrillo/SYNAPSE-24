@@ -172,7 +172,8 @@ def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: 
     if len(data) < FIT_HEADER_SIZE + FIT_CRC_SIZE or data[8:12] != FIT_HEADER_MAGIC:
         return None, None
 
-    pos = FIT_HEADER_SIZE
+    # The header says how long it is (12 or 14 bytes): do not assume.
+    pos = data[0] if data[0] in (12, 14) else FIT_HEADER_SIZE
     end = len(data) - FIT_CRC_SIZE
     # local_type -> (global_num, struct endianness, [(field_num, size, base_type)], developer bytes)
     definitions: dict[int, tuple[int, str, list[tuple[int, int, int]], int]] = {}
@@ -302,13 +303,20 @@ def _wall_clock_window(streams_raw: list[dict[str, Any]]) -> tuple[str | None, s
     A local LSL clock is not a date (it counts from the machine's start), and a made-up date in a
     health record is worse than none.
     """
-    firsts = [s["first_timestamp"] for s in streams_raw if s.get("first_timestamp") is not None]
-    lasts = [s["last_timestamp"] for s in streams_raw if s.get("last_timestamp") is not None]
-    if not firsts or min(firsts) < _UNIX_EPOCH_PLAUSIBLE_S:
+    # Only the streams on the wall clock date the session: a marker or aux stream on a small
+    # local clock must not take the date away from an ECG that has one.
+    dated = [
+        s
+        for s in streams_raw
+        if s.get("first_timestamp") is not None
+        and s.get("last_timestamp") is not None
+        and s["first_timestamp"] >= _UNIX_EPOCH_PLAUSIBLE_S
+    ]
+    if not dated:
         return None, None
     return (
-        datetime.fromtimestamp(min(firsts), tz=UTC).isoformat(),
-        datetime.fromtimestamp(max(lasts), tz=UTC).isoformat(),
+        datetime.fromtimestamp(min(s["first_timestamp"] for s in dated), tz=UTC).isoformat(),
+        datetime.fromtimestamp(max(s["last_timestamp"] for s in dated), tz=UTC).isoformat(),
     )
 
 
@@ -399,6 +407,14 @@ def index_fit(path: Path) -> SessionRecord:
     )
 
 
+def _relative(path: Path, root: Path) -> str:
+    """``path`` relative to ``root`` with forward slashes (the absolute path if it is outside)."""
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def index_directory(root: Path | str) -> SessionCatalog:
     """Scan `root` recursively for *.xdf and *.fit files and build the catalog.
 
@@ -416,14 +432,21 @@ def index_directory(root: Path | str) -> SessionCatalog:
                 else:
                     rec = index_fit(path)
             except Exception as exc:  # noqa: BLE001 - one unreadable file must not abort the catalog
-                # ...but it must not vanish either: it is listed with the reason.
-                skipped[str(path)] = f"{type(exc).__name__}: {exc}"
+                # ...but it must not vanish either: it is listed with the reason. Keys are relative
+                # to the root and the message is the exception type plus a short, single-line text:
+                # this goes into catalog.json, and a full host path or raw file content does not.
+                rel = _relative(path, root_path)
+                text = str(exc).replace(str(path.resolve()), rel).replace(str(root_path), ".")
+                reason = " ".join(text.split())[:160]
+                skipped[rel] = f"{type(exc).__name__}: {reason}"
                 continue
             existing = sessions.get(rec.session_id)
             if existing is not None and existing.path != rec.path:
                 # The id is the content digest: two files with the same bytes are one session, and
                 # the second used to REPLACE the first without a word.
-                skipped[str(path)] = f"same content as {existing.path}"
+                skipped[_relative(path, root_path)] = (
+                    f"same content as {_relative(Path(existing.path), root_path)}"
+                )
                 continue
             sessions[rec.session_id] = rec
     return SessionCatalog(

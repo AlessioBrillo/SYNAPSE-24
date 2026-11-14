@@ -123,9 +123,9 @@ def test_an_unreadable_file_is_listed_not_swallowed(tmp_path) -> None:
     catalog = index_directory(tmp_path)
 
     assert len(catalog.sessions) == 1
-    broken = [path for path in catalog.skipped if path.endswith("broken.xdf")]
-    assert broken, "the unreadable file vanished from the catalog without a trace"
-    assert catalog.skipped[broken[0]]  # with the reason
+    assert list(catalog.skipped) == ["broken.xdf"], "relative to the root, and not lost"
+    assert catalog.skipped["broken.xdf"]  # with the reason
+    assert str(tmp_path) not in catalog.skipped["broken.xdf"], "no host path in the catalog"
 
 
 def test_two_files_with_the_same_bytes_do_not_silently_replace_each_other(tmp_path) -> None:
@@ -166,3 +166,62 @@ def test_the_session_id_follows_the_content_not_the_path(tmp_path) -> None:
 def test_stream_units_are_part_of_the_record(tmp_path, name: str) -> None:
     _xdf(tmp_path / f"{name}.xdf", 1_735_689_600.0)
     assert index_xdf(tmp_path / f"{name}.xdf").streams[0].channel_units == ["uV"]
+
+
+def test_one_local_clock_stream_does_not_take_the_date_away_from_a_wall_clock_one(tmp_path) -> None:
+    n = 100
+
+    def stream(name, t0):
+        return {
+            "name": name,
+            "type": "ECG" if name == "ECG" else "Markers",
+            "channel_count": 1,
+            "sampling_rate": 100.0,
+            "channel_format": "float32",
+            "channel_names": ["c"],
+            "channel_units": ["uV"],
+            "source_id": name,
+            "data": np.zeros((n, 1)),
+            "timestamps": t0 + np.arange(n) / 100.0,
+        }
+
+    write_xdf(tmp_path / "mixed.xdf", [stream("ECG", 1_735_689_600.0), stream("MARK", 42.0)])
+    record = index_xdf(tmp_path / "mixed.xdf")
+    assert record.started_at is not None
+    assert record.started_at.startswith("2025-01-01T00:00:00")
+
+
+def test_a_non_monotonic_stream_never_ends_before_it_starts(tmp_path) -> None:
+    n = 100
+    t = 1_735_689_600.0 + np.arange(n) / 100.0
+    t[10], t[11] = t[11], t[10]  # two samples out of order
+    t[-1] = t[0] - 1.0  # and the last one earlier than the first
+    write_xdf(
+        tmp_path / "jitter.xdf",
+        [
+            {
+                "name": "ECG",
+                "type": "ECG",
+                "channel_count": 1,
+                "sampling_rate": 100.0,
+                "channel_format": "float32",
+                "channel_names": ["c"],
+                "channel_units": ["uV"],
+                "source_id": "j",
+                "data": np.zeros((n, 1)),
+                "timestamps": t,
+            }
+        ],
+    )
+    record = index_xdf(tmp_path / "jitter.xdf")
+    assert record.started_at is not None
+    assert record.ended_at is not None
+    assert record.ended_at >= record.started_at
+
+
+def test_a_12_byte_fit_header_is_honoured(tmp_path) -> None:
+    body = _file_id(4242, 3_000_000)
+    header = bytes([12, 0x10]) + struct.pack("<H", 100) + struct.pack("<I", len(body)) + b".FIT"
+    path = tmp_path / "old_header.fit"
+    path.write_bytes(header + body + b"\x00\x00")
+    assert _parse_fit_file_id(path)[0] == 4242
