@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# ESP-IDF 5.2+ is the floor documented in HARDWARE_BRINGUP.md and
+# ESP-IDF 5.2+ is the floor documented in docs/hardware/ESP-IDF_SETUP.md and
 # firmware/esp32_band/README.md. The S3 PSRAM/TFLM toolchain needs 5.x.
 IDF_MIN_MAJOR = 5
 IDF_MIN_MINOR = 2

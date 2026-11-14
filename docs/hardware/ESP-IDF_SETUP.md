@@ -163,5 +163,5 @@ FIT storage. If your board only has 4 MB, set
 ## References
 
 - `firmware/esp32_band/README.md` — module layout and BLE GATT contract
-- `HARDWARE_BRINGUP.md` — wiring, electrodes, live validation
+- `BRINGUP_SOP.md` — wiring, electrodes, live validation (the box-to-XDF procedure)
 - `docs/hardware/READINESS_GATE.md` — the plan this step belongs to

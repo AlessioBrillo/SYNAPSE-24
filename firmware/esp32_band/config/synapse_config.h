@@ -35,10 +35,10 @@ typedef struct {
     // ========================================================================
     // ECG AD8232
     // ========================================================================
-    int ecg_adc_channel;          // ADC1 channel (ADC1_CHANNEL_0 = 0 -> GPIO36)
+    int ecg_adc_channel;          // ADC1 channel (ADC1_CHANNEL_0 = 0 -> GPIO1 on the S3)
     int ecg_gpio_drdy;            // GPIO for DRDY/lead-off (-1 = disabled)
     float ecg_vref_mv;            // ADC reference voltage in mV
-    float ecg_gain;               // AD8232 gain (e.g., 6.0)
+    float ecg_gain;               // total front-end gain (nominal 1100, Kconfig value / 100)
 
     // ========================================================================
     // PPG MAX30102
@@ -83,7 +83,7 @@ typedef struct {
     // ========================================================================
     // Battery ADC
     // ========================================================================
-    int bat_adc_channel;          // ADC1 channel (ADC1_CHANNEL_3 = 3 -> GPIO3)
+    int bat_adc_channel;          // ADC1 channel (ADC1_CHANNEL_3 = 3 -> GPIO4 on the S3)
     float bat_voltage_divider;    // Voltage divider ratio (e.g., 2.0 for 1:1)
 
     // ========================================================================

@@ -41,7 +41,7 @@ reason.
 | 1 | ESP32-S3 DevKitC-1 | 1 | **N8R8: 8 MB Flash + 8 MB PSRAM** | 12–15 | PSRAM is mandatory for the TFLM triage arena (~60 KB model + activations). ESP32-C3 has none and will OOM. ESP32-S3 has no GPIO 22–25 and GPIO 26–37 are flash/PSRAM on the N8R8, which is why the I²C bus is on 8/9. N8R8 (WROOM-1) is the mainstream module — do **not** buy N16R8V: that is WROOM-2 with 1.8 V octal flash/PSRAM, a different part for the same price. `partitions.csv` uses a 6 MB layout, which fits the 8 MB chip as-is. |
 | 2 | AD8232 ECG breakout | 1 | Generic clone, snap-electrode header | 3–7 | The de-facto DIY single-lead front-end. Fine for HR/HRV; not diagnostic. |
 | 3 | MAX30102 PPG breakout | 1 | Red + IR photodiode, I²C | 2–6 | Cheapest credible PPG. Shield from ambient light. |
-| 4 | ICM-20948 breakout | **2** | 9-axis, I²C | 10–15 ea | ⚠️ **EOL**: TDK PCN-000570 (Mar 2026) — last-time-buy Apr 2026, last-time-ship **30 Oct 2026**. Distributor and clone stock remains fine for a one-off bringup rig, so buy 2 (one spare). A **firmware migration to ICM-42688-P (+ AK09918 magnetometer) or ICM-45608+ICT-15318 is a Phase-2 gated task** — no pin-compatible replacement and no driver exists in-tree yet. |
+| 4 | ICM-20948 breakout | **2** | 9-axis, I²C | 10–15 ea | ⚠️ **EOL**: TDK PCN-000570 (Mar 2026) — last-time-buy Apr 2026, last-time-ship **30 Oct 2026, already past**: only distributor and clone stock remains, which is fine for a one-off bringup rig, so buy 2 (one spare). A **firmware migration to ICM-42688-P (+ AK09918 magnetometer) or ICM-45608+ICT-15318 is a Phase-2 gated task** — no pin-compatible replacement and no driver exists in-tree yet. |
 | 5 | Ag/AgCl snap electrodes | 50-pack | Gel, single-use | 8–15 | Skin prep is the single biggest determinant of ECG SNR. |
 | 6 | Breadboard 830-pt + Dupont jumpers (M/M, M/F, F/F) | **2** | — | 15–25 ea | One for the Tier-0 rig, one for the two-pod sync bench (see the addendum below). |
 | 7 | Micro-USB **data** cable | **3** | Must carry data, not charge-only | 3–5 | Charge-only cables are the #1 cause of "flash failed"; the third is for the second pod. |
@@ -76,7 +76,7 @@ weeks lead time).
 
 TMP117, MAX-M10S GPS, soldering gear, oscilloscope, a Raspberry Pi. The
 instrumentation you already own (bench PSU, multimeter, scope) covers every
-measurement in the SOP below. (A *second* ESP32 **is** included — see row 10 —
+measurement in the SOP below. (A multimeter with an mA range and a USB power meter are the only instruments the bring-up needs that this list does not buy; see `FIRST_HARDWARE_DAY.md`.) (A *second* ESP32 **is** included — see row 10 —
 because the sync criterion that gates the Cerelog order needs two pods.)
 
 ---

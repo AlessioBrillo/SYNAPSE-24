@@ -73,7 +73,7 @@ Prices are realistic 2025–2026 EU street prices (VAT included where applicable
 
 **IMU (9-axis):**
 - **MPU-9250 / GY-9250** — generic **€6–8**. Widely supported on ESP32/Arduino.
-- **ICM-20948** (the MPU-9250's actively-supported successor) — generic €10–15, branded SparkFun/Adafruit ~€17–25 (BerryBase). Prefer ICM-20948 for new designs since the MPU-9250 is discontinued by the manufacturer.
+- **ICM-20948** (the MPU-9250's successor) — generic €10–15, branded SparkFun/Adafruit ~€17–25 (BerryBase). ⚠️ **It is now end-of-life too** (TDK PCN-000570: last-time-ship 30 Oct 2026, already past): only distributor and clone stock is left, fine for a one-off bring-up rig. The firmware driver is the ICM-20948's; a migration to an ICM-42688-P is a Phase-2 task (`docs/hardware/PROCUREMENT.md`).
 
 **EEG (the expensive decision):**
 - **Cheapest "real" route — PiEEG 8-channel shield: ~$350** (≈€325) via Elecrow, + a Raspberry Pi (Pico won't do; needs Pi 4/5). 8-channel, ADS1299, 24-bit, 250 SPS–16 kSPS, BrainFlow-compatible. PiEEG-16 is ~$390.
@@ -161,9 +161,22 @@ Add a **DIY few-channel EEG experiment** with gold cup electrodes into an ESP32/
 ### 5. Sequencing and milestones (solo, realistic)
 
 - **Phase 0 — Foundations (Weeks 1–4, ~€0):** literature/reference-design review, communities, software stack, first dataset pipelines running. *Milestone: reproduce a published ECG-HRV and an EEG sleep-staging result on public data.* ⏳ **OPEN** (see the Phase 0 Status above: the artifact's `claim_level` decides, not this line)
-- **Phase 1 — Software mastery + first cheap hardware (Months 2–5, ~€90–120):** WESAD fusion model; edge-AI deployment loop; first live ECG (AD8232), PPG (MAX30102), IMU (MPU-9250/ICM-20948) into ESP32 → PC via LSL. *Milestone: live ECG+PPG+IMU streaming, synchronized in LSL, with real-time HR/HRV.* 🔄 **READY TO START**
+- **Phase 1 — Software mastery + first cheap hardware (Months 2–5, ~€90–140):** WESAD fusion model; edge-AI deployment loop; first live ECG (AD8232), PPG (MAX30102), IMU (MPU-9250/ICM-20948) into ESP32 → PC via LSL. *Milestone: live ECG+PPG+IMU streaming, synchronized in LSL, with real-time HR/HRV.* 🔄 **SOFTWARE READY FOR THE FIRST BENCH DAY — nothing verified on hardware** (increment status below)
 - **Phase 2 — Real EEG + synchronized multimodal (Months 5–12, +€300–500):** add PiEEG/Cerelog/Ganglion EEG; consider EmotiBit as reference and Muse S for Tier-0 continuous sleep EEG; get all modalities co-recording in XDF. *Milestone: a night of synchronized multimodal sleep data (EEG + PPG + IMU + temp) you can analyze end-to-end.* ⏳ Planned
 - **Phase 3 — Edge-AI fusion + fNIRS (Months 12–24+, +€300–700):** port fusion/personalization models to the ESP32 pods + Pi hub; attempt a DIY-fNIRS or OpenNIRScap channel for Tier-1 sessions; iterate on dry-electrode signal quality and 24/7 wearability. *Milestone: an on-device edge-AI pattern-recognition demo running on your own multimodal stream.* ⏳ Planned
+
+### Increment status (Phase 1 software, MVP-1.x)
+
+Every row below is "closed" in the sense of *merged and tested on the host*; **none has run on a board, a sensor, a phone or a radio.**
+
+| Increment | What | Document |
+|---|---|---|
+| MVP-1.2 / 1.3 | Device path; first light + contract v2 | `docs/increments/MVP1_2_DEVICE_PATH.md`, `MVP1_3_FIRST_LIGHT.md` |
+| MVP-1.4 / 1.5 / 1.6 | Averyn data path; signals in Averyn; phone side (Android; iOS written, never compiled) | `MVP1_4_…`, `MVP1_5_…`, `MVP1_6_PHONE_SIDE.md` |
+| MVP-1.7 | Virtual band on a PC — **partial**: everything but the radio (blocked by the dev PC's BLE adapter; needs a USB dongle) | `docs/increments/MVP1_7_VIRTUAL_BAND.md` |
+| MVP-1.8 | Recorded ECG/PPG through the firmware's C code on the host; the PPG RMSSD result keeps RR off | `docs/increments/MVP1_8_REAL_SIGNAL.md` |
+| MVP-1.9 | Pre-hardware hardening: no silent sample loss, one contract (2.3), true documentation | `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md` |
+| **Next** | The first bench day (`docs/hardware/FIRST_HARDWARE_DAY.md`); a BLE dongle (MVP-1.7 radio); a Mac (iOS) | |
 
 **Honest reality check:** 24/7 dry-electrode EEG at good signal quality is an unsolved problem even for funded labs; fNIRS DIY is genuinely hard analog/optical work; and long-term wearability/power are their own multi-month efforts. A solo, part-time researcher should treat the ECG+PPG+IMU+consumer-EEG stack as the achievable near-term win and treat dense dry-EEG and DIY-fNIRS as ambitious research spikes, not deliverables on a fixed schedule.
 

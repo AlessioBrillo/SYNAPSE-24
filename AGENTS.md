@@ -17,7 +17,8 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
 - **TensorFlow is the `train` extra** (`uv sync --extra train`): a plain `uv sync --dev --frozen`, the gate and the Docker images do not install it (it was a core dependency, ~10k files and 2+ GB, used only by the triage training and quantisation). Every TensorFlow import is guarded, so the tests that need it skip without it; training and `quantize_and_deploy.py` need the extra.
 - **GitHub Actions** only holds a notice pointing here (`.github/workflows/ci.yml`); there is no second pipeline to keep aligned.
 - **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band, and the radio side of the virtual band (`scripts/virtual_band.py`, `check_phone_capture.py pull`: manual, see `docs/hardware/VIRTUAL_BAND_RUNBOOK.md`; their pure cores `virtual_band_core.py` and `check_phone_capture.py` are tested in the suite).
-- **Gate steps (2026-11-07):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
+- **Increment status:** MVP-1.9 closed on 2026-11-14 (`docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`): the gate below is the one it was verified with (the only addition is the two files `test_consumer_v2_parity.py` and `test_firmware_s3_time_and_loss.py` in the host C step).
+- **Gate steps (2026-11-14):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
   `generate_contracts --check` (the generated contract files do not drift from `config/hardware.yaml`),
   `check_interfaces` (FIT developer fields, GATT UUIDs, worker payloads), `check_baseline_claim`,
   phase1 dry-run, the format conformance

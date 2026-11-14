@@ -1,3 +1,5 @@
+> ⚠️ **ARCHIVED — a snapshot of an old branch** (483 tests, "four parallel ESP32 projects", "G0 is the one remaining gate"). It is no longer true: see `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md` and `Roadmap.md` for the current state.
+
 # Hardware Readiness Gate — Increment Summary
 
 **Branch:** `feat/hardware-readiness-gate` · **Commits:** 9 · **Tests:** 483 passing, 0 failing
