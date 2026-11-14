@@ -203,7 +203,7 @@ class TestPerTierSyncBudget:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            config = SyncConfig(sync_interval_s=30.0, max_residual_drift_ms=5.0)
+            SyncConfig(sync_interval_s=30.0, max_residual_drift_ms=5.0)
             assert len(w) == 1
             assert issubclass(w[0].category, DeprecationWarning)
             assert "deprecated" in str(w[0].message).lower()

@@ -39,7 +39,6 @@ dependencies = [
     "pyyaml>=6.0.0,<7.0",
     "pydantic>=2.7.0,<3.0",
     "pydantic-settings>=2.3.0,<3.0",
-    "tensorflow-cpu>=2.16.2",
 ]
 
 [project.optional-dependencies]
@@ -57,7 +56,8 @@ dev = [
     "mypy>=1.10.0,<2.0",
     "types-requests>=2.31.0,<3.0",
     "types-pyyaml>=6.0.0,<7.0",
-    "types-tqdm>=4.24.0,<5.0",
+    "types-tqdm>=4.70.0.20260827",
+    "types-pytz>=2026.3.1.20260727",
     # Provides a self-contained C/C++ compiler (zig cc) so the firmware host
     # gates in tests/firmware_host run on any OS, with no system toolchain to
     # install. Without it those gates would skip, and a skipped compile gate is
@@ -65,12 +65,22 @@ dev = [
     # Pinned below 0.17: 0.17 dropped its Windows wheels, which breaks
     # `uv sync` on win32. 0.16 ships wheels for Linux, macOS and Windows.
     "ziglang>=0.16.0,<0.17",
-"pre-commit>=3.7.0,<4.0",
+    "pre-commit>=3.7.0,<4.0",
     "bleak>=0.22.0,<1.0",
     "esptool>=4.8.0,<5.0",
+    "bandit>=1.9.4",
+    "pytest-json-report>=1.5.0",
     # Third-party FIT parser: proves that the files the project writes are
     # standard FIT, not "FIT-looking" bytes.
     "fitdecode>=0.11.0,<1.0",
+]
+# Training and quantisation of the on-device triage model (src/synapse24/edge_ai/training.py,
+# quantization.py, scripts/train_triage.py, scripts/quantize_and_deploy.py). ~10k files and the
+# reason a plain install used to need 2+ GB: nothing on the band-to-app path imports it, and every
+# import is guarded, so the code and the tests run (and skip what needs it) without it.
+#   uv sync --extra train
+train = [
+    "tensorflow-cpu>=2.16.2,<3.0",
 ]
 hardware = [
     "bleak>=0.22.0,<1.0",
@@ -135,11 +145,9 @@ select = [
 ignore = [
     "D101", "D102", "D103", "D105", "D107", "D212", "D415",  # Missing docstrings (test files, private)
     "ARG001", "ARG002",  # Unused function arguments (callbacks, interface compliance)
-    "F841",  # Unused variable (intentional in some patterns)
     "N806",  # Variable in function should be lowercase (legacy constants)
-    "PLW1510",  # Unused method (interface stubs)
-    "PYI034",  # Missing module stub (third-party libs)
-    "T201",  # Direct instantiation of dict/list/set (acceptable)
+    "PYI034",  # __enter__/__new__ should return Self (the annotation is the class name)
+    "T201",  # print() in scripts and CLIs
     "PLC0415",  # Import not at top-level (common in test files for isolation)
     "PLR2004",  # Magic value used in comparison (test assertions with literal values)
     "NPY002",   # Legacy np.random.randn (test fixtures, synthetic data)

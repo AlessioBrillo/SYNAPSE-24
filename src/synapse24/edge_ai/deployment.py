@@ -132,11 +132,8 @@ def deploy_model(
         cmake_path = _generate_cmake(edge_model, quantization_result, deploy_config, output_dir)
 
     # Generate example inference code
-    example_path = None
     if deploy_config.generate_example:
-        example_path = _generate_inference_example(
-            edge_model, quantization_result, deploy_config, output_dir
-        )
+        _generate_inference_example(edge_model, quantization_result, deploy_config, output_dir)
 
     # Validate against constraints
     validation_passed, validation_notes = _validate_deployment(quantization_result, deploy_config)

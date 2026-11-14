@@ -200,7 +200,7 @@ class TestFeatureParity:
     """Test that Python and firmware feature computation match conceptually."""
 
     def test_feature_indices_match_firmware_header(self):
-        """Verify feature index constants match firmware/triage_features.h."""
+        """Verify the feature count the model and the firmware (common/triage) agree on."""
         # Chest ACC: 0-11 (4 per axis x 3)
         assert TRIAGE_NUM_FEATURES == 26
 

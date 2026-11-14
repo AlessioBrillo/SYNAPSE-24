@@ -138,6 +138,7 @@ class FirmwareBuilder:
                 text=True,
                 timeout=60,
                 env=self._variant_env(),
+                check=False,
             )
             if result.returncode != 0:
                 logger.error(f"Failed to set target: {result.stderr}")
@@ -175,6 +176,7 @@ class FirmwareBuilder:
                 text=True,
                 timeout=600,
                 env=env,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             logger.exception("Build timeout (10 min)")
@@ -273,6 +275,7 @@ class FirmwareBuilder:
                 capture_output=True,
                 text=True,
                 timeout=120,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             logger.exception("Flash timeout (2 min)")
@@ -294,6 +297,7 @@ class FirmwareBuilder:
                     capture_output=True,
                     text=True,
                     timeout=120,
+                    check=False,
                 )
                 if result.returncode != 0:
                     logger.warning(f"Verification failed: {result.stderr}")
@@ -319,7 +323,7 @@ class FirmwareBuilder:
                 proc.wait(timeout=5)
             else:
                 # Blocking - user exits with Ctrl+]
-                subprocess.run(cmd, cwd=self.firmware_dir)
+                subprocess.run(cmd, cwd=self.firmware_dir, check=False)
         except KeyboardInterrupt:
             logger.info("Monitor stopped by user")
         except Exception:

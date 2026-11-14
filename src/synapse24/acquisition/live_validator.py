@@ -267,10 +267,6 @@ class LiveTier0Validator:
         }
         self._quality_results.append(result)
 
-        evals: dict[str, Any] = {
-            "ppg_sqi_pass": sqi >= self._thresholds.ppg_sqi_min,
-            "motion_artifact_pass": map_score <= self._thresholds.map_max,
-        }
         logger.info(
             f"  PPG Quality @ {timestamp:.1f}s: PASS={overall}, "
             f"SQI={quality.get('ppg_sqi', 'N/A'):.3f}, "

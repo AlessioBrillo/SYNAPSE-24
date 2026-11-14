@@ -22,7 +22,6 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26,<2.0",
-    "pydantic>=2.7,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -61,7 +60,6 @@ select = ["E", "F", "I", "N", "UP", "W", "C4", "D", "DTZ", "RET", "TRY"]
 ignore = [
     "D101", "D102", "D103", "D107",  # missing docstrings (internal modules)
     "ARG001", "ARG002",    # unused callback arguments
-    "F841",                 # intentional unused variable
     "PLR2004",              # magic values in protocol constants
     "TRY003",               # long exception messages (detailed error context)
     "TRY300",               # explicit returns

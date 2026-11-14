@@ -170,7 +170,7 @@ def run_gate_tests(gate_name: str, test_list: list[str]) -> tuple[bool, int, int
         "--disable-warnings",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
         output = result.stdout + result.stderr
 
         passed_count = 0
@@ -216,7 +216,11 @@ def run_lint_typecheck() -> tuple[bool, dict]:
 
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "."], capture_output=True, text=True, timeout=60
+            [sys.executable, "-m", "ruff", "check", "."],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
         )
         # Ruff returns 1 for deprecation warnings too; check if there are actual errors
         stderr_lower = result.stderr.lower()
@@ -233,6 +237,7 @@ def run_lint_typecheck() -> tuple[bool, dict]:
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         results["ruff_format"] = {"passed": result.returncode == 0}
     except Exception as e:
@@ -252,6 +257,7 @@ def run_lint_typecheck() -> tuple[bool, dict]:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
         results["mypy"] = {"passed": result.returncode == 0}
     except Exception as e:
@@ -265,7 +271,7 @@ def run_coverage() -> tuple[bool, dict]:
     """Run pytest with coverage (fast mode - only unit tests)."""
     try:
         # Don't use --cov-fail-under here; we enforce thresholds in Python after
-        result = subprocess.run(
+        subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -283,6 +289,7 @@ def run_coverage() -> tuple[bool, dict]:
             capture_output=True,
             text=True,
             timeout=300,
+            check=False,
         )
 
         coverage_file = Path("coverage.json")

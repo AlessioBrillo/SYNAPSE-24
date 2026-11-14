@@ -346,7 +346,7 @@ def main():
         return 1
 
     try:
-        edge_model = train_triage_model(
+        train_triage_model(
             data_dir=args.data_dir,
             output_dir=args.output_dir,
             use_synthetic=args.synthetic,

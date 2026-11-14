@@ -215,7 +215,7 @@ class TestClockDriftEstimator:
     def test_perfect_sync(self):
         """Test drift estimation with perfect sync."""
         estimator = ClockDriftEstimator()
-        config = SyncConfig()
+        SyncConfig()
         marker = SyncMarker(
             sequence=1,
             hub_timestamp=10.0,
