@@ -48,6 +48,16 @@ def _ensure_pyxdf() -> None:
         raise ImportError("pyxdf is required to read XDF files: pip install synapse-device[xdf]")
 
 
+def _declared_units(info: dict) -> str:
+    """Return the unit the stream declares in its XDF header ("" if none, or several)."""
+    try:
+        channels = info["desc"][0]["channels"][0]["channel"]
+        units = {str((c.get("unit") or [""])[0] or "") for c in channels} - {""}
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return ""
+    return units.pop() if len(units) == 1 else ""
+
+
 def read_xdf(path: Path | str) -> XdfSession:
     """Read an XDF file into an :class:`XdfSession`."""
     _ensure_pyxdf()
@@ -75,6 +85,7 @@ def read_xdf(path: Path | str) -> XdfSession:
                 channel_count=int(data.shape[1]) if data.ndim == 2 else 1,
                 timestamps=timestamps,
                 data=data,
+                units=_declared_units(info),
             )
         )
         session.n_samples_total += int(len(timestamps))

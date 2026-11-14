@@ -266,6 +266,9 @@ def _cmd_record(args: argparse.Namespace) -> int:
         else:
             print(f"  {name}: {count} frames, rate unmeasured (irregular)")
     print(f"  dropped samples (loss counters carried by frames): {summary['dropped']}")
+    lost = cast("dict[str, int]", summary.get("lost_frames", {}))
+    if lost:
+        print(f"  frames lost in the link (sequence holes): {lost}")
     return 0
 
 

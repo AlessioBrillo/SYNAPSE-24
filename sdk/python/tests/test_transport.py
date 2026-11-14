@@ -75,7 +75,11 @@ def test_emits_real_frames():
     streams = {h.stream for h, _ in captured}
     assert RawStream.ECG in streams and RawStream.PPG in streams
     for header, values in captured:
-        assert header.sample_format == RawFormat.S16
+        # PPG carries 32-bit samples on the wire (contracts/gatt_v2.json), the others 16-bit
+        wanted = (
+            RawFormat.S32 if header.stream in (RawStream.PPG, RawStream.POWER) else RawFormat.S16
+        )
+        assert header.sample_format == wanted
         assert values.shape[0] == header.sample_count
         assert header.sample_count % STREAM_CHANNELS[header.stream] == 0
         assert np.all(np.isfinite(values))
@@ -121,3 +125,15 @@ def test_transport_without_negotiation_reports_unknown():
     asyncio.run(t.connect("SYN-0000"))
     assert asyncio.run(t.request_mtu(MTU_TARGET)) is None
     assert t.mtu is None
+
+
+def test_each_stream_is_numbered_on_its_own_and_the_samples_are_not_all_zero():
+    """A shared counter hid per-stream sequence bugs; all-zero data hid swapped channels."""
+    captured = asyncio.run(_emit_and_collect())
+    for stream in (RawStream.ECG, RawStream.PPG):
+        sequences = [h.sequence for h, _ in captured if h.stream == stream]
+        assert sequences, stream
+        assert sequences == list(range(len(sequences))), f"{stream.name} is not 0,1,2,..."
+    ppg = [v for h, v in captured if h.stream == RawStream.PPG]
+    assert any(v[0] != v[1] for v in ppg), "the two PPG channels carry the same value"
+    assert any(np.any(v != 0) for _h, v in captured)

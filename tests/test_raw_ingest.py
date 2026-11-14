@@ -109,3 +109,38 @@ def test_ingestor_counts_by_lsl_stream_name() -> None:
         "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73", _frame(RawStream.ACC, 0, [1, 2, 3, 4, 5, 6])
     )
     assert ingestor.sample_counts == {"acc": 6}
+
+
+ECG_CHAR = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71"
+
+
+def test_a_repeated_frame_pushes_nothing_and_is_not_an_error() -> None:
+    """A repeat adds no samples to the decoder, so nothing is pushed for it.
+
+    It used to be pushed again, stamped with the previous frame's time, so the same samples
+    reached LSL and the XDF twice.
+    """
+    recorder = _Recorder()
+    ingestor = RawFrameIngestor(push_callback=recorder)
+    first = _frame(RawStream.ECG, 0, [10, 20, 30])
+    assert ingestor.handle_notification(ECG_CHAR, first)
+    pushed = len(recorder.calls)
+
+    assert ingestor.handle_notification(ECG_CHAR, first)  # a valid frame, so no legacy fallback
+
+    assert len(recorder.calls) == pushed, "the repeat reached the outlet"
+    assert ingestor.sample_counts["ecg"] == 3
+    assert ingestor.decoder.out_of_order[RawStream.ECG] == 1
+
+
+def test_a_late_frame_pushes_nothing_and_the_next_one_still_does() -> None:
+    recorder = _Recorder()
+    ingestor = RawFrameIngestor(push_callback=recorder)
+    for seq in (0, 1, 2):
+        assert ingestor.handle_notification(ECG_CHAR, _frame(RawStream.ECG, seq, [seq + 1]))
+    pushed = len(recorder.calls)
+
+    assert ingestor.handle_notification(ECG_CHAR, _frame(RawStream.ECG, 1, [99]))  # late
+    assert len(recorder.calls) == pushed
+    assert ingestor.handle_notification(ECG_CHAR, _frame(RawStream.ECG, 3, [4]))
+    assert len(recorder.calls) == pushed + 1

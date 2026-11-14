@@ -385,6 +385,28 @@ def record_synthetic(out_path: Path, duration_s: float = 30.0, rate_hz: int = 50
     )
 
 
+def _lost_frames(frames: list[tuple[RawHeader, np.ndarray, int]]) -> dict[str, int]:
+    """Frames that left the band and never arrived, per stream, from the 16-bit sequence.
+
+    ``dropped`` in the header counts samples the BAND lost before framing; this counts frames the
+    LINK lost: a forward jump in a stream's own sequence is a hole of ``jump - 1`` frames. A repeat
+    or an older value is not a hole (it is a late delivery) and a long step back is a restart.
+    """
+    last: dict[int, int] = {}
+    lost: dict[str, int] = {}
+    for header, _samples, _wall in frames:
+        stream = int(header.stream)
+        previous = last.get(stream)
+        last[stream] = header.sequence
+        if previous is None:
+            continue
+        step = (header.sequence - previous) & 0xFFFF
+        if 1 < step < 0x8000:
+            name = STREAM_META[RawStream(stream)][0]
+            lost[name] = lost.get(name, 0) + step - 1
+    return lost
+
+
 def record_ble(
     address: str,
     out_path: Path,
@@ -457,6 +479,7 @@ def record_ble(
         name = STREAM_META[RawStream(frame[0].stream)][0]
         frame_counts[name] = frame_counts.get(name, 0) + 1
     return {
+        "lost_frames": _lost_frames(frames),
         "granted_mtu": granted,
         "frames": frame_counts,
         "rate_hz": {STREAM_META[stream][0]: rate for stream, rate in measured.items()},

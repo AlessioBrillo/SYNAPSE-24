@@ -499,6 +499,20 @@ def verify_xdf_roundtrip(
     }
 
 
+def channel_units_from_info(info: dict[str, Any]) -> list[str]:
+    """The unit each channel DECLARES in the XDF header, in channel order.
+
+    pyxdf parses the XML header into nested lists: ``desc[0]["channels"][0]["channel"]`` is a list
+    of ``{"label": [...], "unit": [...]}``. A stream that declares nothing (the older outlets did
+    not) gives ``[]``: the caller must not invent a unit for it, a wrong one is worse than none.
+    """
+    try:
+        channels = info["desc"][0]["channels"][0]["channel"]
+        return [str((c.get("unit") or [""])[0] or "") for c in channels]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return []
+
+
 def validate_xdf(file_path: Path) -> dict[str, Any]:
     """Validate an XDF file and return stream summary."""
     file_path = Path(file_path)
@@ -534,6 +548,7 @@ def validate_xdf(file_path: Path) -> dict[str, Any]:
             "channel_count": info.get("channel_count", [0])[0],
             "nominal_srate": info.get("nominal_srate", [0])[0],
             "source_id": info.get("source_id", [""])[0],
+            "channel_units": channel_units_from_info(info),
             "n_samples": len(time_series),
             "duration_s": duration_s,
             "actual_srate": len(time_series) / duration_s if duration_s > 0 else 0.0,

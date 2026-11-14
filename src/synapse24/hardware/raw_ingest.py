@@ -143,7 +143,13 @@ class RawFrameIngestor:
         # The decoder owns gap accounting and the 64-bit timeline; route
         # through it so both paths agree, and so the push uses the extended
         # (wrap-corrected) stamp rather than the low-32 header value.
+        seen_before = self.decoder.frames_seen
         self.decoder.feed(payload)
+        if self.decoder.frames_seen == seen_before:
+            # A repeat or a late frame (or one the decoder refused): it adds no samples and its time
+            # would be the previous frame's, so nothing is pushed. It IS a valid research-service
+            # frame, so the caller must not try the legacy parser on it.
+            return True
         pod_timestamp_us = self.decoder.last_first_us
 
         channels = _channels_for(header.stream)

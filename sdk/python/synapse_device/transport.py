@@ -151,7 +151,9 @@ class SyntheticTransport(Transport):
     async def _emit(self, streams: list[str], rate_hz: int, duration_s: float) -> None:
         period = 1.0 / rate_hz
         total = int(duration_s * rate_hz)
-        seq = 0
+        # One sequence per stream, as the band does (each characteristic counts its own frames);
+        # a shared counter made every stream look like it lost the frames of the others.
+        seqs: dict[int, int] = {}
         ts = 0
         import numpy as np  # local import: codec is optional at import time
 
@@ -169,15 +171,20 @@ class SyntheticTransport(Transport):
                 channels = {0x01: 1, 0x02: 2, 0x03: 3, 0x04: 3, 0x05: 3, 0x06: 1, 0x07: 4}.get(
                     stream_id, 1
                 )
-                samples = np.zeros((1, channels), dtype=np.float64)
-                frame = encode_frame(stream, seq, ts, 0, RawFormat.S16, samples)
+                seq = seqs.get(stream_id, 0)
+                # PPG and POWER carry 32-bit samples on the wire (contracts/gatt_v2.json); the rest
+                # 16-bit. A ramp that differs per channel, so a swapped channel or a lost frame
+                # shows in the data (all zeros hid both).
+                fmt = RawFormat.S32 if stream_id in (0x02, 0x07) else RawFormat.S16
+                samples = (seq % 1000) + 1000.0 * np.arange(channels, dtype=np.float64)
+                frame = encode_frame(stream, seq, ts, 0, fmt, samples.reshape(1, channels))
                 handler = self._subscribed.get(uuid)
                 if handler is not None:
                     if asyncio.iscoroutinefunction(handler):
                         await handler(uuid, frame)
                     else:
                         handler(uuid, frame)
-                seq += 1
+                seqs[stream_id] = (seq + 1) & 0xFFFF
             ts += int(period * 1e6)
             await asyncio.sleep(period)
 

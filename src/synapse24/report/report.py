@@ -17,9 +17,10 @@ from synapse24.sessions import SessionRecord
 
 REPORT_VERSION = "session-report-v1"
 
-# Stream type -> physical unit (best effort; raw files are authoritative).
-# The firmware decoder divides raw counts by UNIT_DIVISOR: ACC comes out in
-# g, GYRO in rad/s, PPG in AU. These units describe the actual stream data.
+# Stream type -> physical unit, ONLY for a stream whose file declares none (older recordings).
+# The unit a file declares wins (`channel_units`, read from the XDF header): the same stream type
+# is written in different units by different writers (the live LSL path in mV / g / rad/s, the
+# `synapse record` files in uV / mg / dps), so a table by type is wrong for one of them.
 _TYPE_TO_UNIT: dict[str, str] = {
     "EEG": "µV",
     "ECG": "mV",
@@ -34,7 +35,14 @@ _TYPE_TO_UNIT: dict[str, str] = {
 }
 
 
-def _unit_for(stream_type: str) -> str:
+def _unit_for(stream_type: str, declared: list[str] | None = None) -> str:
+    """The unit a stream's file declares, else the best guess for its type."""
+    if declared:
+        units = {u for u in declared if u}
+        if len(units) == 1:
+            return units.pop()
+        if units:
+            return ",".join(sorted(units))
     return _TYPE_TO_UNIT.get(stream_type.upper(), "AU")
 
 
@@ -98,7 +106,7 @@ def build_session_report(
             "type": s.type,
             "sampling_rate_hz": s.sampling_rate_hz,
             "n_samples": s.n_samples,
-            "unit": _unit_for(s.type),
+            "unit": _unit_for(s.type, s.channel_units),
         }
         for s in record.streams
     ]
