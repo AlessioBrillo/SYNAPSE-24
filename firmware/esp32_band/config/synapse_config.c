@@ -219,23 +219,25 @@ static esp_err_t load_from_nvs(void) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    synapse_hw_config_t stored;
-    size_t required_size = sizeof(stored);
-    ret = nvs_get_blob(handle, SYNAPSE_CONFIG_KEY, &stored, &required_size);
-    if (ret != ESP_OK || required_size != sizeof(stored)) {
-        nvs_close(handle);
-        ESP_LOGW(TAG, "Config blob not usable in NVS (%s, %u bytes), using defaults",
-                 esp_err_to_name(ret), (unsigned)required_size);
-        return ESP_ERR_NOT_FOUND;
-    }
-
+    // The version first: a firmware update that changed the struct also changed the blob size,
+    // and that must read as "old layout" (reset to defaults), not as "nothing stored".
     uint32_t stored_version = 0;
     ret = nvs_get_u32(handle, SYNAPSE_CONFIG_VERSION_KEY, &stored_version);
-    nvs_close(handle);
     if (ret != ESP_OK || stored_version != SYNAPSE_CONFIG_VERSION) {
+        nvs_close(handle);
         ESP_LOGW(TAG, "Config version mismatch (stored=%" PRIu32 ", current=%d, %s), using defaults",
                  stored_version, SYNAPSE_CONFIG_VERSION, esp_err_to_name(ret));
         return ESP_ERR_INVALID_VERSION;
+    }
+
+    synapse_hw_config_t stored;
+    size_t required_size = sizeof(stored);
+    ret = nvs_get_blob(handle, SYNAPSE_CONFIG_KEY, &stored, &required_size);
+    nvs_close(handle);
+    if (ret != ESP_OK || required_size != sizeof(stored)) {
+        ESP_LOGW(TAG, "Config blob not usable in NVS (%s, %u bytes), using defaults",
+                 esp_err_to_name(ret), (unsigned)required_size);
+        return ret == ESP_OK ? ESP_ERR_INVALID_SIZE : ESP_ERR_NOT_FOUND;
     }
 
     ret = validate_config(&stored);

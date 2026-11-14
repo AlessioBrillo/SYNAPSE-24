@@ -223,7 +223,13 @@ esp_err_t synapse_sensors_init(void) {
     populate_sensor_configs(&hw_cfg);
 
     // Create sample queue
+    // The deep queue is ~16 kB of internal RAM; if the heap is short, a shallower one (the old
+    // depth) is better than a band that does not start.
     g_sensors.sample_queue = xQueueCreate(SENSOR_SCHEDULER_BLE_QUEUE_SIZE, sizeof(sensor_sample_t)) /* scheduler enqueues plain sensor_sample_t */;
+    if (!g_sensors.sample_queue) {
+        ESP_LOGW(TAG, "sample queue of %d does not fit: falling back to 64", SENSOR_SCHEDULER_BLE_QUEUE_SIZE);
+        g_sensors.sample_queue = xQueueCreate(64, sizeof(sensor_sample_t));
+    }
     if (!g_sensors.sample_queue) {
         ESP_LOGE(TAG, "Failed to create sample queue");
         return ESP_ERR_NO_MEM;

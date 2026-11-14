@@ -49,7 +49,8 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y
 # option: it is picked by its symbol, not by a number.
 CONFIG_BT_NIMBLE_LOG_LEVEL_INFO=y
 
-CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="SYNAPSE-BAND"
+# The GAP device name is set at start-up from CONFIG_SYNAPSE_BLE_DEVICE_NAME
+# (ble_svc_gap_device_name_set), so it is not repeated here.
 
 # Link throughput. The contract and hardware.yaml (ble.mtu_target) say 247; the NimBLE default is
 # 256, so the band asked for an MTU its own docs never mention. The notification burst of one tick

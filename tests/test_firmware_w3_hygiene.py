@@ -57,17 +57,22 @@ def test_a_rejected_nvs_config_never_reaches_the_live_config() -> None:
     )
     # the live config is replaced only after the version matched and validation passed
     assert load.index("validate_config(&stored)") < load.index("memcpy(&g_config, &stored")
-    assert load.index("nvs_get_u32(handle, SYNAPSE_CONFIG_VERSION_KEY") < load.index(
-        "validate_config"
-    )
+    version = load.index("nvs_get_u32(handle, SYNAPSE_CONFIG_VERSION_KEY")
+    assert version < load.index("validate_config")
+    # the version is read BEFORE the blob: a layout change reads as "old version", not "nothing stored"
+    assert version < load.index("nvs_get_blob(")
     assert "handle = nvs_open(" not in code, "the handle was overwritten by the return code"
 
 
 def test_the_sensor_tasks_run_on_their_own_core_with_a_queue_that_outlasts_a_slow_tick() -> None:
     sched_h = _text(COMMON / "scheduler" / "sensor_scheduler.h")
     assert "#define SENSOR_TASK_CORE 1" in sched_h
+    assert "#define SENSOR_TASK_CORE 0" in sched_h  # the single-core build
+    assert "CONFIG_FREERTOS_UNICORE" in sched_h
     assert "#define SENSOR_SCHEDULER_MAX_SENSORS 3" in sched_h
-    queue = int(re.search(r"define SENSOR_SCHEDULER_BLE_QUEUE_SIZE (\d+)", sched_h).group(1))
+    found = re.search(r"define SENSOR_SCHEDULER_BLE_QUEUE_SIZE (\d+)", sched_h)
+    assert found is not None
+    queue = int(found.group(1))
     # 600 samples/s (500 ECG + 50 PPG + 50 IMU): the queue must hold more than a quarter second
     assert queue / 600 >= 0.25
     sensors = _text(BAND / "sensors" / "synapse_sensors.c")
@@ -81,14 +86,19 @@ def test_the_sensor_tasks_run_on_their_own_core_with_a_queue_that_outlasts_a_slo
 
 def test_every_polled_sensor_type_fits_the_scheduler_arrays() -> None:
     sched_h = _text(COMMON / "scheduler" / "sensor_scheduler.h")
-    max_sensors = int(re.search(r"define SENSOR_SCHEDULER_MAX_SENSORS (\d+)", sched_h).group(1))
-    enum = re.search(r"typedef enum \{(.*?)\} sensor_type_t;", sched_h, re.S).group(1)
-    types = dict(re.findall(r"(SENSOR_TYPE_\w+)\s*=\s*(\d+)", enum))
+    found = re.search(r"define SENSOR_SCHEDULER_MAX_SENSORS (\d+)", sched_h)
+    enum = re.search(r"typedef enum \{(.*?)\} sensor_type_t;", sched_h, re.S)
+    assert found is not None
+    assert enum is not None
+    max_sensors = int(found.group(1))
+    types = dict(re.findall(r"(SENSOR_TYPE_\w+)\s*=\s*(\d+)", enum.group(1)))
     for polled in ("SENSOR_TYPE_ECG", "SENSOR_TYPE_PPG", "SENSOR_TYPE_IMU"):
         assert int(types[polled]) < max_sensors, polled
 
 
 def test_the_advertised_name_is_the_kconfig_one() -> None:
+    defaults = _text(BAND / "sdkconfig.defaults")
+    assert "CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME" not in defaults, "a second source of the name"
     code = _text(BAND / "ble" / "ble_gatt_server.c")
     assert "#define SYNAPSE_BLE_DEVICE_NAME CONFIG_SYNAPSE_BLE_DEVICE_NAME" in code
     assert '"SYNAPSE-BAND"' not in code
@@ -106,3 +116,25 @@ def test_the_host_stub_of_the_sample_struct_is_the_real_one() -> None:
 def test_a_header_macro_is_defined_once() -> None:
     raw = _text(COMMON / "ble" / "synapse_raw_frame.h")
     assert raw.count("#define SYNAPSE_RAW_FRAME_MAX_SAMPLES") == 1
+
+
+def test_a_polled_sensor_type_outside_the_scheduler_arrays_is_a_build_error() -> None:
+    sched_h = _text(COMMON / "scheduler" / "sensor_scheduler.h")
+    assert "SENSOR_TYPE_IMU < SENSOR_SCHEDULER_MAX_SENSORS" in sched_h
+    assert sched_h.count("polled sensor types must fit the scheduler arrays") == 2  # C and C++
+
+
+def test_the_queue_falls_back_instead_of_stopping_the_band() -> None:
+    sensors = _text(BAND / "sensors" / "synapse_sensors.c")
+    assert "falling back to 64" in sensors
+    assert sensors.count("xQueueCreate(") == 2
+
+
+def test_no_gpio_collides_with_the_octal_psram_bus() -> None:
+    """Octal PSRAM owns GPIO 33-37 (and the flash 26-32): no Kconfig default may sit there."""
+    kconfig = _text(BAND / "config" / "Kconfig")
+    for symbol in ("ECG_GPIO_DRDY", "PPG_GPIO_INT", "IMU_GPIO_INT"):
+        m = re.search(rf"config SYNAPSE_{symbol}\n(?:.*\n)*?\s+default (-?\d+)", kconfig)
+        assert m is not None, symbol
+        gpio = int(m.group(1))
+        assert not 26 <= gpio <= 37, f"{symbol} default {gpio} is on the PSRAM/flash bus"
