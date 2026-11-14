@@ -327,8 +327,12 @@ class DataPlaneService:
                 "algorithm_version": "synapse-worker-v1",
                 "file_sha256": "",
             }
-        digest = hashlib.sha256(f"{resolved}|{computation_type}|api-v1".encode()).hexdigest()[:16]
         file_sha256 = self.file_sha256(resolved)
+        # The id follows the CONTENT: it hashed the path, so the same file elsewhere got another
+        # id and a file rewritten in place kept the old one (and so the old cached result).
+        digest = hashlib.sha256(f"{file_sha256}|{computation_type}|api-v1".encode()).hexdigest()[
+            :16
+        ]
         job = Job(
             job_id=f"api-{digest}",
             computation_type=job_type,

@@ -551,6 +551,8 @@ def validate_xdf(file_path: Path) -> dict[str, Any]:
             "channel_units": channel_units_from_info(info),
             "n_samples": len(time_series),
             "duration_s": duration_s,
+            "first_timestamp": float(time_stamps[0]) if len(time_stamps) else None,
+            "last_timestamp": float(time_stamps[-1]) if len(time_stamps) else None,
             "actual_srate": len(time_series) / duration_s if duration_s > 0 else 0.0,
             "timestamp_monotonic": bool(is_monotonic),
         }

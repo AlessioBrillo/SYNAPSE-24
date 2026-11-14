@@ -360,3 +360,20 @@ def test_file_sha256_is_cached(svc: DataPlaneService, tmp_path: Path) -> None:
 def test_a_drive_or_unc_path_is_refused_off_windows(svc: DataPlaneService, candidate: str) -> None:
     """On Linux ``C:/Windows/win.ini`` is a harmless relative name: only an explicit check refuses it."""
     assert svc.resolve_allowed_path(candidate) is None
+
+
+def test_a_job_id_follows_the_content_not_the_path(svc: DataPlaneService, tmp_path: Path) -> None:
+    """It hashed the path: a copy got another id, and a file rewritten in place kept the old one."""
+    first = tmp_path / "first.fit"
+    copy = tmp_path / "copy.fit"
+    write_dev_fit(first, [{"timestamp": i, "dev": {0: v}} for i, v in enumerate([0, 0, 1, 1])])
+    copy.write_bytes(first.read_bytes())
+
+    a = svc.run_job("stress_daily", str(first))
+    b = svc.run_job("stress_daily", str(copy))
+    assert a["job_id"] == b["job_id"], "the same bytes under another name are the same job"
+
+    write_dev_fit(first, [{"timestamp": i, "dev": {0: v}} for i, v in enumerate([1, 1, 1, 1])])
+    c = svc.run_job("stress_daily", str(first))
+    assert c["job_id"] != a["job_id"], "a rewritten file kept the id of the old content"
+    assert c["file_sha256"] != a["file_sha256"]

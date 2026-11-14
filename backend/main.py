@@ -234,10 +234,11 @@ def _register_legacy_endpoints(application: Any) -> None:
             "note": "clock sync requires hardware; not available in software-only mode",
         }
 
-    @application.get("/api/quality/{pod_id}", dependencies=_auth_dependencies())
-    async def get_signal_quality(pod_id: str) -> dict[str, Any]:
+    @application.get("/api/quality/{session_id}", dependencies=_auth_dependencies())
+    async def get_signal_quality(session_id: str) -> dict[str, Any]:
+        # The path used to say pod_id, but a session id is what is looked up: a pod id never matched.
         svc = _service()
-        rec = await run_in_threadpool(svc.session, pod_id)
+        rec = await run_in_threadpool(svc.session, session_id)
         if rec is None:
             raise _not_found("session not found")
         return {

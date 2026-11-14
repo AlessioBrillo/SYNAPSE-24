@@ -87,12 +87,15 @@ class SessionCatalog:
     root: str
     generated_at: str
     sessions: dict[str, SessionRecord] = field(default_factory=dict)
+    #: files found but NOT catalogued, path -> why (unreadable, or the same bytes as another file).
+    skipped: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "root": self.root,
             "generated_at": self.generated_at,
             "n_sessions": len(self.sessions),
+            "skipped": dict(self.skipped),
             "sessions": {
                 sid: {**asdict(rec), "streams": [asdict(s) for s in rec.streams]}
                 for sid, rec in self.sessions.items()
@@ -152,14 +155,15 @@ def _validate_fit_light(path: Path) -> bool:
     return fit_crc16(data[:-2]) == file_crc
 
 
-def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: PLR0915 - complex FIT file_id walker
+def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: PLR0915 - FIT framing walker
     """Best-effort read of the FIT file_id message (global mesg 0).
 
-    Returns ``(serial_number, unix_time_created)`` or ``(None, None)`` when
-    the file is not a FIT file or the file_id message cannot be found. The
-    reader walks definitions and data messages just enough to locate the
-    file_id definition and its first data record; it does not depend on the
-    SDK's reader, which skips non-record global messages.
+    Returns ``(serial_number, unix_time_created)`` or ``(None, None)`` when the file is not a FIT
+    file or the file_id message cannot be found. The walker follows the FIT framing so it can step
+    over every message that precedes file_id: definitions (with the developer-data flag and the
+    architecture byte, big- or little-endian), normal data messages, and compressed-timestamp
+    data messages. It used to take the bytes of any other data message for headers, so a file
+    whose first message was not file_id lost its serial; it does not depend on the SDK reader.
     """
     try:
         data = path.read_bytes()
@@ -170,59 +174,67 @@ def _parse_fit_file_id(path: Path) -> tuple[int | None, float | None]:  # noqa: 
 
     pos = FIT_HEADER_SIZE
     end = len(data) - FIT_CRC_SIZE
-    # local_type -> (global_num, [(field_num, size, base_type), ...])
-    definitions: dict[int, tuple[int, list[tuple[int, int, int]]]] = {}
-    file_id_local_type: int | None = None
+    # local_type -> (global_num, struct endianness, [(field_num, size, base_type)], developer bytes)
+    definitions: dict[int, tuple[int, str, list[tuple[int, int, int]], int]] = {}
 
     while pos < end:
         header = data[pos]
         pos += 1
-        is_definition = bool(header & FIT_HEADER_DEFINITION)
-        local_type = header & 0x0F
+        if header & 0x80:  # compressed-timestamp header: a data message, local type in bits 5-6
+            local_type, is_definition = (header >> 5) & 0x03, False
+        else:
+            local_type, is_definition = header & 0x0F, bool(header & FIT_HEADER_DEFINITION)
 
         if is_definition:
             if pos + 5 > end:
                 break
-            _reserved, _arch, global_num, n_fields = struct.unpack_from("<BBHB", data, pos)
+            endian = ">" if data[pos + 1] == 1 else "<"
+            global_num = struct.unpack_from(endian + "H", data, pos + 2)[0]
+            n_fields = data[pos + 4]
             pos += 5
-            fields: list[tuple[int, int, int]] = []
-            for _ in range(n_fields):
-                if pos + 3 > end:
+            if pos + 3 * n_fields > end:
+                break
+            fields = [struct.unpack_from("<BBB", data, pos + 3 * i) for i in range(n_fields)]
+            pos += 3 * n_fields
+            developer_bytes = 0
+            if header & 0x20:  # developer data flag: a second list of fields follows
+                if pos + 1 > end:
                     break
-                field_num, size, base_type = struct.unpack_from("<BBB", data, pos)
-                pos += 3
-                fields.append((field_num, size, base_type))
-            definitions[local_type] = (global_num, fields)
-            if global_num == 0:  # file_id
-                file_id_local_type = local_type
-            continue  # una definizione non è anche un dato: passa al messaggio successivo
+                n_dev = data[pos]
+                pos += 1
+                if pos + 3 * n_dev > end:
+                    break
+                developer_bytes = sum(data[pos + 3 * i + 1] for i in range(n_dev))
+                pos += 3 * n_dev
+            definitions[local_type] = (global_num, endian, fields, developer_bytes)
+            continue
 
-        # Data message: only interesting if it matches the file_id def.
-        if file_id_local_type is not None and local_type == file_id_local_type:
-            global_num, fields = definitions[file_id_local_type]
-            if global_num != 0:
-                continue
+        known = definitions.get(local_type)
+        if known is None:
+            break  # a data message with no definition: the rest cannot be walked
+        global_num, endian, fields, developer_bytes = known
+        size_total = sum(size for _num, size, _base in fields) + developer_bytes
+        if pos + size_total > end:
+            break
+        if global_num == 0:  # file_id
             serial: int | None = None
             time_created_fit: int | None = None
+            offset = pos
             for field_num, size, base_type in fields:
-                if pos + size > end:
-                    break
-                if base_type in (0x86, 0x8C):  # UINT32 / UINT32Z
-                    value = struct.unpack_from("<I", data, pos)[0]
-                else:
-                    pos += size
-                    continue
-                if field_num == FIT_FIELD_FILE_ID_SERIAL:
-                    serial = value
-                elif field_num == FIT_FIELD_FILE_ID_TIME_CREATED:
-                    time_created_fit = value
-                pos += size
-            if serial is not None:
-                unix_ts: float | None = None
-                if time_created_fit is not None:
-                    unix_ts = float(time_created_fit + _FIT_EPOCH_OFFSET_S)
-                return serial, unix_ts
-            break  # file_id data found but no serial
+                if base_type in (0x86, 0x8C) and size == 4:  # UINT32 / UINT32Z
+                    value = struct.unpack_from(endian + "I", data, offset)[0]
+                    if field_num == FIT_FIELD_FILE_ID_SERIAL:
+                        serial = value
+                    elif field_num == FIT_FIELD_FILE_ID_TIME_CREATED:
+                        time_created_fit = value
+                offset += size
+            if serial is None:
+                break  # file_id found but with no serial
+            unix_ts = None
+            if time_created_fit is not None:
+                unix_ts = float(time_created_fit + _FIT_EPOCH_OFFSET_S)
+            return serial, unix_ts
+        pos += size_total
     return None, None
 
 
@@ -279,6 +291,27 @@ def _xdf_stream_infos(streams: list[dict[str, Any]]) -> list[StreamInfo]:
     return infos
 
 
+#: Timestamps from 2017 on are wall-clock seconds; a local LSL clock never gets there (the same
+#: rule the FIT export uses to tell the two apart).
+_UNIX_EPOCH_PLAUSIBLE_S = 1_500_000_000.0
+
+
+def _wall_clock_window(streams_raw: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """ISO start/end of the session when the XDF timestamps are wall-clock time, else (None, None).
+
+    A local LSL clock is not a date (it counts from the machine's start), and a made-up date in a
+    health record is worse than none.
+    """
+    firsts = [s["first_timestamp"] for s in streams_raw if s.get("first_timestamp") is not None]
+    lasts = [s["last_timestamp"] for s in streams_raw if s.get("last_timestamp") is not None]
+    if not firsts or min(firsts) < _UNIX_EPOCH_PLAUSIBLE_S:
+        return None, None
+    return (
+        datetime.fromtimestamp(min(firsts), tz=UTC).isoformat(),
+        datetime.fromtimestamp(max(lasts), tz=UTC).isoformat(),
+    )
+
+
 def index_xdf(path: Path) -> SessionRecord:
     """Index a single XDF file."""
     digest = _sha256_file(path)
@@ -289,6 +322,7 @@ def index_xdf(path: Path) -> SessionRecord:
     # validate_xdf reports per-stream duration_s but not absolute wall-clock
     # start/end times; leave those unset rather than inventing them.
     duration_s = max((s.get("duration_s") or 0.0) for s in streams_raw) if streams_raw else 0.0
+    started_at, ended_at = _wall_clock_window(streams_raw)
     return SessionRecord(
         session_id=_session_id(digest),
         device_serial=_extract_device_serial_from_xdf(path),
@@ -296,8 +330,8 @@ def index_xdf(path: Path) -> SessionRecord:
         format="xdf",
         size_bytes=path.stat().st_size,
         sha256=digest,
-        started_at=None,
-        ended_at=None,
+        started_at=started_at,
+        ended_at=ended_at,
         duration_s=round(float(duration_s), 6),
         streams=streams,
         n_samples_total=n_total,
@@ -373,6 +407,7 @@ def index_directory(root: Path | str) -> SessionCatalog:
     """
     root_path = Path(root).resolve()
     sessions: dict[str, SessionRecord] = {}
+    skipped: dict[str, str] = {}
     for pattern in ("*.xdf", "*.fit"):
         for path in sorted(root_path.rglob(pattern)):
             try:
@@ -380,14 +415,22 @@ def index_directory(root: Path | str) -> SessionCatalog:
                     rec = index_xdf(path)
                 else:
                     rec = index_fit(path)
-            except Exception:
-                # A single unreadable file must not abort the whole catalog.
+            except Exception as exc:  # noqa: BLE001 - one unreadable file must not abort the catalog
+                # ...but it must not vanish either: it is listed with the reason.
+                skipped[str(path)] = f"{type(exc).__name__}: {exc}"
+                continue
+            existing = sessions.get(rec.session_id)
+            if existing is not None and existing.path != rec.path:
+                # The id is the content digest: two files with the same bytes are one session, and
+                # the second used to REPLACE the first without a word.
+                skipped[str(path)] = f"same content as {existing.path}"
                 continue
             sessions[rec.session_id] = rec
     return SessionCatalog(
         root=str(root_path),
         generated_at=datetime.now(UTC).isoformat(),
         sessions=sessions,
+        skipped=skipped,
     )
 
 
@@ -406,6 +449,7 @@ def load_catalog(output: Path | str) -> SessionCatalog:
         root=data["root"],
         generated_at=data["generated_at"],
         sessions=sessions,
+        skipped={str(k): str(v) for k, v in (data.get("skipped") or {}).items()},
     )
 
 
