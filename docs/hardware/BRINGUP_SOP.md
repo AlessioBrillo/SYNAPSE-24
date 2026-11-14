@@ -51,8 +51,9 @@ only the I²C wires attached the POWER stream will happily report `0 mA`, and a
 zero reading is indistinguishable from a working measurement. Before the first
 session, verify the reading against a **known load** (a resistor drawing a
 known current from the same rail); the ratio measured/expected must be ~1
-(§4a). `hardware.yaml` declares the 0.1 Ω shunt and address 0x40; a shunt of a
-different value is a config fix, not a firmware one.
+(§4a). The 0.1 Ω shunt and address 0x40 are in the firmware Kconfig
+(`SYNAPSE_INA219_SHUNT_MOHM`, `SYNAPSE_INA219_I2C_ADDR`), not in `hardware.yaml`; a shunt of a
+different value is a Kconfig fix.
 
 Add 4.7 kΩ pull-ups on SDA/SCL if your breakouts do not include them — a
 missing pull-up presents as `ESP_ERR_NOT_FOUND` on the PPG PART_ID.
@@ -63,10 +64,16 @@ alcohol; a wet electrode is the difference between a clean QRS and noise.
 
 > **`ecg_config.gpio_drdy: 15` in `hardware.yaml` is optional.** The driver
 > uses it as the lead-off sense pin (LO+; the AD8232 breakouts expose LO+ and
-> LO− separately, OR them through two diodes if you want both). If your clone
-> has no LO pin, leave GPIO 15 unconnected: the internal pull-up then reads as
-> "lead-off" permanently — noisy logs, but no effect on streaming, because the
-> ECG stream is deliberately not gated on it. Or set `gpio_drdy: -1`.
+> LO− separately, OR them through two diodes if you want both). The pin is
+> pulled **down**: if your clone has no LO pin, leave GPIO 15 unconnected and it
+> reads "contact" — the `lead_off` flag of the frames then stays 0, which means
+> "not flagged", not "contact verified". (It used to be pulled up and read
+> "lead-off" for ever.) The ECG stream is never gated on it. After a real
+> lead-off (≥ 1 s) followed by steady contact the driver measures the ECG bias
+> again, which takes one second without ECG samples (reported as a gap in
+> `dropped`). With the pin unwired nothing ever flags a lead-off, so that re-measure never
+> happens either: start the band with the electrodes already applied (the bias is measured
+> in the first second). Or set `gpio_drdy: -1`.
 > It used to be GPIO 4, which is also the battery-divider input: do not share them.
 
 ## 1. Build and flash
@@ -294,7 +301,8 @@ from the generated contract header
 |---|---|---|
 | `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups |
 | `[band-core]` missing from the boot log | Wrong build variant | Rebuild with `--variant band-core` |
-| ECG reads 0, PPG/IMU fine | AD8232 unpowered, or LO pins floating | Verify 3V3/GND; tie LO± to GND if unused |
+| ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_drdy: -1` |
+| ECG flat or stuck at a rail (about +1.3 / −1.5 mV) from the start | The band started with the electrodes off or still settling, so the resting level was measured from nothing | Apply the electrodes and restart the band; with LO+ wired, a long lead-off followed by steady contact re-measures it by itself |
 | Research service absent | `RESEARCH_SERVICE` disabled or wrong firmware | Check `sdkconfig.defaults.core` |
 | HR reads 0 or 200+ bpm | Electrode contact / motion | Clean skin, snug electrodes, hold still |
 | Dropped frames > 0 | BLE budget exceeded | Reduce the streams you subscribe to |

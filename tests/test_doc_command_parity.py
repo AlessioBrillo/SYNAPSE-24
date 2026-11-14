@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DOCS = sorted((ROOT / "docs" / "hardware").glob("*.md"))
 ROOT_DOCS = [
-    ROOT / "HARDWARE_BRINGUP.md",
     ROOT / "docs" / "archive" / "PHASE1_NEXT_STEPS.md",
 ]
 
@@ -62,7 +61,7 @@ class TestDocCommandsParse:
     @pytest.mark.parametrize("doc", DOCS + ROOT_DOCS, ids=lambda p: p.name)
     def test_every_documented_script_invocation_parses(self, doc: Path) -> None:
         commands = _commands(doc)
-        # Not every runbook invokes a script (INCREMENT_SUMMARY is prose);
+        # Not every runbook invokes a script (some runbooks are prose);
         # every one that does must be parseable by argparse.
         for tokens in commands:
             script = _script_path(tokens[0])

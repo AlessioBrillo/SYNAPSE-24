@@ -15,12 +15,11 @@ from pathlib import Path
 from tests.test_firmware_first_light import _band_gpio_map
 
 ROOT = Path(__file__).resolve().parents[1]
-GUIDE = ROOT / "HARDWARE_BRINGUP_GUIDE.md"
-BRINGUP = ROOT / "HARDWARE_BRINGUP.md"
 SOP = ROOT / "docs" / "hardware" / "BRINGUP_SOP.md"
 PROCUREMENT = ROOT / "docs" / "hardware" / "PROCUREMENT.md"
 IDF_SETUP = ROOT / "docs" / "hardware" / "ESP-IDF_SETUP.md"
-WIRING_DOCS = (GUIDE, BRINGUP, SOP, PROCUREMENT, IDF_SETUP)
+FIRST_DAY = ROOT / "docs" / "hardware" / "FIRST_HARDWARE_DAY.md"
+WIRING_DOCS = (SOP, PROCUREMENT, IDF_SETUP, FIRST_DAY)
 
 #: SPI flash (26-32) and octal PSRAM (33-37) on the DevKitC-1 N8R8.
 RESERVED = set(range(26, 38))
@@ -47,38 +46,6 @@ def test_a_reserved_pin_is_only_ever_mentioned_to_forbid_it() -> None:
                     )
 
 
-def test_the_guide_pinout_table_matches_the_firmware_pin_map() -> None:
-    pins = _band_gpio_map()
-    table = "\n".join(_table_rows(_text(GUIDE)))
-    expected = {
-        "ECG ADC": pins["ecg_adc"],
-        "ECG lead-off": pins["ecg_leadoff"],
-        "Battery divider": pins["bat_adc"],
-        "I2C SDA": pins["i2c_sda"],
-        "I2C SCL": pins["i2c_scl"],
-        "PPG INT": pins["ppg_int"],
-        "IMU INT": pins["imu_int"],
-        "Wired Sync": pins["wired_sync"],
-    }
-    for signal, pin in expected.items():
-        row = next((r for r in table.splitlines() if r.startswith(f"| {signal}")), None)
-        assert row is not None, f"the pinout table lost its {signal} row"
-        assert re.search(rf"\bGPIO{pin}\b", row), (
-            f"{signal}: the firmware uses GPIO{pin}, the guide says: {row.strip()}"
-        )
-
-
-def test_the_guide_table_is_not_split_by_the_note() -> None:
-    """A blockquote ends a Markdown table: every row must come before the first note."""
-    lines = _text(GUIDE).splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.startswith("| Signal | GPIO"))
-    end = next(i for i in range(start, len(lines)) if not lines[i].startswith("|"))
-    assert all(not ln.startswith("|") for ln in lines[end:][:3]), (
-        "table rows after the end of the table"
-    )
-    assert any("BLE Antenna" in ln for ln in lines[start:end])
-
-
 def test_the_sop_wiring_table_matches_the_firmware_pin_map() -> None:
     pins = _band_gpio_map()
     table = "\n".join(_table_rows(_text(SOP)))
@@ -99,17 +66,9 @@ def test_the_sop_wiring_table_matches_the_firmware_pin_map() -> None:
     assert f"**{pins['i2c_sda']}**" in sda
 
 
-def test_the_bringup_diagram_uses_the_firmware_pins() -> None:
-    pins = _band_gpio_map()
-    text = _text(BRINGUP)
-    assert re.search(rf"\bGPIO {pins['ecg_adc']}\s+\(ADC1_CH0\)", text)
-    assert re.search(rf"\bGPIO {pins['ecg_leadoff']}\b", text)
-    assert re.search(rf"\bGPIO {pins['wired_sync']}\b", text)
-
-
 def test_the_two_pod_bench_uses_the_real_sync_pin() -> None:
     pin = _band_gpio_map()["wired_sync"]
-    for path in (PROCUREMENT, SOP, BRINGUP):
+    for path in (PROCUREMENT, SOP):
         assert re.search(rf"\bGPIO {pin}\b", _text(path)), f"{path.name} does not name GPIO {pin}"
 
 

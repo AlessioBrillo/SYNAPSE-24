@@ -51,5 +51,5 @@ see `docs/increments/DEVICE_LOOP_V1.md` PR1.
 ## References
 
 - `Architecture.md` — tiered acquisition, power budget
-- `HARDWARE_BRINGUP.md` — wiring, bringup, validation
-- `SYNAPSE-AVERYN-STRATEGY/04_SYNAPSE_DEVICE_SDK_SPEC.md` — BLE/FIT/MQTT contracts
+- `docs/hardware/BRINGUP_SOP.md` — wiring, bringup, validation
+- `docs/contracts/AVERYN_INTERFACE.md` and `contracts/gatt_v2.json` — the BLE/FIT contracts

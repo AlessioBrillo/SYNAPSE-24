@@ -81,4 +81,4 @@ Ingestion and validation download public research datasets. They are **not** cov
 | WESAD | UCI / original authors | Check terms for commercial use before shipping anything derived from it |
 | DEAP | Queen Mary Univ. of London | Access requires accepting an EULA |
 
-Models trained on these datasets (e.g. `firmware/esp32_tier0/main/triage/model_data.h`) may inherit their restrictions. Confirm the terms, or train on data you are licensed to use commercially, **before** shipping a model in a product.
+Models trained on these datasets (e.g. `firmware/common/triage/model_data.h`) may inherit their restrictions. Confirm the terms, or train on data you are licensed to use commercially, **before** shipping a model in a product.

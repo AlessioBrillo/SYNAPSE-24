@@ -41,7 +41,7 @@ CONTRACT_H = FIRMWARE_DIR / "ble" / "synapse_contract_generated.h"
 # pointing here would let every constant drift silently.
 RAW_CODEC_PY = ROOT / "sdk" / "python" / "synapse_device" / "codec.py"
 BUILD_SCRIPT = ROOT / "scripts" / "build_and_flash_firmware.py"
-BRINGUP_DOC = ROOT / "HARDWARE_BRINGUP.md"
+BRINGUP_DOC = ROOT / "docs" / "hardware" / "BRINGUP_SOP.md"
 # FIT developer-field contract and every source that mirrors it. The declared
 # directory is scanned for its .c/.h sources; the rest are single files.
 FIT_CONTRACT = ROOT / "contracts" / "fit_developer_fields.json"
@@ -184,8 +184,8 @@ def check_i2c_pins(hw: dict, report: Report) -> None:
 
     doc = BRINGUP_DOC.read_text(encoding="utf-8") if BRINGUP_DOC.is_file() else ""
     report.check(
-        f"GPIO {sda} (I2C SDA)" in doc or f"GPIO {sda}  (I2C SDA)" in doc,
-        f"HARDWARE_BRINGUP.md does not document I2C SDA on GPIO {sda}",
+        f"GPIO {sda} (SDA)" in doc and f"{scl} (SCL)" in doc,
+        f"docs/hardware/BRINGUP_SOP.md does not document I2C SDA on GPIO {sda} and SCL on GPIO {scl}",
     )
 
 

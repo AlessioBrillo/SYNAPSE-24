@@ -1,8 +1,8 @@
 # SYNAPSE-24: 24/7 Multimodal Bio-Sensing Wearable Platform
 
-> **Phase 0: Software & Public Data Foundation — code complete; baseline claims partial**
+> **Software ready for the first bench day — nothing verified on hardware**
 >
-> Building the complete signal processing, edge AI, and validation pipeline on public datasets before any hardware procurement.
+> The signal processing, edge AI, firmware (acquisition → BLE) and host pipeline are built and tested against public datasets, recorded signals and simulated pods. **No board, sensor, radio or phone has ever run this code**: read `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md` for what is proven and what is not. Phase 0 baseline claims are still `partial`.
 
 [![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](compliance/LICENSING.md)
 [![CI gate: Woodpecker](https://img.shields.io/badge/CI-Woodpecker-blue)](.woodpecker/ci.yml)
@@ -135,8 +135,14 @@ origin allowlist and an optional bearer token (`SYNAPSE_API_TOKEN`); see
 ```
 SYNAPSE-24/
 ├── Architecture.md          # System architecture (governing document)
-├── Roadmap.md              # Phase-based execution plan (governing document)
-├── pyproject.toml          # Dependencies, tool config (ruff, mypy, pytest)
+├── Roadmap.md              # Phase-based execution plan + increment status table
+├── pyproject.toml          # Dependencies, tool config (ruff, mypy, pytest); TensorFlow is the `train` extra
+├── firmware/               # ESP32-S3 band (ESP-IDF): common/ drivers + scheduler, esp32_band/ app
+├── contracts/              # Machine-readable contracts (GATT v2, raw frame, FIT fields) + golden vectors
+├── sdk/python/             # synapse-device: frame codecs, transport, XDF/FIT writers (Apache-2.0)
+├── backend/, worker/       # Local Data Plane API and the stateless analysis worker
+├── tools/                  # Contract and interface checkers, generators
+├── docs/                   # hardware/ (SOP, procurement), contracts/, increments/, archive/
 ├── src/
 │   └── synapse24/
 │       ├── __init__.py
@@ -247,7 +253,7 @@ SYNAPSE-24/
 │   └── hardware_bringup.yaml    # Bringup-specific overrides
 ├── .github/
 │   └── workflows/
-│       └── ci.yml               # CI/CD: lint, typecheck, test, validate
+│       └── ci.yml               # A notice only: the gate is .woodpecker/ci.yml
 └── data/
     ├── wesad/                   # Raw WESAD (gitignored)
     ├── mitbih/                  # Raw MIT-BIH (gitignored)
@@ -298,7 +304,7 @@ from synapse24.utils import validate_xdf
 summary = validate_xdf(Path("data/processed/S2_wesad.xdf"))
 ```
 
-## Tiered Acquisition (Architecture.md §33-43)
+## Tiered Acquisition (Architecture.md, principle 2)
 
 | Tier | Modalities | When | Power | Purpose |
 |------|------------|------|-------|---------|
@@ -306,9 +312,9 @@ summary = validate_xdf(Path("data/processed/S2_wesad.xdf"))
 | **T1** | EEG 6-16ch, fNIRS, ECG rest | Immobility / Sleep | ~50 mW avg | High-density neuro |
 | **T2** | Cognitive tasks, calibration | User-initiated | ~100 mW burst | Labeled data collection |
 
-**Motion Gate (Architecture.md §74)**: T0→T1 promotion requires measured-clean PPG (SQI ≥0.5, MAP ≤0.5) + immobility + power budget.
+**Motion Gate (Architecture.md, principle 2: tiered acquisition)**: T0→T1 promotion requires measured-clean PPG (SQI ≥0.5, MAP ≤0.5) + immobility + power budget.
 
-**Clock Sync (Architecture.md §92)**: Multi-pod synchronization via LSL markers + accelerometer correlation. T0 budget: ≤10ms residual drift. T1 budget: ≤1ms.
+**Clock Sync (Architecture.md, "Limiti fisici che restano": multi-node sync)**: Multi-pod synchronization via LSL markers + accelerometer correlation. T0 budget: ≤10ms residual drift. T1 budget: ≤1ms.
 
 ## Development
 
@@ -369,8 +375,11 @@ software layer stays re-provable at any time via the CI gate
 
 ## Hardware Readiness (pre-purchase)
 
-The Phase 1 software side is closed: every property the smoke-kit bench would
-discover is provable in CI today. One command answers "can I order the kit?":
+The software side of Phase 1 is as far as it can go without a board: the firmware host C
+gate, replays of recorded ECG/PPG through the firmware's own code, and a simulated pod
+prove what can be proven off the bench. They do **not** prove the firmware on the real
+hardware (it has never run on a board; see `docs/hardware/READINESS_GATE.md`). One
+command answers "can I order the kit?":
 
 ```bash
 uv run python tools/pre_acquisto_gate.py
@@ -388,7 +397,7 @@ system target) are `docs/hardware/POWER_BUDGET.md`.
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
 | **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | code complete; baseline claims `partial` |
-| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software closed pre-purchase; kit orderable** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget €140; G0 closed, every gate CI-provable without hardware — see `docs/hardware/READINESS_GATE.md` and `docs/hardware/POWER_BUDGET.md`) |
+| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software ready for the first bench day; nothing verified on hardware** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget ~€140; what is and is not proven: `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`, `docs/hardware/READINESS_GATE.md`) |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |
 
