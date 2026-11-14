@@ -594,3 +594,75 @@ def test_the_loss_counter_saturates_at_255_in_the_vectors() -> None:
         if c["name"] == "loss_reported_and_saturated"
     )
     assert case["expected"]["dropped"] == 255
+
+
+def test_the_new_vectors_are_what_the_firmware_does(fw: ctypes.CDLL) -> None:
+    """Averyn tests its parsers on these bytes: the band must produce / refuse exactly them."""
+    doc = json.loads(VECTORS.read_text(encoding="utf-8"))
+
+    # stream metadata: the SDK encoder, the C encoder and the vector are one blob
+    buf = ctypes.create_string_buffer(128)
+    n = fw.synapse_stream_metadata_encode(buf, 128)
+    assert bytes(buf.raw[:n]).hex() == doc["stream_metadata"]["hex"]
+    rows = consumer.decode_stream_metadata(bytes.fromhex(doc["stream_metadata"]["hex"]))
+    assert consumer.encode_stream_metadata(rows).hex() == doc["stream_metadata"]["hex"]
+
+    # control point: every accepted write is applied, every refused one gets its error code
+    errors = json.loads(GATT_V2.read_text(encoding="utf-8"))["control_point"]["errors"]
+    for case in doc["control"]["accepted"]:
+        assert _apply(fw, bytes.fromhex(case["hex"]))[0] == 0, case["name"]
+    for case in doc["control"]["refused"]:
+        code, calls = _apply(fw, bytes.fromhex(case["hex"]))
+        assert (code, calls) == (errors[case["error"]], []), case["name"]
+        assert case["code"] == errors[case["error"]]
+
+    # the feature sequence crosses the 16-bit wrap with one record per frame
+    seq = [
+        consumer.decode_feature(bytes.fromhex(f["hex"]))["sequence"]
+        for f in doc["feature_sequence_wrap"]
+    ]
+    assert seq == [65534, 65535, 0]
+
+    # the standard heart rate: flags, 16-bit value, optional RR in 1/1024 s
+    for case in doc["heart_rate_measurement"]:
+        raw = bytes.fromhex(case["hex"])
+        assert raw[1] | raw[2] << 8 == case["bpm"]
+        assert bool(raw[0] & 0x10) == (case["rr_raw"] is not None)
+
+
+def test_the_contract_version_has_one_source() -> None:
+    """hardware.yaml names it; the JSON, the C header, the Python module and the vectors follow."""
+    import yaml
+
+    from synapse24.contracts_generated import CONSUMER_CONTRACT_VERSION
+
+    manifest = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+    version = manifest["ble"]["consumer_v2"]["version"]
+    assert version == CONSUMER_CONTRACT_VERSION
+    assert json.loads(GATT_V2.read_text(encoding="utf-8"))["version"] == version
+    assert json.loads(VECTORS.read_text(encoding="utf-8"))["contract_version"] == version
+    header = (BLE_DIR / "synapse_contract_generated.h").read_text(encoding="utf-8")
+    assert f'#define SYNAPSE_CONTRACT_CONSUMER_VERSION "{version}"' in header
+
+
+def test_gatt_v2_carries_the_research_service_uuids() -> None:
+    doc = json.loads(GATT_V2.read_text(encoding="utf-8"))["research_service"]
+    assert doc["service"] == "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c70"
+    assert set(doc["characteristics"]) == {"ecg", "ppg", "acc", "gyro", "mag", "power", "sync"}
+    assert doc["characteristics"]["ecg"].endswith("4c71")
+    assert doc["frame_contract"] == "contracts/raw_frame_v1.json"
+
+
+def test_every_vector_is_what_the_sdk_encoders_produce() -> None:
+    """A hand-edited vector file must not pass: each hex is rebuilt from its own inputs."""
+    doc = json.loads(VECTORS.read_text(encoding="utf-8"))
+    for case in doc["control"]["accepted"]:
+        assert consumer.encode_control(case["op"], case["arg"]).hex() == case["hex"], case["name"]
+    for case in doc["heart_rate_measurement"]:
+        assert consumer.encode_hr_measurement(case["bpm"], case["rr_raw"]).hex() == case["hex"]
+    for case in doc["feature_sequence_wrap"]:
+        assert consumer.encode_feature(case["values"]).hex() == case["hex"]
+    for case in doc["feature"]:
+        assert consumer.encode_feature(case["values"]).hex() == case["hex"], case["name"]
+    for case in doc["status"]:
+        assert consumer.encode_status(case["values"]).hex() == case["hex"], case["name"]

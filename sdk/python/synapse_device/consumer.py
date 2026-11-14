@@ -1,6 +1,6 @@
 """Consumer contract v2: decode/encode the feature, status, metadata and control frames.
 
-The layouts mirror ``contracts/gatt_v2.json`` (contract 2.2, generated from
+The layouts mirror ``contracts/gatt_v2.json`` (the consumer contract, generated from
 ``config/hardware.yaml``). ``tests/test_consumer_v2_parity.py`` checks this table
 against that JSON and the firmware encoder byte for byte, so the three cannot
 drift apart silently.
@@ -12,6 +12,7 @@ measurement, and consumers must not turn it into 0.
 from __future__ import annotations
 
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -30,6 +31,7 @@ __all__ = [
     "decode_feature",
     "decode_status",
     "decode_stream_metadata",
+    "encode_stream_metadata",
     "encode_control",
     "encode_feature",
     "encode_hr_measurement",
@@ -215,6 +217,28 @@ def decode_stream_metadata(blob: bytes) -> list[StreamMeta]:
             raise ConsumerCodecError(f"stream metadata: unknown unit code {unit}")
         rows.append(StreamMeta(sid, fmt, channels, _UNITS[unit], rate, scale))
     return rows
+
+
+def encode_stream_metadata(rows: Sequence[StreamMeta]) -> bytes:
+    """Build ``[count u8] + count * entry``: the inverse of :func:`decode_stream_metadata`.
+
+    The firmware builds the same bytes from its stream table
+    (``synapse_stream_metadata_encode``); ``tests/test_consumer_v2_parity.py`` compares them.
+    """
+    codes = {name: code for code, name in _UNITS.items()}
+    out = bytearray((len(rows),))
+    for row in rows:
+        if row.unit not in codes:
+            raise ConsumerCodecError(f"stream metadata: unknown unit {row.unit!r}")
+        out += _META_ENTRY.pack(
+            row.stream_id,
+            row.sample_format,
+            row.channels,
+            codes[row.unit],
+            row.rate_hz,
+            row.unit_scale,
+        )
+    return bytes(out)
 
 
 _OPCODES: Final = {"start": 1, "stop": 2, "set_feature_rate": 3, "set_time": 4}

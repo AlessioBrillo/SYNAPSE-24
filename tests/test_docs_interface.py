@@ -112,3 +112,28 @@ def test_the_security_statements_hold_in_the_application() -> None:
     finally:
         os.environ.pop("SYNAPSE_API_TOKEN", None)
         main_module._reset_services()
+
+
+def test_the_hashes_quoted_for_the_repin_are_the_files_hashes() -> None:
+    """The 2.2 -> 2.3 note quotes the first 8 and last 4 hex digits of each sha256 (LF endings).
+
+    Averyn pins these: a doc that disagrees with the files would send it to pin the wrong bytes.
+    """
+    import hashlib
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "contracts" / "AVERYN_INTERFACE.md").read_text(encoding="utf-8")
+    section = text[text.index("## Dalla 2.2 alla 2.3") :]
+    section = section[: section.index("## Regole del frame raw")]
+    files = {
+        "gatt_v2.json": "contracts/gatt_v2.json",
+        "vectors/consumer_v2.json": "contracts/vectors/consumer_v2.json",
+        "raw_frame_v1.json": "contracts/raw_frame_v1.json",
+        "vectors/raw_frame_v1.json": "contracts/vectors/raw_frame_v1.json",
+    }
+    for label, rel in files.items():
+        digest = hashlib.sha256((root / rel).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+        quoted = re.search(rf"`{re.escape(label)}` `([0-9a-f]{{8}})…([0-9a-f]{{4}})`", section)
+        assert quoted is not None, f"{label} is not quoted in the re-pin note"
+        assert (quoted.group(1), quoted.group(2)) == (digest[:8], digest[-4:]), label

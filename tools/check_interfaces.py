@@ -355,6 +355,85 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
         )
 
 
+#: Streams every copy of the UUIDs must carry (sync is optional: one copy keeps it apart).
+_CORE_STREAMS = frozenset({"ecg", "ppg", "acc", "gyro", "mag", "power"})
+_PAIR_RE = re.compile(
+    r"([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"
+)
+
+
+def _stream_uuid_pairs(source: str, text: str) -> dict[str, str]:
+    """The stream-name -> UUID pairs a source declares, normalised to ``{name: lowercase uuid}``.
+
+    Each source spells them its own way, so the extraction is per source. The pairs matter, not
+    just the presence of the strings: two characteristics swapped in one copy passed the old
+    check (every UUID was still somewhere in the file) and sent ECG frames to the PPG decoder.
+    """
+    pairs: dict[str, str] = {}
+    if source == "research_ble_client":  # RawStream.ECG: "UUID", and SYNC_CHAR_UUID = "UUID"
+        for name, uuid in re.findall(r"RawStream\.(\w+):\s*\"" + _PAIR_RE.pattern + r"\"", text):
+            pairs[name.lower()] = uuid.lower()
+        sync = re.search(r"SYNC_CHAR_UUID\s*=\s*\"" + _PAIR_RE.pattern + r"\"", text)
+        if sync:
+            pairs["sync"] = sync.group(1).lower()
+    elif source == "transport":  # CHAR_ECG = "UUID"
+        for name, uuid in re.findall(
+            r"^CHAR_(\w+)\s*=\s*\"" + _PAIR_RE.pattern + r"\"", text, re.M
+        ):
+            pairs[name.lower()] = uuid.lower()
+    elif source == "bringup":  # bringup.ble.characteristics: {ecg: "UUID", ...}
+        import yaml  # the block is read as YAML, not scraped: other sections look the same
+
+        block = ((yaml.safe_load(text) or {}).get("bringup") or {}).get("ble") or {}
+        for name, uuid in (block.get("characteristics") or {}).items():
+            if name != "service" and isinstance(uuid, str):
+                pairs[str(name).lower()] = uuid.lower()
+    return pairs
+
+
+def check_research_uuid_pairs(
+    report: Report,
+    gatt_v2: Path,
+    sources: dict[str, Path] | None = None,
+) -> None:
+    """Every hand-written copy of the research stream UUIDs carries the contract's pairs."""
+    if not gatt_v2.is_file():
+        report.fail(f"{gatt_v2} is missing: the research UUID pairs cannot be checked")
+        return
+    research = _load_json(gatt_v2).get("research_service")
+    if not research:
+        report.fail("gatt_v2.json has no research_service block: run tools/generate_contracts.py")
+        return
+    reference = {n: u.lower() for n, u in research["characteristics"].items()}
+    sources = sources or {
+        "research_ble_client": DEFAULT_ROOT
+        / "src"
+        / "synapse24"
+        / "hardware"
+        / "research_ble_client.py",
+        "transport": TRANSPORT_PY,
+        "bringup": DEFAULT_ROOT / "config" / "hardware_bringup.yaml",
+    }
+    for source, path in sources.items():
+        if not path.is_file():
+            report.fail(f"{path} is missing: its research UUID pairs cannot be checked")
+            continue
+        found = _stream_uuid_pairs(source, path.read_text(encoding="utf-8"))
+        if not found:
+            report.fail(f"{path.name}: no research stream UUIDs found (the extractor is stale)")
+            continue
+        for name, uuid in sorted(found.items()):
+            # a name the contract does not know is some other constant, not a research stream
+            if name in reference and reference[name] != uuid:
+                report.fail(
+                    f"{path.name}: stream {name!r} has UUID {uuid}, the contract says "
+                    f"{reference[name]}"
+                )
+        absent = sorted((_CORE_STREAMS & set(reference)) - set(found))
+        if absent:
+            report.fail(f"{path.name}: no UUID for the core streams {absent}")
+
+
 def check_gatt_v2_consistent(report: Report, gatt_v2: Path, gatt_v1: Path) -> None:
     """Consumer contract v2: its UUIDs reach every consumer, and v1 stays frozen."""
     if not gatt_v2.is_file():
@@ -551,6 +630,7 @@ def main(argv: list[str] | None = None) -> int:
 
     check_gatt_uuids_consistent(report, args.gatt_contract)
     check_gatt_v2_consistent(report, args.gatt_contract_v2, args.gatt_contract)
+    check_research_uuid_pairs(report, args.gatt_contract_v2)
 
     check_bleak_isolated(report)
 

@@ -171,6 +171,8 @@ pods:
 # BLE transport contract
 # ---------------------------------------------------------------------
 ble:
+  # NOTE: the v1 feature CHARACTERISTIC below is retired (since 2.3 the firmware does not register it);
+  # the service, device-config and provisioning UUIDs here are still live. See consumer_v2 for the stream.
   # Consumer feature stream (Averyn / product integration): features only,
   # no raw samples. Mirrors firmware/esp32_band/ble/ble_gatt_server.h (GATT v1).
   # Frame: [version u8][sequence u16 LE][payload...], little-endian,
@@ -184,10 +186,11 @@ ble:
     version: 1
     rate_hz: 1
     rate_max_hz: 10
-  # --- Consumer contract v2.1 (visualization-first) -----------------------------
-  # Same consumer service as v1; NEW characteristics, so v1 stays byte-for-byte
-  # frozen (contracts/gatt_v1.json, pinned by sha256 in Averyn) and a v1 client
-  # simply never sees them. The layouts below are the single source of truth:
+  # --- Consumer contract v2 (visualization-first) --------------------------------
+  # Same consumer service as v1; NEW characteristics. contracts/gatt_v1.json stays byte-for-byte
+  # as a historical record (RETIRED: no band was deployed with it, no consumer pins it, and since
+  # 2.3 the firmware no longer registers the v1 feature characteristic). The layouts below are the
+  # single source of truth:
   # tools/generate_contracts.py emits contracts/gatt_v2.json from them, the SDK
   # codec and the firmware encoders are checked against it.
   # 2.1 amends 2.0 BEFORE anyone pinned it (the firmware never ran, Averyn pins v1):
@@ -198,6 +201,11 @@ ble:
   # a sentinel is NEVER a measurement, consumers map it to null (not 0).
   # Per field, `unit` + `scale`: physical value = wire integer * scale, in `unit`.
   consumer_v2:
+    # THE contract version, one place: the generator writes it into gatt_v2.json, the C header and
+    # the Python module, and the golden vectors carry it. 2.3 = the v1 characteristic is gone,
+    # LEAD_OFF / CLOCK_WRAPPED are live, the research-service UUIDs are in gatt_v2.json, POWER's
+    # battery channel is -1 when the rail is not a cell, new golden vectors.
+    version: "2.3"
     feature_uuid: "23443aaf-382c-4475-baf8-ea3c59ba1a82"
     status_uuid: "fea798da-b114-47c9-8ec4-265bb358e741"
     stream_metadata_uuid: "07458f36-0a8a-4ad0-8513-41279bb5d981"
@@ -321,9 +329,10 @@ raw_frame:
   #  10  sample_format
   #  11  dropped (samples lost for this stream since the previous transmitted
   #      frame, saturating at 255; 0 = no loss)
-  # The sequence number is consumed when a frame is BUILT, not when the
-  # notification is accepted, so a frame the BLE stack refuses leaves a hole
-  # the host's gap detection can see.
+  # The sequence number is consumed only when the BLE stack ACCEPTS the notification. A
+  # refused attempt keeps its samples queued and retries with the same number, so a hole in
+  # the host's sequence is a frame that left the band and never arrived; data the band had to
+  # discard travels in the `dropped` byte of the next frame.
   header_fields:
     version: 0
     stream_id: 1
