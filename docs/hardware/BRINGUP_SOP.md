@@ -71,7 +71,9 @@ alcohol; a wet electrode is the difference between a clean QRS and noise.
 > "lead-off" for ever.) The ECG stream is never gated on it. After a real
 > lead-off (≥ 1 s) followed by steady contact the driver measures the ECG bias
 > again, which takes one second without ECG samples (reported as a gap in
-> `dropped`). Or set `gpio_drdy: -1`.
+> `dropped`). With the pin unwired nothing ever flags a lead-off, so that re-measure never
+> happens either: start the band with the electrodes already applied (the bias is measured
+> in the first second). Or set `gpio_drdy: -1`.
 > It used to be GPIO 4, which is also the battery-divider input: do not share them.
 
 ## 1. Build and flash
@@ -300,6 +302,7 @@ from the generated contract header
 | `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups |
 | `[band-core]` missing from the boot log | Wrong build variant | Rebuild with `--variant band-core` |
 | ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_drdy: -1` |
+| ECG flat or stuck at a rail (about +1.3 / −1.5 mV) from the start | The band started with the electrodes off or still settling, so the resting level was measured from nothing | Apply the electrodes and restart the band; with LO+ wired, a long lead-off followed by steady contact re-measures it by itself |
 | Research service absent | `RESEARCH_SERVICE` disabled or wrong firmware | Check `sdkconfig.defaults.core` |
 | HR reads 0 or 200+ bpm | Electrode contact / motion | Clean skin, snug electrodes, hold still |
 | Dropped frames > 0 | BLE budget exceeded | Reduce the streams you subscribe to |

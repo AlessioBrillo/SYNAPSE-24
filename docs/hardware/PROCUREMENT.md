@@ -76,7 +76,8 @@ weeks lead time).
 
 TMP117, MAX-M10S GPS, soldering gear, oscilloscope, a Raspberry Pi. The
 instrumentation you already own (bench PSU, multimeter, scope) covers every
-measurement in the SOP below. (A multimeter with an mA range and a USB power meter are the only instruments the bring-up needs that this list does not buy; see `FIRST_HARDWARE_DAY.md`.) (A *second* ESP32 **is** included — see row 10 —
+measurement in the SOP below; if you own none of it, `FIRST_HARDWARE_DAY.md` lists the cheap
+substitutes (a multimeter with an mA range, a USB power meter). (A *second* ESP32 **is** included — see row 10 —
 because the sync criterion that gates the Cerelog order needs two pods.)
 
 ---

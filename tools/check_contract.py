@@ -184,8 +184,8 @@ def check_i2c_pins(hw: dict, report: Report) -> None:
 
     doc = BRINGUP_DOC.read_text(encoding="utf-8") if BRINGUP_DOC.is_file() else ""
     report.check(
-        f"GPIO {sda} (SDA)" in doc,
-        f"docs/hardware/BRINGUP_SOP.md does not document I2C SDA on GPIO {sda}",
+        f"GPIO {sda} (SDA)" in doc and f"{scl} (SCL)" in doc,
+        f"docs/hardware/BRINGUP_SOP.md does not document I2C SDA on GPIO {sda} and SCL on GPIO {scl}",
     )
 
 
