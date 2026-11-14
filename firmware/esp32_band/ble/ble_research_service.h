@@ -57,10 +57,10 @@ extern "C" {
 #define SYNAPSE_SYNC_RESPONSE_SIZE 20u
 
 /** Ring depth per stream, in samples. Sized so the SLOWEST stream's flush
- *  threshold fits: ECG flushes at 50 samples (100 ms at 500 Hz), so a 32-deep
- *  ring overflowed before the frame ever left the pod and the samples vanished
- *  without a sequence gap the host could see. 64 keeps ~128 ms of ECG buffer
- *  (3 x 8 streams x 64 x 4 B = 6 kB, trivial in internal RAM). */
+ *  threshold fits: ECG flushes at 64 samples (128 ms at 500 Hz), so a 32-deep
+ *  ring overflowed before the frame ever left the pod and the samples vanished.
+ *  128 keeps ~256 ms of ECG buffer. Cost: 8 stream slots x 128 samples x 3 channels x 4 B
+ *  (rings) + 8 x 128 x 4 B (stamps) = ~16 kB of internal RAM. */
 #define SYNAPSE_RESEARCH_RING_DEPTH 128u
 #define SYNAPSE_RESEARCH_MAX_CHANNELS 3u
 

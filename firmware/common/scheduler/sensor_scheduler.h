@@ -9,15 +9,29 @@
 #include "freertos/semphr.h"
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define SENSOR_SCHEDULER_COORDINATOR_PERIOD_MS 5
-#define SENSOR_SCHEDULER_MAX_SENSORS 4
+// Sensors the band polls: ECG, PPG, IMU (sensor_type_t 0..2). The in-ear EEG type (3) belongs to
+// another pod, and its unused slot cost 16 KB of internal RAM (256 samples x 64 B).
+#define SENSOR_SCHEDULER_MAX_SENSORS 3
 #define SENSOR_SCHEDULER_RING_BUFFER_SIZE 256
-#define SENSOR_SCHEDULER_BLE_QUEUE_SIZE 32
+// Samples between the scheduler and the main loop, which drains 64 per 10 ms tick but also runs the
+// power and quality tick. 32 (and the 64 that was used) was ~100 ms of production at 600 samples/s:
+// one slow I2C timeout in that tick overflowed it. 256 = ~430 ms.
+#define SENSOR_SCHEDULER_BLE_QUEUE_SIZE 256
+
+// Core the sensor tasks and the coordinator run on. NimBLE (host and controller), esp_timer and the
+// main task sit on core 0; sharing it with them added scheduling jitter to the 500 Hz ECG.
+#if defined(CONFIG_FREERTOS_UNICORE)
+#define SENSOR_TASK_CORE 0  // a single-core build has only core 0
+#else
+#define SENSOR_TASK_CORE 1
+#endif
 
 // Task priorities (FreeRTOS) - higher number = higher priority
 // ECG at 500Hz needs highest priority for hard real-time
@@ -33,6 +47,14 @@ typedef enum {
     SENSOR_TYPE_EEG_IN_EAR = 3,
     SENSOR_TYPE_MAX = 4
 } sensor_type_t;
+
+// The arrays of the scheduler are indexed by sensor_type_t. A polled type outside them would be
+// rejected at run time (silently, no data): make it a build error instead.
+#ifdef __cplusplus
+static_assert(SENSOR_TYPE_IMU < SENSOR_SCHEDULER_MAX_SENSORS, "polled sensor types must fit the scheduler arrays");
+#else
+_Static_assert(SENSOR_TYPE_IMU < SENSOR_SCHEDULER_MAX_SENSORS, "polled sensor types must fit the scheduler arrays");
+#endif
 typedef struct {
     sensor_type_t type;
     int64_t timestamp_us;       // esp_timer_get_time() at sample acquisition

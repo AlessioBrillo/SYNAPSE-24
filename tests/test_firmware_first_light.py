@@ -63,7 +63,7 @@ def test_the_scheduler_tolerates_a_registration_without_a_task_handle() -> None:
 
 def test_the_band_spawns_one_task_per_sensor_and_publishes_it() -> None:
     src = _src(SENSORS)
-    assert "xTaskCreate(sensor_task_fn" in src
+    assert "xTaskCreatePinnedToCore(sensor_task_fn" in src
     assert "sensor_scheduler_set_task(" in src
     # the task reads its config for as long as it lives: it must not be a local
     assert re.search(r"^static sensor_config_t s_sensor_cfg\[", src, re.M)

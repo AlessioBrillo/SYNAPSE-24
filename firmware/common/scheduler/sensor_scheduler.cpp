@@ -62,9 +62,9 @@ esp_err_t sensor_scheduler_init(sensor_scheduler_t* scheduler, QueueHandle_t ble
     g_sensor_scheduler_ptr = scheduler;
 
     // Create coordinator task (drains ring buffers -> BLE TX queue on timer tick).
-    BaseType_t created = xTaskCreate(coordinator_task_fn, "sched_coord", 4096,
-                                     scheduler, SENSOR_TASK_PRIO_COORDINATOR,
-                                     &scheduler->coordinator_task);
+    BaseType_t created = xTaskCreatePinnedToCore(coordinator_task_fn, "sched_coord", 4096,
+                                                 scheduler, SENSOR_TASK_PRIO_COORDINATOR,
+                                                 &scheduler->coordinator_task, SENSOR_TASK_CORE);
     if (created != pdPASS || scheduler->coordinator_task == NULL) {
         ESP_LOGE(TAG, "Failed to create coordinator task");
         for (int i = 0; i < SENSOR_SCHEDULER_MAX_SENSORS; i++) {
