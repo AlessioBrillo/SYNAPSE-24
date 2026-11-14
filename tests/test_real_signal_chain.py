@@ -123,11 +123,14 @@ def test_the_first_second_is_calibration_and_the_beats_are_scored_on_the_shifted
     assert after["sensitivity"] > 0.9
 
 
-def test_the_midrail_follows_a_slow_drift_like_the_driver() -> None:
+def test_the_midrail_is_frozen_so_a_slow_drift_reaches_the_wire() -> None:
     t = np.arange(0, 40, 1 / 360)
-    drift_mv = 0.4 * t / 40  # +0.4 mV over 40 s, on top of a flat trace: the driver tracks it out
+    drift_mv = 0.4 * t / 40  # +0.4 mV over 40 s, on top of a flat trace: the driver keeps it
     wire, _ = rsr.ecg_to_wire_uv(drift_mv, 360)
-    assert abs(float(wire[-1])) < 0.4 * 1000 * 0.5, "a static mid-rail would leave the whole 400 uV"
+    # a tracking mid-rail used to remove most of it; the wire now carries the whole ramp. Read it
+    # mid-recording (the resampler distorts the last samples): t = 1 s + i/500 -> 205 uV, minus the
+    # 5 uV the calibration second already held.
+    assert abs(float(wire[len(wire) // 2]) - 200.0) < 10
 
 
 def test_a_recording_too_short_to_score_is_refused_with_a_message() -> None:

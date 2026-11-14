@@ -9,3 +9,7 @@ int64_t host_ppg_batch_ts(int64_t poll_us, uint32_t count, uint32_t index, uint3
     return ppg_batch_timestamp_us(poll_us, count, index, period_us);
 }
 uint32_t host_ppg_batch_max(void) { return PPG_BATCH_MAX; }
+int64_t host_ppg_batch_monotonic(int64_t ts_us, int64_t last_us)
+{
+    return ppg_batch_monotonic_us(ts_us, last_us);
+}

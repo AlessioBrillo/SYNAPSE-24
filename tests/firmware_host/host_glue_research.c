@@ -212,12 +212,22 @@ int synapse_host_smoke_main(void)
 #define BENCH_SUBSCRIBE_PATH 0x10  /* route enable through the GATT subscribe
                                       handler instead of set_stream_enabled */
 
+/* The scheduler numbers every sample of a sensor, so the bench does too: a sample with a
+ * constant sequence would read as a hole of 65535 samples to the service. */
+static uint16_t g_bench_seq[4];
+
+static uint16_t bench_next_seq(int type)
+{
+    return g_bench_seq[type]++;
+}
+
 static void bench_submit_ecg(int n)
 {
     for (int i = 0; i < n; i++) {
         sensor_sample_t s;
         memset(&s, 0, sizeof(s));
         s.type = SENSOR_TYPE_ECG;
+        s.sequence = bench_next_seq(SENSOR_TYPE_ECG);
         s.timestamp_us = esp_timer_get_time();
         s.data.ecg.voltage_mv = 0.5f + 0.1f * (float)i;
         synapse_research_service_submit(&s);
@@ -230,6 +240,7 @@ static void bench_submit_ppg(int n)
         sensor_sample_t s;
         memset(&s, 0, sizeof(s));
         s.type = SENSOR_TYPE_PPG;
+        s.sequence = bench_next_seq(SENSOR_TYPE_PPG);
         s.timestamp_us = esp_timer_get_time();
         s.data.ppg.red = 90000.0f + (float)i;
         s.data.ppg.ir = 105000.0f + (float)i;
@@ -243,6 +254,7 @@ static void bench_submit_imu(int n)
         sensor_sample_t s;
         memset(&s, 0, sizeof(s));
         s.type = SENSOR_TYPE_IMU;
+        s.sequence = bench_next_seq(SENSOR_TYPE_IMU);
         s.timestamp_us = esp_timer_get_time();
         s.data.imu.ax = 0.1f; s.data.imu.ay = 0.2f; s.data.imu.az = 9.81f;
         s.data.imu.gx = 0.01f; s.data.imu.gy = 0.02f; s.data.imu.gz = 0.03f;
@@ -262,6 +274,7 @@ int synapse_host_bench_reset(void)
     synapse_research_service_set_transmitting(true);
     synapse_research_service_reset_counters();
     g_capture_count = 0;
+    memset(g_bench_seq, 0, sizeof(g_bench_seq));
     /* Fault-injection knobs must not leak between tests: a knob left on here
      * would make an unrelated test chase a phantom BLE failure. */
     g_bench_mtu = 247;
@@ -351,11 +364,32 @@ void synapse_host_bench_submit_at(int type, int64_t timestamp_us)
     sensor_sample_t s;
     memset(&s, 0, sizeof(s));
     s.type = (sensor_type_t)type;
+    s.sequence = bench_next_seq(type);
     s.timestamp_us = timestamp_us;
     s.data.ecg.voltage_mv = 0.5f;
     s.data.ppg.red = 90000.0f;
     s.data.ppg.ir = 105000.0f;
     synapse_research_service_submit(&s);
+}
+
+/** Submit one sample of @p type whose scheduler sequence skips @p skip samples: the samples
+ *  the scheduler numbered and then lost (full ring, full queue, FIFO overflow). */
+void synapse_host_bench_submit_after_loss(int type, int64_t timestamp_us, uint16_t skip)
+{
+    g_bench_seq[type] = (uint16_t)(g_bench_seq[type] + skip);
+    synapse_host_bench_submit_at(type, timestamp_us);
+}
+
+/** Submit one sample with an explicit scheduler sequence (restart / reorder cases). */
+void synapse_host_bench_submit_seq(int type, int64_t timestamp_us, uint16_t sequence)
+{
+    g_bench_seq[type] = sequence;
+    synapse_host_bench_submit_at(type, timestamp_us);
+}
+
+uint32_t synapse_host_bench_upstream_lost(void)
+{
+    return synapse_research_service_upstream_lost();
 }
 
 uint32_t synapse_host_bench_stale_samples(void)

@@ -246,6 +246,20 @@ def _bind_bench(service: ctypes.CDLL) -> None:
     service.synapse_host_bench_submit_at.argtypes = [ctypes.c_int, ctypes.c_int64]
     service.synapse_host_bench_stale_samples.restype = ctypes.c_uint32
     service.synapse_host_bench_stale_samples.argtypes = []
+    service.synapse_host_bench_submit_after_loss.restype = None
+    service.synapse_host_bench_submit_after_loss.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int64,
+        ctypes.c_uint16,
+    ]
+    service.synapse_host_bench_submit_seq.restype = None
+    service.synapse_host_bench_submit_seq.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int64,
+        ctypes.c_uint16,
+    ]
+    service.synapse_host_bench_upstream_lost.restype = ctypes.c_uint32
+    service.synapse_host_bench_upstream_lost.argtypes = []
     service.synapse_host_bench_open.restype = None
     service.synapse_host_bench_open.argtypes = []
     service.synapse_host_bench_epoch_wraps.restype = ctypes.c_uint32
@@ -721,3 +735,71 @@ def test_one_counter_wrap_is_counted_once_however_many_streams_cross_it(
     for sensor in (_SENSOR_ECG, _SENSOR_PPG):  # both streams cross the same 2**32 boundary
         service.synapse_host_bench_submit_at(sensor, above)
     assert service.synapse_host_bench_epoch_wraps() == 1
+
+
+# ---------------------------------------------------------------------------
+# MVP-1.9 W1: samples lost BEFORE the service (scheduler ring/queue, PPG FIFO) reach `dropped`.
+# ---------------------------------------------------------------------------
+
+
+def _ecg_run(service: ctypes.CDLL, n: int, t0: int) -> None:
+    for i in range(n):
+        service.synapse_host_bench_submit_at(_SENSOR_ECG, t0 + i * 2000)
+
+
+def _ecg_frames(service: ctypes.CDLL) -> list[tuple[RawHeader, np.ndarray]]:
+    return [f for f in _decoded_frames(service) if f[0].stream == RawStream.ECG]
+
+
+def test_a_hole_in_the_sensor_sequence_is_reported_in_the_next_frame(service: ctypes.CDLL) -> None:
+    """The scheduler numbers samples before it can lose them: a hole is data the host never gets."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    _ecg_run(service, 10, 1_000_000)
+    service.synapse_host_bench_submit_after_loss(_SENSOR_ECG, 1_000_000 + 25 * 2000, 15)
+    _ecg_run(service, 63, 1_000_000 + 26 * 2000)  # enough to flush the frame after the hole
+
+    frames = _ecg_frames(service)
+    assert [h.dropped for h, _ in frames] == [0, 15], "the 15 lost samples never reached `dropped`"
+    # The hole sits on a frame boundary: the pre-hole samples left alone, and the next
+    # frame starts at the first surviving sample's own stamp.
+    assert frames[0][1].size == 10
+    assert frames[1][0].timestamp_us == (1_000_000 + 25 * 2000) & 0xFFFFFFFF
+    assert service.synapse_host_bench_upstream_lost() == 15
+
+
+def test_a_contiguous_sequence_reports_no_loss(service: ctypes.CDLL) -> None:
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    _ecg_run(service, 128, 1_000_000)
+    assert all(h.dropped == 0 for h, _ in _ecg_frames(service))
+    assert service.synapse_host_bench_upstream_lost() == 0
+
+
+def test_a_sequence_that_wraps_or_restarts_is_not_a_loss(service: ctypes.CDLL) -> None:
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()
+    service.synapse_host_bench_submit_seq(_SENSOR_ECG, 1_000_000, 0xFFFE)
+    service.synapse_host_bench_submit_seq(_SENSOR_ECG, 1_002_000, 0xFFFF)
+    service.synapse_host_bench_submit_seq(_SENSOR_ECG, 1_004_000, 0)  # u16 wrap
+    service.synapse_host_bench_submit_seq(_SENSOR_ECG, 1_006_000, 0)  # repeated
+    service.synapse_host_bench_submit_seq(_SENSOR_ECG, 1_008_000, 0x9000)  # restart far ahead
+    assert service.synapse_host_bench_upstream_lost() == 0
+
+
+def test_a_loss_on_a_stream_nobody_subscribed_is_not_reported(service: ctypes.CDLL) -> None:
+    """No subscriber, no data to lose: the hole must not be charged to a later subscription."""
+    _bind_bench(service)
+    service.synapse_host_bench_reset()
+    service.synapse_host_bench_open()  # ECG and PPG only
+    service.synapse_host_bench_submit_at(_SENSOR_PPG, 1_000_000)
+    service.synapse_host_bench_submit_after_loss(_SENSOR_PPG, 1_050_000, 7)
+    assert service.synapse_host_bench_upstream_lost() == 7  # counted for the diagnostics
+    # ...but a stream that is not subscribed takes no `dropped`: the IMU streams here.
+    service.synapse_host_bench_submit_after_loss(2, 1_100_000, 3)
+    service.synapse_host_bench_submit_after_loss(2, 1_110_000, 3)
+    imu = [h for h, _ in _decoded_frames(service) if h.stream in (RawStream.ACC, RawStream.GYRO)]
+    assert imu == []

@@ -255,6 +255,7 @@ esp_err_t synapse_sensors_init(void) {
         .init = ppg_init_wrap,
         .read = ppg_read_wrap,
         .has_more = ppg_max30102_has_more,
+        .take_lost = ppg_max30102_take_lost,
         .deinit = ppg_deinit_wrap,
         .user_ctx = &g_sensors.ppg_config,
         .task_handle = NULL

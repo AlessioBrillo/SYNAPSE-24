@@ -75,6 +75,10 @@ typedef void (*sensor_deinit_fn_t)(void* user_ctx);
 // Optional: true when the last read() left more ready samples (a FIFO burst), so the task
 // reads again at once instead of waiting for the next period.
 typedef bool (*sensor_has_more_fn_t)(void* user_ctx);
+// Optional: samples the driver lost BEFORE it could hand them over (a FIFO that overflowed)
+// since the previous call; the call resets that count. The scheduler skips that many sequence
+// numbers, so the loss shows up as a hole the research service reports in the `dropped` byte.
+typedef uint32_t (*sensor_take_lost_fn_t)(void* user_ctx);
 
 typedef struct {
     sensor_type_t type;
@@ -86,6 +90,7 @@ typedef struct {
     void* user_ctx;
     TaskHandle_t* task_handle;
     sensor_has_more_fn_t has_more;  // optional, see above
+    sensor_take_lost_fn_t take_lost;  // optional, see above
 } sensor_config_t;
 
 esp_err_t sensor_scheduler_init(sensor_scheduler_t* scheduler, QueueHandle_t ble_tx_queue);

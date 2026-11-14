@@ -140,6 +140,13 @@ typedef struct {
      * later ECG sample is older than "the last sample of any stream" without
      * being stale. Only a sample older than its own stream's last is stale. */
     int64_t last_sample_us[4];
+    /* The scheduler numbers every sample of a sensor before it can be lost (full ring, full
+     * queue, PPG FIFO overflow, stale), so a hole in `sequence` is data that never reached
+     * this service. It is turned into the frame's `dropped` byte; without this the frame
+     * sequence stayed contiguous and the host laid every later sample on the wrong time. */
+    uint16_t next_sequence[4];         /**< sequence expected from the next sample of a sensor */
+    bool sequence_valid[4];            /**< next_sequence is meaningful (a first sample was seen) */
+    uint32_t upstream_lost;            /**< samples lost before this service (sequence holes) */
     uint32_t stale_samples;            /**< samples older than their own stream's last */
     int64_t newest_sample_us;          /**< newest timestamp of any stream: counts each wrap once */
     synapse_research_stream_t streams[8];
@@ -245,6 +252,9 @@ uint32_t synapse_research_service_ring_overflow(void);
 
 /** @brief Samples rejected for going backwards in their own stream (diagnostics). */
 uint32_t synapse_research_service_stale_samples(void);
+
+/** Samples lost before the service saw them (holes in the sensors' own sequence). */
+uint32_t synapse_research_service_upstream_lost(void);
 
 /** @brief Wraps of the 32-bit microsecond counter seen so far (one per wrap, not per stream). */
 uint32_t synapse_research_service_epoch_wraps(void);

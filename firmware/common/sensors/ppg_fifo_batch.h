@@ -37,4 +37,16 @@ static inline int64_t ppg_batch_timestamp_us(int64_t poll_us, uint32_t count, ui
     return poll_us - (int64_t)(count - 1u - index) * (int64_t)period_us;
 }
 
+/**
+ * Timestamp that never steps back: a burst is stamped backwards from the poll time, so after a
+ * poll that came earlier than one sensor period the oldest sample of the new burst lands before
+ * the newest of the previous one. The research service refuses such a sample as stale, which
+ * loses real data. Moving it to just after @p last_us keeps the order (the error is below one
+ * sensor period, and the newest sample keeps the poll time).
+ */
+static inline int64_t ppg_batch_monotonic_us(int64_t ts_us, int64_t last_us)
+{
+    return ts_us > last_us ? ts_us : last_us + 1;
+}
+
 #endif /* PPG_FIFO_BATCH_H */

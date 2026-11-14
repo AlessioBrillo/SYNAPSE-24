@@ -68,10 +68,12 @@ def test_the_ecg_driver_removes_the_ad8232_bias_before_dividing_by_the_gain() ->
     # the bias is measured over the first samples; those reads deliver nothing
     assert "ECG_MIDRAIL_CAL_SAMPLES" in body
     assert "return ESP_ERR_NOT_FOUND" in body
-    # an explicit bias skips the calibration and the tracking
+    # an explicit bias skips the calibration
     assert "config->midrail_mv > 0.0f" in _code(ECG)
-    # otherwise the bias keeps being tracked: a start-up with the electrodes off recovers
-    assert "ECG_MIDRAIL_TRACK_ALPHA" in body
+    # the bias is frozen after that: tracking it was a 0.016 Hz high-pass on a "raw" stream
+    assert "ECG_MIDRAIL_TRACK_ALPHA" not in _code(ECG)
+    assert body.count("s_ctx.midrail_mv =") == 1, "only the calibration may set the bias"
+    assert "midrail_mv +=" not in body
 
 
 def test_the_ecg_stream_is_not_gated_on_the_lead_off_pin() -> None:

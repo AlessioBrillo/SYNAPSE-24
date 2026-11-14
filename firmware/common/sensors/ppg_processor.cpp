@@ -46,7 +46,7 @@ static esp_err_t compute_features(const float* ir_buffer, size_t count, int64_t 
 }
 
 bool ppg_processor_rate_nominal(void) {
-    // The motion gate drops PPG to 16 Hz while moving; the DSP is designed for 50 Hz.
+    // The DSP is designed for 50 Hz: a window built from samples at another poll rate is time-warped.
     return !g_sensor_scheduler_ptr ||
            g_sensor_scheduler_ptr->rates_hz[SENSOR_TYPE_PPG] == PPG_PROCESSOR_SAMPLE_RATE_HZ;
 }

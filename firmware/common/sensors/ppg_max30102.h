@@ -43,6 +43,8 @@ bool ppg_max30102_has_more(void* user_ctx);
 // FIFO samples lost: overwritten while the poll stalled (lower bound), or taken out of the FIFO
 // by a burst read that failed half way.
 uint32_t ppg_max30102_skipped_samples(void);
+/** Samples lost since the last call (the call resets it); the scheduler turns them into a sequence hole. */
+uint32_t ppg_max30102_take_lost(void* user_ctx);
 
 // Get latest PPG SQI result for motion gate (Architecture.md §74)
 esp_err_t ppg_max30102_get_sqi(ppg_sqi_result_t* result);

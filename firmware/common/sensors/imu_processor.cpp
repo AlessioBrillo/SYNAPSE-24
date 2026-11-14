@@ -295,12 +295,11 @@ esp_err_t imu_processor_process_sample(float ax, float ay, float az,
         // (motion_intensity includes gravity, so it is ~1 g at rest and can never be < 0.05.)
         features.is_stationary = (dyn_acc_g < 0.05f) && (tilt_var < 2.0f);
 
-        // Motion-Gated Adaptive Acquisition: Adjust PPG sampling rate based on motion
-        if (g_sensor_scheduler_ptr) {
-            uint32_t new_rate = features.is_stationary ? PPG_PROCESSOR_SAMPLE_RATE_HZ : 16;  // Drop to 16Hz if moving, keep nominal rate if stationary
-            sensor_scheduler_set_rate(g_sensor_scheduler_ptr, SENSOR_TYPE_PPG, new_rate);
-        }
-        
+        // The PPG poll rate is NOT lowered while moving: the MAX30102 keeps sampling at its own
+        // rate, so a slower poll saved no power and only turned every poll into a bigger burst of
+        // reconstructed timestamps. The raw stream stays at the declared rate; the on-device DSP
+        // marks motion through the SQI (`motion_artifact`).
+
         s_ctx.last_features = features;
         if (features_out) *features_out = features;
         
