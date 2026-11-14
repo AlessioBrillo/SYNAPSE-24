@@ -824,7 +824,10 @@ esp_err_t synapse_ble_gatt_push_heart_rate(uint16_t hr_bpm) {
     // frame, where the phone masks it; a generic HR client would receive it unmasked.
     if (now_ms - s_last_hr_ms < 1000u) return ESP_OK;
     s_last_hr_ms = now_ms;
-    (void)synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF);
+    const esp_err_t rc = synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF);
+    // Not subscribed is not a failure (the value is recorded for a READ); a refused notification
+    // is retried on the next call instead of a second later.
+    if (rc == ESP_ERR_NO_MEM || rc == ESP_FAIL) s_last_hr_ms = now_ms - 1000u;
     return ESP_OK;
 }
 

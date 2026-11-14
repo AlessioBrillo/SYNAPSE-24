@@ -181,3 +181,18 @@ def test_the_energy_reserve_comes_from_the_configuration() -> None:
     power = _text(BAND / "power" / "synapse_power.c")
     assert "300.0f" not in power
     assert power.count("hw_cfg.reserve_mah") == 3
+
+
+def test_the_contact_history_is_kept_while_the_first_bias_is_measured() -> None:
+    read = _body(_text(COMMON / "sensors" / "ecg_ad8232.cpp"), "esp_err_t ecg_ad8232_read(")
+    update = read.index("ecg_contact_update(")
+    first_bias = read.index("if (!s_ctx.midrail_ready) {")
+    assert update < first_bias, "electrodes off through the start-up second must be remembered"
+    assert "s_ctx.midrail_ready &&" not in read[update - 80 : update + 200]
+
+
+def test_a_refused_heart_rate_notification_is_retried_without_waiting_a_second() -> None:
+    code = _text(BAND / "ble" / "ble_gatt_server.c")
+    push = _body(code, "esp_err_t synapse_ble_gatt_push_heart_rate(")
+    assert "rc == ESP_ERR_NO_MEM || rc == ESP_FAIL" in push
+    assert "s_last_hr_ms = now_ms - 1000u" in push

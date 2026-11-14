@@ -136,8 +136,11 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
     // Lead-off is reported, not used to gate the samples: gating on it would silence the stream
     // whenever the pin misreports. It only decides when the frozen bias is measured again: after
     // a real lead-off, once the electrodes are on and steady (an explicit midrail_mv is trusted).
-    if (s_ctx.config.midrail_mv <= 0.0f && s_ctx.midrail_ready &&
-        ecg_contact_update(&s_ctx.contact, s_ctx.lead_off_detected)) {
+    // The history is kept while the first bias is being measured too: electrodes that were off
+    // for the whole start-up second leave a bias taken from nothing, and the contact that follows
+    // must be able to correct it (and, if it comes during that second, restart it).
+    if (ecg_contact_update(&s_ctx.contact, s_ctx.lead_off_detected) &&
+        s_ctx.config.midrail_mv <= 0.0f) {
         s_ctx.midrail_ready = false;
         s_ctx.cal_n = 0;
         s_ctx.cal_sum_mv = 0.0;
