@@ -185,6 +185,11 @@ uint8_t synapse_sensors_health_mask(void) {
     return s_sensor_health;
 }
 
+bool synapse_sensors_ecg_lead_off(void) {
+    // Only meaningful while the ECG initialised; otherwise nothing is measured and nothing is flagged.
+    return (s_sensor_health & (1u << SENSOR_TYPE_ECG)) && ecg_ad8232_is_lead_off(NULL);
+}
+
 uint32_t synapse_sensors_ppg_skipped(void) {
     return ppg_max30102_skipped_samples();
 }
@@ -241,6 +246,7 @@ esp_err_t synapse_sensors_init(void) {
         .sampling_rate_hz = 500,
         .init = ecg_init_wrap,
         .read = ecg_read_wrap,
+        .take_lost = ecg_ad8232_take_lost,
         .deinit = ecg_deinit_wrap,
         .user_ctx = &g_sensors.ecg_config,
         .task_handle = NULL

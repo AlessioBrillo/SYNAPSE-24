@@ -65,7 +65,7 @@ def test_the_phone_can_still_set_the_clock_and_pause_the_raw_streams_without_pai
 
 
 def test_nothing_that_notifies_can_be_written() -> None:
-    for symbol in ("FEAT2_UUID", "STATUS_UUID", "FEAT_UUID"):
+    for symbol in ("FEAT2_UUID", "STATUS_UUID"):
         assert "BLE_GATT_CHR_F_WRITE" not in _flags(symbol), symbol
 
 

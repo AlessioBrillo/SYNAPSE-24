@@ -205,9 +205,11 @@ ble:
     feature_rate_hz: 1
     feature_rate_max_hz: 5
     # ONE definition of the bits, used by the feature frame AND the status record.
-    # lead_off and clock_wrapped are reserved (always 0) until the lead-off input is
-    # trustworthy and t_dev_ms wraps. `charging` is meaningful only when the POWER bit
-    # of sensor_health is set; otherwise the band does not know and the bit is 0.
+    # lead_off: the AD8232 LO+ input is asserted (an electrode is off); 0 when the pin is not
+    # wired (gpio_drdy < 0) or the ECG did not initialise, so 0 is "not flagged", not "contact
+    # verified". clock_wrapped: t_dev_ms (uptime in ms, u32) has wrapped since boot (49.7 days).
+    # `charging` is meaningful only when the POWER bit of sensor_health is set; otherwise the
+    # band does not know and the bit is 0.
     flags: {charging: 0, lead_off: 1, transmitting: 2, clock_wrapped: 3}
     sensor_health_bits: {ecg: 0, ppg: 1, imu: 2, temp: 3, power: 4}   # set = the sensor initialised
     stress_levels: {baseline: 0, stress: 1, artifact: 2, unknown: 3}   # 255 (na) = the model did not run

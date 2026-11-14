@@ -29,14 +29,11 @@
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_connected = false;
-static bool g_feat_subscribed = false;
 static bool g_prov_subscribed = false;
-static uint8_t g_feat_seq = 0;
 static uint16_t g_mtu = 23;
 
 // Value handles are filled by NimBLE (val_handle) when the host starts the GATT
 // server; they are 0 until then. ble_gatts_find_chr() returns an rc, not a handle.
-static uint16_t s_feat_handle = 0;
 static uint16_t s_prov_handle = 0;
 static uint16_t s_hr_handle = 0;
 static uint16_t s_batt_handle = 0;
@@ -63,9 +60,6 @@ static uint16_t s_cfg_len = 0;
 // Service: f9e08ffd-3d34-441f-97a6-1bf0958123f1
 static const ble_uuid128_t SYN_SVC_UUID =
     SYNAPSE_CONTRACT_UUID_CONSUMER_SERVICE_INIT;
-// Feature stream: db4307e5-6cb3-4152-a0e2-81c3921168e9
-static const ble_uuid128_t FEAT_UUID =
-    SYNAPSE_CONTRACT_UUID_CONSUMER_FEATURE_INIT;
 // Device config: bf68d647-0d02-479a-8d75-7964a51f332f
 static const ble_uuid128_t CFG_UUID =
     SYNAPSE_CONTRACT_UUID_CONSUMER_DEVICE_CONFIG_INIT;
@@ -95,12 +89,6 @@ static bool s_mtu_warned = false;  // one warning per connection when the MTU ca
 static bool s_batt_charging = false;
 
 // --- characteristic access callbacks -----------------------------------------
-
-// Feature stream: notify-only, never read.
-static int feat_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
-    (void)conn; (void)attr; (void)arg;
-    return BLE_ATT_ERR_UNLIKELY;
-}
 
 // --- consumer contract v2 ----------------------------------------------------------------
 
@@ -429,12 +417,6 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
         .uuid = &SYN_SVC_UUID.u,
         .characteristics = (struct ble_gatt_chr_def[]){
             {
-                .uuid = &FEAT_UUID.u,
-                .access_cb = feat_access,
-                .val_handle = &s_feat_handle,
-                .flags = BLE_GATT_CHR_F_NOTIFY,
-            },
-            {
                 .uuid = &CFG_UUID.u,
                 .access_cb = cfg_access,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC,
@@ -478,6 +460,33 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
 
 // --- GAP -----------------------------------------------------------------------
 
+/**
+ * Ask the central for a link that carries the raw streams: a short connection interval, the
+ * largest data length (251 B PDUs, so one 244 B notification is one packet) and the 2M PHY.
+ * These are REQUESTS: the phone may refuse any of them (Android in the background, iOS limits),
+ * and the band then works on what it got; a refusal is logged, never an error. The ATT MTU is
+ * negotiated separately above.
+ */
+static void tune_link(uint16_t conn_handle) {
+    struct ble_gap_upd_params params = {
+        .itvl_min = 12,              // 15 ms (units of 1.25 ms)
+        .itvl_max = 24,              // 30 ms
+        .latency = 0,                // no skipped events: the streams are continuous
+        .supervision_timeout = 400,  // 4 s (units of 10 ms)
+        .min_ce_len = 0,
+        .max_ce_len = 0,
+    };
+    int rc = ble_gap_update_params(conn_handle, &params);
+    if (rc != 0) ESP_LOGI(BLE_TAG, "connection parameter request not sent: %d", rc);
+    rc = ble_gap_set_data_len(conn_handle, 251, 2120);
+    if (rc != 0) ESP_LOGI(BLE_TAG, "data length request not sent: %d", rc);
+#if defined(CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_2M_PHY)
+    rc = ble_gap_set_prefered_le_phy(conn_handle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK,
+                                     BLE_GAP_LE_PHY_CODED_ANY);
+    if (rc != 0) ESP_LOGI(BLE_TAG, "2M PHY request not sent: %d", rc);
+#endif
+}
+
 static int gap_event_cb(struct ble_gap_event *event, void *arg) {
     (void)arg;
     switch (event->type) {
@@ -485,7 +494,6 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         if (event->connect.status == 0) {
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
-            g_feat_seq = 0;
             g_mtu = 23;  // the default until this link negotiates its own: never the previous peer's
             s_mtu_warned = false;
             // The research service owns its own connection handle: without
@@ -496,6 +504,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             // explicit request) would leave the 26/32-byte v2 frames and the raw streams stuck at
             // the 20-byte default. A central that also asks gets BLE_HS_EALREADY: harmless.
             (void)ble_gattc_exchange_mtu(g_conn_handle, NULL, NULL);
+            tune_link(g_conn_handle);
             ESP_LOGI(BLE_TAG, "Connected handle=%d", g_conn_handle);
         } else {
             ESP_LOGW(BLE_TAG, "Connection failed: %d", event->connect.status);
@@ -506,7 +515,6 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         ESP_LOGI(BLE_TAG, "Disconnected reason=%d", event->disconnect.reason);
         g_connected = false;
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-        g_feat_subscribed = false;
         g_prov_subscribed = false;
         s_hr_subscribed = false;
         s_batt_subscribed = false;
@@ -531,9 +539,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(BLE_TAG, "Subscribe attr=%d notify=%d",
                  event->subscribe.attr_handle, event->subscribe.cur_notify);
-        if (event->subscribe.attr_handle == s_feat_handle) {
-            g_feat_subscribed = event->subscribe.cur_notify;
-        } else if (event->subscribe.attr_handle == s_prov_handle) {
+        if (event->subscribe.attr_handle == s_prov_handle) {
             g_prov_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == s_feat2_handle) {
             s_feat2_subscribed = event->subscribe.cur_notify;
@@ -745,17 +751,6 @@ void synapse_ble_gatt_start_advertising_normal(void) {
 void synapse_ble_gatt_process_events(void) {
 }
 
-esp_err_t synapse_ble_gatt_notify_features(const synapse_feature_stream_t *feature) {
-    if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
-    if (!g_feat_subscribed || s_feat_handle == 0) return ESP_ERR_INVALID_STATE;
-    synapse_feature_stream_t p = *feature;
-    p.sequence = g_feat_seq++;
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(&p, sizeof(p));
-    if (!om) return ESP_ERR_NO_MEM;
-    int rc = ble_gatts_notify_custom(g_conn_handle, s_feat_handle, om);
-    return rc == 0 ? ESP_OK : ESP_FAIL;
-}
-
 esp_err_t synapse_ble_gatt_notify_provisioning(const synapse_prov_packet_t *packet) {
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
     if (!g_prov_subscribed || s_prov_handle == 0) return ESP_ERR_INVALID_STATE;
@@ -817,53 +812,19 @@ void synapse_ble_gatt_battery_changed(uint8_t level, bool charging) {
     synapse_ble_gatt_update_battery(level, charging);
 }
 
-esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms,
-                                         uint8_t ppg_sqi, uint8_t ppg_map,
-                                         uint8_t ecg_quality, uint8_t stress_level,
-                                         uint8_t motion_level, int16_t temperature) {
-    static uint32_t s_last_notify_ms = 0;
+esp_err_t synapse_ble_gatt_push_heart_rate(uint16_t hr_bpm) {
     static uint32_t s_last_hr_ms = 0;
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (!g_connected || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
-
-    // Standard Heart Rate first, on its own 1 Hz gate: a plain HR client (level L0, the band as a
-    // strap) subscribes to 0x2A37 only and never to the feature characteristic. It used to be
-    // mirrored from inside the feature path, so that client received nothing.
-    // rr_interval_ms is reserved for genuine RR intervals (not RMSSD): 0xFFFF unless a real
-    // RR is available.
-    if (hr_bpm != 0xFFFF && s_hr_subscribed && now_ms - s_last_hr_ms >= 1000) {
-        if (synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF) == ESP_OK) s_last_hr_ms = now_ms;
-    }
-
-    // 1 Hz default gate: 1000 ms between notifications. Configurable later via
-    // the config characteristic if Averyn needs a faster live feed.
-    if (now_ms - s_last_notify_ms < 1000) return ESP_OK;
-    if (!g_feat_subscribed || s_feat_handle == 0) return ESP_OK; // nothing subscribed: silent drop
-
-    synapse_feature_stream_t f = {0};
-    f.version = SYNAPSE_FEATURE_STREAM_VERSION;
-    f.sequence = g_feat_seq++;
-    f.heart_rate = hr_bpm;
-    f.rr_interval_ms = rr_interval_ms;
-    f.ppg_sqi = ppg_sqi;
-    f.ppg_map = ppg_map;
-    f.ecg_quality = ecg_quality;
-    f.stress_level = stress_level;
-    f.motion_level = motion_level;
-    // v1 has no "not available" for these: 0xFF is out of range (0..100 %), which a v1 parser
-    // reads as null; a placeholder 100 % would read as a full battery that nobody measured.
-    f.battery_level = s_batt_known ? s_batt_level : 0xFF;
-    f.charging = (s_batt_known && s_batt_charging) ? 1 : 0;
-    f.sport_type = 0;
-    f.cadence = 0xFFFF;
-    f.temperature = temperature;
-    f.rmssd_ms = 0xFFFF;
-    f.sdnn_ms = 0xFFFF;
-
-    esp_err_t rc = synapse_ble_gatt_notify_features(&f);
-    if (rc != ESP_OK) return rc;
-
-    s_last_notify_ms = now_ms;
+    if (hr_bpm == 0xFFFF) return ESP_OK;  // no valid measurement: 0x2A37 has no "not available" code
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    // Standard Heart Rate on its own 1 Hz gate: a plain HR client (level L0, the band as a strap)
+    // subscribes to 0x2A37 only. The value is recorded even while nobody is subscribed, so a
+    // client that READS the characteristic sees the same measurement a notification would carry.
+    // RR is not sent here: it sits behind the rr_recording consent and travels in the v2 feature
+    // frame, where the phone masks it; a generic HR client would receive it unmasked.
+    if (now_ms - s_last_hr_ms < 1000u) return ESP_OK;
+    s_last_hr_ms = now_ms;
+    (void)synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF);
     return ESP_OK;
 }
 

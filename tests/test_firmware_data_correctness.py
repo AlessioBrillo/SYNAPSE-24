@@ -117,7 +117,8 @@ def test_the_measured_battery_level_reaches_the_ble_service() -> None:
     assert "synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed)" in _code(APP_MAIN)
     tick = _function(_code(POWER), "void synapse_power_tick(void)")
     # a missing divider (USB-powered kit) must not publish noise
-    assert "g_status.voltage_v >= 3.0f && g_status.voltage_v <= 4.4f" in tick
+    assert "g_status.voltage_v >= SYNAPSE_POWER_BATTERY_MIN_V" in tick
+    assert "g_status.voltage_v <= SYNAPSE_POWER_BATTERY_MAX_V" in tick
     assert "g_battery_sink(" in tick
 
 

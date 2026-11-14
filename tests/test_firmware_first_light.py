@@ -106,7 +106,7 @@ def test_ecg_and_battery_borrow_the_shared_adc1_handle() -> None:
 def test_gatt_value_handles_come_from_the_service_table() -> None:
     code = _strip_comments(_src(GATT))
     assert "ble_gatts_find_chr" not in code
-    for handle in ("s_hr_handle", "s_batt_handle", "s_feat_handle", "s_prov_handle"):
+    for handle in ("s_hr_handle", "s_batt_handle", "s_prov_handle"):
         assert f".val_handle = &{handle}" in code, handle
 
 
