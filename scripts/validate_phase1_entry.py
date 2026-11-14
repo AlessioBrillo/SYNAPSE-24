@@ -734,7 +734,6 @@ class Phase1Validator:
 
             cfg = self.lsl_manager.stream_configs.get(name, {})
             stream_type = cfg.get("type", "Other")
-            data_arr.shape[1]
             sampling_rate = cfg.get("sampling_rate", 0)
             tier = cfg.get("tier", 0)
 
@@ -764,13 +763,9 @@ class Phase1Validator:
 
     def _collect_results(self, loop_results: dict, xdf_proof: dict) -> Phase1ValidationReport:
         run_id = uuid.uuid4().hex[:8]
-        time.strftime("%Y-%m-%dT%H:%M:%S")
 
         sync_status_t0, sync_status_t1 = self._get_sync_status()
-        self._get_power_status()
-        self._get_transitions()
         gates = self._evaluate_gates(loop_results, xdf_proof, sync_status_t0, sync_status_t1)
-        all(g.passed for g in gates)
 
         return Phase1ValidationReport(
             run_id=run_id,
@@ -1035,7 +1030,6 @@ class Phase1Validator:
         }
         measured: dict[str, float] = {}
         for label, outlet in outlet_of.items():
-            nominal.get(outlet, 0.0)
             n = counts.get(outlet, loop_results["sample_counts"].get(label.lower(), 0))
             measured[label] = n / duration if duration > 0 else 0.0
         rate_checks = {
@@ -1249,7 +1243,6 @@ class Phase1Validator:
 
         ecg = self._outlet_array("SYNAPSE_ECG_T0")
         ppg_red = self._outlet_array("SYNAPSE_PPG_T0", channel=0)
-        self._outlet_array("SYNAPSE_PPG_T0", channel=1)
 
         hr_bpm = rmssd_ms = sqi = map_ = None
         if ecg.size > 50:

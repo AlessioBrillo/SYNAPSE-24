@@ -99,9 +99,6 @@ class SyntheticPodGenerator:
         """Generate all signals for one pod."""
         signals = {}
 
-        # Shared time base for this pod (with drift)
-        self._get_pod_time_base(spec)
-
         # Generate each modality
         for modality, fs in spec.sampling_rates.items():
             n_channels = spec.channel_counts[modality]

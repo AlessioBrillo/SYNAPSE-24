@@ -50,6 +50,27 @@ class TestPhase1DryRun:
         assert report.sample_counts == {}
         assert report.transitions == []
 
+    def test_a_setup_that_raises_fails_the_dry_run(self, monkeypatch):
+        """The verdict used to be a constant: a broken setup still printed PASS and exited 0."""
+        import asyncio
+        import logging
+
+        validator = Phase1Validator(
+            Path("config/hardware_bringup.yaml"), logging.getLogger("test_dry_run_fail")
+        )
+
+        def _setup_clock_sync() -> None:
+            raise ValueError("no such pod")
+
+        monkeypatch.setattr(validator, "_setup_clock_sync", _setup_clock_sync)
+        report = asyncio.run(validator.run(dry_run=True, duration_s=60))
+
+        assert report.overall_pass is False
+        assert report.gates[0].name == "config_validation"
+        assert report.gates[0].passed is False
+        assert "_setup_clock_sync" in report.gates[0].details
+        assert "no such pod" in report.gates[0].details
+
     def test_lsl_outlets_created(self):
         """Dry-run should create 7 LSL outlets (6 T0 + 1 Markers) for single_pod Phase 1."""
         config_path = Path("config/hardware_bringup.yaml")
@@ -171,24 +192,3 @@ class TestPhase1DryRun:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
-    def test_a_setup_that_raises_fails_the_dry_run(self, monkeypatch):
-        """The verdict used to be a constant: a broken setup still printed PASS and exited 0."""
-        import asyncio
-        import logging
-
-        validator = Phase1Validator(
-            Path("config/hardware_bringup.yaml"), logging.getLogger("test_dry_run_fail")
-        )
-
-        def broken() -> None:
-            raise ValueError("no such pod")
-
-        monkeypatch.setattr(validator, "_setup_clock_sync", broken)
-        report = asyncio.run(validator.run(dry_run=True, duration_s=60))
-
-        assert report.overall_pass is False
-        assert report.gates[0].name == "config_validation"
-        assert report.gates[0].passed is False
-        assert "_setup_clock_sync" in report.gates[0].details
-        assert "no such pod" in report.gates[0].details

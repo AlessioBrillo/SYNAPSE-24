@@ -453,11 +453,6 @@ def _compute_segment_qualities(
             seg_ecg = compute_ecg_quality(
                 chest_seg["ecg"].astype(np.float64), fs_chest, thresholds=thresholds
             )
-            compute_accel_magnitude(
-                chest_seg["acc_x"].astype(np.float64),
-                chest_seg["acc_y"].astype(np.float64),
-                chest_seg["acc_z"].astype(np.float64),
-            )
             wrist_seg = segment_by_label(
                 wrist,
                 resample_labels(chest_labels_int, fs_chest, fs_wrist_bvp),
@@ -931,11 +926,6 @@ def process_wesad_subject(
         w.ecg_quality = seg_ecg.to_dict()
 
         # PPG quality on this window
-        compute_accel_magnitude(
-            w.chest_signals["acc_x"].astype(np.float64),
-            w.chest_signals["acc_y"].astype(np.float64),
-            w.chest_signals["acc_z"].astype(np.float64),
-        )
         wrist_acc_seg = np.sqrt(
             w.wrist_signals["acc_x"] ** 2
             + w.wrist_signals["acc_y"] ** 2

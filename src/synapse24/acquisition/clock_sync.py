@@ -288,7 +288,6 @@ class ClockDriftEstimator:
 
             drift_rate_ppm = (a - 1.0) * 1_000_000
             # Offset at reference time (first marker)
-            c * 1000
             # Extrapolate to hub_time=0 for TimestampCorrector
             offset_ms = (c - a * hub_time_ref) * 1000
 
@@ -318,14 +317,12 @@ class ClockDriftEstimator:
             return None
 
         pod_acc = np.array(self._acc_buffers[pod_id])
-        np.array(self._acc_timestamps[pod_id])
 
         if len(pod_acc) < 100 or len(hub_acc) < 100:
             return None
 
         # Resample both to common rate if needed
         hub_fs = 1.0 / np.mean(np.diff(hub_timestamps)) if len(hub_timestamps) > 1 else 100
-        self.config.acc_sampling_rates.get(pod_id, 100)
 
         # Cross-correlation
         corr = correlate(hub_acc, pod_acc, mode="full")

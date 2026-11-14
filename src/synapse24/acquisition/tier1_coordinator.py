@@ -595,11 +595,6 @@ class Tier1Coordinator:
         if tier is None:
             tier = self.controller.state_machine.current_tier
 
-        if tier == QualityTier.T1:
-            pass
-        else:
-            pass
-
         status = self.clock_sync.get_sync_status(tier=tier)
         return {pod_id: info["within_tolerance"] for pod_id, info in status["pods"].items()}
 

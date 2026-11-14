@@ -49,9 +49,6 @@ def load_edge_model(model_dir: Path) -> EdgeModel:
     # Load Keras model
     keras_model = keras.models.load_model(model_dir / "synapse_triage.keras")
 
-    # Load scaler
-    joblib.load(model_dir / "feature_scaler.joblib")
-
     # Reconstruct ModelConfig
     config = ModelConfig(
         name="synapse_triage",
