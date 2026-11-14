@@ -49,13 +49,13 @@ def _ensure_pyxdf() -> None:
 
 
 def _declared_units(info: dict) -> str:
-    """Return the unit the stream declares in its XDF header ("" if none, or several)."""
+    """Return the unit the stream declares in its XDF header ("" if none; several are joined)."""
     try:
         channels = info["desc"][0]["channels"][0]["channel"]
         units = {str((c.get("unit") or [""])[0] or "") for c in channels} - {""}
     except (KeyError, IndexError, TypeError, AttributeError):
         return ""
-    return units.pop() if len(units) == 1 else ""
+    return ",".join(sorted(units))
 
 
 def read_xdf(path: Path | str) -> XdfSession:

@@ -206,12 +206,7 @@ class LSLGateway:
         outlet = self._lsl_manager.add_stream(pod_config.pod_id, stream_config)
 
         # Register with clock sync
-        # The IMU rate of the manifest (50 Hz); a literal 100 was the old firmware's rate.
-        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
-
-        self.clock_sync.register_pod(
-            pod_config.pod_id, acc_sampling_rate=forearm_hub_normative_rates()["imu_hz"]
-        )
+        self.clock_sync.register_pod(pod_config.pod_id, acc_sampling_rate=100)
 
         # Initialize ring buffer
         maxlen = int(self.config.buffer_duration_s * pod_config.sampling_rate)

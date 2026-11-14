@@ -246,3 +246,27 @@ def test_a_contiguous_capture_reports_no_lost_frames_and_the_sequence_wraps(tmp_
         "AA:BB:CC:DD:EE:02", tmp_path / "wrap.xdf", 0.3, transport=FakePodTransport(schedule)
     )
     assert summary["lost_frames"] == {}
+
+
+def test_a_late_frame_is_not_a_hole_and_does_not_double_count(tmp_path: Path) -> None:
+    """Delivery order 5, 7, 6, 8: one frame is late and none is lost.
+
+    The count follows the forward sequence, so the late frame must not be charged twice.
+    """
+
+    def frame(seq: int, ts_us: int) -> bytes:
+        return encode_frame(RawStream.ECG, seq, ts_us, 0, RawFormat.S16, [[5]])
+
+    schedule = [
+        (0.00, CHAR_ECG, frame(5, 1_000_000)),
+        (0.01, CHAR_ECG, frame(7, 1_004_000)),
+        (0.02, CHAR_ECG, frame(6, 1_002_000)),
+        (0.03, CHAR_ECG, frame(8, 1_006_000)),
+    ]
+    summary = record_ble(
+        "AA:BB:CC:DD:EE:03", tmp_path / "late.xdf", 0.3, transport=FakePodTransport(schedule)
+    )
+    # 5 -> 7 is a forward jump of 2 (one slot missing at that moment); 6 is late and ignored;
+    # 7 -> 8 is contiguous. The recorder reports what it can prove: slot 6 was empty when 7 came,
+    # so exactly one is counted, never two.
+    assert summary["lost_frames"] == {"ECG": 1}

@@ -62,6 +62,13 @@ MTU_TARGET = 247
 MTU_FLOOR = 115
 
 
+class StaleSyncReplyError(RuntimeError):
+    """The pod answered a clock-sync request with the reply to another one.
+
+    Not a measurement: nothing reached the clock model. A caller retries the exchange.
+    """
+
+
 class MtuFloorError(RuntimeError):
     """The link's negotiated ATT MTU can't carry the ECG throughput budget."""
 
@@ -243,7 +250,9 @@ class ResearchBleClient:
             # relabelled with the current sequence and fed to the model, which is how it poisoned
             # the offset; it is now counted and dropped (the caller may retry).
             self.stale_sync_replies += 1
-            return result
+            raise StaleSyncReplyError(
+                f"the pod answered sequence {received_seq} to request {seq}: a stale reply"
+            )
         # Anchor every stream's DeviceClock to the pod's full 64-bit time, so a frame stamp keeps
         # its epoch on a pod that has been up for more than 71.6 minutes (2^32 us).
         self.decoder.seed_from_sync(int(pod_send))

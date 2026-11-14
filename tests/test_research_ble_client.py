@@ -28,6 +28,7 @@ from synapse24.hardware.research_ble_client import (
     ClockSyncResult,
     MtuFloorError,
     ResearchBleClient,
+    StaleSyncReplyError,
 )
 from synapse24.hardware.research_client import DeviceClock, ResearchStreamDecoder
 from tests.test_research_service_hil import SyntheticPod  # noqa: E402
@@ -534,9 +535,9 @@ def test_a_stale_sync_reply_never_reaches_the_clock_model() -> None:
         lsl_clock_fn=lambda: lsl_now[0],
     )
 
-    result = _run(client.sync_once())
+    with pytest.raises(StaleSyncReplyError):
+        _run(client.sync_once())
 
-    assert result.sequence == 7, "the reply keeps the sequence the pod gave, it is not relabelled"
     assert not model.is_calibrated
     assert model.fit() is None
     assert client.sync_history == [], "a stale reply is not an exchange"

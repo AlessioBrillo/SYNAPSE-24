@@ -397,11 +397,16 @@ def _lost_frames(frames: list[tuple[RawHeader, np.ndarray, int]]) -> dict[str, i
     for header, _samples, _wall in frames:
         stream = int(header.stream)
         previous = last.get(stream)
-        last[stream] = header.sequence
         if previous is None:
+            last[stream] = header.sequence
             continue
         step = (header.sequence - previous) & 0xFFFF
-        if 1 < step < 0x8000:
+        if step == 0 or step >= 0x8000:
+            # A repeat or a late frame: not a hole, and the baseline must NOT move back, or the
+            # next in-order frame would count the late one's slot as lost a second time.
+            continue
+        last[stream] = header.sequence
+        if step > 1:
             name = STREAM_META[RawStream(stream)][0]
             lost[name] = lost.get(name, 0) + step - 1
     return lost

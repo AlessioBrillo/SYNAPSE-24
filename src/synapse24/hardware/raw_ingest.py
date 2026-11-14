@@ -62,7 +62,10 @@ def _default_lsl_clock() -> float:
 
 
 def _normative_stream_rates() -> dict[RawStream, float]:
-    """Nominal rate per raw stream, from config/hardware.yaml (single source)."""
+    """Nominal rate per raw stream, from config/hardware.yaml (single source).
+
+    Raises ``NormativeConfigError`` when the manifest cannot be read: there is no safe default.
+    """
     return normative_stream_rates()
 
 
@@ -144,7 +147,10 @@ class RawFrameIngestor:
         # through it so both paths agree, and so the push uses the extended
         # (wrap-corrected) stamp rather than the low-32 header value.
         seen_before = self.decoder.frames_seen
+        rejected_before = self.decoder.frames_rejected
         self.decoder.feed(payload)
+        if self.decoder.frames_rejected != rejected_before:
+            return False  # the decoder refused it: not a frame this path can use
         if self.decoder.frames_seen == seen_before:
             # A repeat or a late frame (or one the decoder refused): it adds no samples and its time
             # would be the previous frame's, so nothing is pushed. It IS a valid research-service
