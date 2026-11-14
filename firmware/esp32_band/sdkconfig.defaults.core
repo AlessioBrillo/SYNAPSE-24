@@ -18,7 +18,8 @@ CONFIG_SYNAPSE_FEATURE_FIT_STORAGE=n
 CONFIG_SYNAPSE_FEATURE_PROVISIONING=n
 CONFIG_SYNAPSE_FEATURE_OTA=n
 
-# Keep edge triage on-device: it is part of what the MVP demo must show.
+# On-device edge triage is OFF in this profile (the interpreter/arena bug is open, see the Kconfig
+# help): the host owns the whole quality/fusion pipeline.
 # CONFIG_SYNAPSE_FEATURE_EDGE_AI is not set
 CONFIG_SYNAPSE_FEATURE_POWER_MONITOR=y
 

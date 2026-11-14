@@ -206,7 +206,11 @@ static void apply_defaults(void) {
     ESP_LOGI(TAG, "Applied Kconfig defaults");
 }
 
-// Internal helper: load from NVS
+// Internal helper: load from NVS.
+// The stored blob is read into a LOCAL copy and only replaces g_config once its version matches
+// and it validates. It used to be read straight into g_config, and the version was fetched with
+// a second nvs_open() whose result overwrote the handle (so the stored version was never read): a
+// rejected blob left g_config holding the rejected values while the log said "using defaults".
 static esp_err_t load_from_nvs(void) {
     nvs_handle_t handle;
     esp_err_t ret = nvs_open(SYNAPSE_CONFIG_NAMESPACE, NVS_READONLY, &handle);
@@ -215,36 +219,32 @@ static esp_err_t load_from_nvs(void) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    size_t required_size = sizeof(synapse_hw_config_t);
-    ret = nvs_get_blob(handle, SYNAPSE_CONFIG_KEY, &g_config, &required_size);
-    nvs_close(handle);
-
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Config blob not found in NVS, using defaults: %s", esp_err_to_name(ret));
+    synapse_hw_config_t stored;
+    size_t required_size = sizeof(stored);
+    ret = nvs_get_blob(handle, SYNAPSE_CONFIG_KEY, &stored, &required_size);
+    if (ret != ESP_OK || required_size != sizeof(stored)) {
+        nvs_close(handle);
+        ESP_LOGW(TAG, "Config blob not usable in NVS (%s, %u bytes), using defaults",
+                 esp_err_to_name(ret), (unsigned)required_size);
         return ESP_ERR_NOT_FOUND;
     }
 
-    // Check version
     uint32_t stored_version = 0;
-    handle = nvs_open(SYNAPSE_CONFIG_NAMESPACE, NVS_READONLY, &handle);
-    if (handle != 0) {
-        nvs_get_u32(handle, SYNAPSE_CONFIG_VERSION_KEY, &stored_version);
-        nvs_close(handle);
-    }
-
-    if (stored_version != SYNAPSE_CONFIG_VERSION) {
-        ESP_LOGW(TAG, "Config version mismatch (stored=%" PRIu32 ", current=%d), using defaults",
-                 stored_version, SYNAPSE_CONFIG_VERSION);
+    ret = nvs_get_u32(handle, SYNAPSE_CONFIG_VERSION_KEY, &stored_version);
+    nvs_close(handle);
+    if (ret != ESP_OK || stored_version != SYNAPSE_CONFIG_VERSION) {
+        ESP_LOGW(TAG, "Config version mismatch (stored=%" PRIu32 ", current=%d, %s), using defaults",
+                 stored_version, SYNAPSE_CONFIG_VERSION, esp_err_to_name(ret));
         return ESP_ERR_INVALID_VERSION;
     }
 
-    // Validate loaded config
-    ret = validate_config(&g_config);
+    ret = validate_config(&stored);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Loaded config validation failed, using defaults");
         return ret;
     }
 
+    memcpy(&g_config, &stored, sizeof(g_config));
     ESP_LOGI(TAG, "Loaded configuration from NVS (version %" PRIu32 ")", stored_version);
     return ESP_OK;
 }

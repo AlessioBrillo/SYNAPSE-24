@@ -2,12 +2,14 @@
  * @file ble_gatt_server.c
  * @brief Synapse Band v1 - BLE GATT Server (NimBLE, ESP-IDF 5.x)
  * Same stack as head/forearm/common. Standard: HR (0x180D), Battery (0x180F),
- * Device Info (0x180A). Custom 128-bit Synapse service: feature stream (notify),
- * device config (R/W), provisioning (W/N).
+ * Device Info (0x180A). Custom 128-bit Synapse service (consumer contract v2): feature frame,
+ * status, stream metadata and control point (the v1 feature characteristic is retired), plus
+ * device config (R/W) and provisioning (W/N).
  */
 
 #include <string.h>
 #include <assert.h>
+#include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
@@ -574,7 +576,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
 /* Device name broadcast by the band. The complete name goes into the scan
  * response: a legacy advertising packet is limited to 31 bytes and the
  * flags + 128-bit UUID already use 21 of them. */
-#define SYNAPSE_BLE_DEVICE_NAME "SYNAPSE-BAND"
+#define SYNAPSE_BLE_DEVICE_NAME CONFIG_SYNAPSE_BLE_DEVICE_NAME  /* Kconfig: one name, not two */
 
 /**
  * @brief Byte size of the advertising packet.

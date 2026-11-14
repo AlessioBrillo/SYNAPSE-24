@@ -157,7 +157,8 @@ static esp_err_t register_and_spawn(int idx, const sensor_config_t *cfg, uint32_
         ESP_LOGW(TAG, "%s not initialised: no polling task", cfg->name);
         return ESP_OK;
     }
-    if (xTaskCreate(sensor_task_fn, cfg->name, stack, &s_sensor_cfg[idx], prio, &s_sensor_task[idx]) != pdPASS) {
+    if (xTaskCreatePinnedToCore(sensor_task_fn, cfg->name, stack, &s_sensor_cfg[idx], prio,
+                                &s_sensor_task[idx], SENSOR_TASK_CORE) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create task for %s", cfg->name);
         s_sensor_task[idx] = NULL;
         return ESP_ERR_NO_MEM;
@@ -222,7 +223,7 @@ esp_err_t synapse_sensors_init(void) {
     populate_sensor_configs(&hw_cfg);
 
     // Create sample queue
-    g_sensors.sample_queue = xQueueCreate(64, sizeof(sensor_sample_t)) /* scheduler enqueues plain sensor_sample_t */;
+    g_sensors.sample_queue = xQueueCreate(SENSOR_SCHEDULER_BLE_QUEUE_SIZE, sizeof(sensor_sample_t)) /* scheduler enqueues plain sensor_sample_t */;
     if (!g_sensors.sample_queue) {
         ESP_LOGE(TAG, "Failed to create sample queue");
         return ESP_ERR_NO_MEM;

@@ -58,9 +58,6 @@ extern "C" {
 /** Largest payload that fits a 247-byte MTU notification (ATT 3-byte header). */
 #define SYNAPSE_RAW_FRAME_MAX_PAYLOAD 244u
 
-/** Largest number of samples a single frame can carry. */
-#define SYNAPSE_RAW_FRAME_MAX_SAMPLES synapse_raw_max_samples(SYNAPSE_RAW_FORMAT_S8)
-
 /** Flag: the 32-bit device microsecond counter wrapped between frames. */
 #define SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED 0x01u
 
