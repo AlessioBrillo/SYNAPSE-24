@@ -108,7 +108,10 @@ def load_xdf_streams(path: Path | str) -> list[StreamView]:
     if not p.is_file():
         raise ExportError(f"XDF not found: {p}")
 
-    streams, _header = pyxdf.load_xdf(str(p))
+    # dejitter_timestamps=False: pyxdf's default re-times every segment with a linear fit and only
+    # breaks it at a gap over 1 s, so a lost frame (0.13 s of ECG at 500 Hz) is smoothed away and
+    # the beats after it keep contiguous times. The beat times here are the real ones.
+    streams, _header = pyxdf.load_xdf(str(p), dejitter_timestamps=False)
     out: list[StreamView] = []
     for stream in streams:
         time_stamps = stream.get("time_stamps")
@@ -243,10 +246,16 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
         warnings.append(f"R-peak detection failed: {exc}")
         r_peaks = np.array([], dtype=np.int64)
 
-    # R-peak times in the same clock domain as the stream timestamps: the
-    # peak index is converted with the stream period, never compared with
-    # absolute window boundaries.
-    peak_times = t0 + (r_peaks / fs) if len(r_peaks) else np.array([], dtype=np.float64)
+    # R-peak times in the same clock domain as the stream timestamps, READ from the stream's own
+    # timestamps. `t0 + index / fs` assumed no sample was ever lost: after a lost frame every later
+    # beat was placed too early, the interval across the hole came out too short, and one lost
+    # frame in a window produced a fake RMSSD and a wrong heart rate in the exported file.
+    peak_times = (
+        np.asarray(timestamps, dtype=np.float64)[r_peaks]
+        if len(r_peaks)
+        else np.array([], dtype=np.float64)
+    )
+    fs_int = int(round(fs))
 
     writer = FitWriter()
     writer.write_file_header()
@@ -262,9 +271,17 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     n_records = 0
     for win_t0, win_t1 in bounds:
         mask = (peak_times >= win_t0) & (peak_times < win_t1)
-        window_peaks = r_peaks[mask]
+        window_times = peak_times[mask]
+        # The HRV code works on sample indices at an integer rate: hand it the beats as the sample
+        # positions they would have had at the real times, so a hole in the recording is a long
+        # interval (which the code can reject) and never a stretch that the sample count hides.
+        window_peaks = (
+            np.rint((window_times - window_times[0]) * fs_int).astype(np.int64)
+            if len(window_times)
+            else window_times.astype(np.int64)
+        )
         metrics = (
-            compute_hrv_metrics(window_peaks, int(round(fs)), window_duration_s=win_t1 - win_t0)
+            compute_hrv_metrics(window_peaks, fs_int, window_duration_s=win_t1 - win_t0)
             if len(window_peaks) >= 2
             else {}
         )

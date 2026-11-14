@@ -109,7 +109,7 @@ bringup:
       # Power telemetry stream
       - name: "SYNAPSE_Power"
         type: "Power"
-        channel_count: 4  # voltage_v, current_ma, power_mw, battery_percent
+        channel_count: 4  # voltage_mv, current_ma, power_mw, battery_percent
         sampling_rate: 1
         channel_format: "float32"
         source_id: "synapse_power_001"

@@ -211,3 +211,62 @@ def test_every_capture_uuid_is_unsubscribed(tmp_path: Path) -> None:
     fake = FakePodTransport([(0.05, CHAR_ECG, _ecg_frame(0, 0))])
     record_ble("AA:BB:CC:DD:EE:FF", out, duration_s=0.3, transport=fake)
     assert set(fake.unsubscribed) == set(_RECORD_UUIDS)
+
+
+def test_frames_lost_in_the_link_are_counted_from_the_sequence(tmp_path: Path) -> None:
+    """`dropped` is what the BAND lost; a frame lost in the link is a hole in the sequence.
+
+    The summary has to say so (it used to report only the band's own count).
+    """
+    # sequence 0, 1, 2, then 6 (frames 3, 4, 5 never arrived), then 7
+    schedule = [
+        (0.00, CHAR_ECG, _ecg_frame(0, 1_000_000)),
+        (0.01, CHAR_ECG, _ecg_frame(1, 1_002_000)),
+        (0.02, CHAR_ECG, _ecg_frame(2, 1_004_000)),
+        (0.03, CHAR_ECG, _ecg_frame(6, 1_012_000)),
+        (0.04, CHAR_ECG, _ecg_frame(7, 1_014_000)),
+    ]
+    summary = record_ble(
+        "AA:BB:CC:DD:EE:01", tmp_path / "gap.xdf", 0.3, transport=FakePodTransport(schedule)
+    )
+    assert summary["lost_frames"] == {"ECG": 3}
+    assert summary["dropped"] == 0  # the band lost nothing: the link did
+
+
+def test_a_contiguous_capture_reports_no_lost_frames_and_the_sequence_wraps(tmp_path: Path) -> None:
+    def frame(seq: int, ts_us: int) -> bytes:
+        return encode_frame(RawStream.ECG, seq, ts_us, 0, RawFormat.S16, [[5]])
+
+    schedule = [
+        (0.00, CHAR_ECG, frame(65534, 1_000_000)),
+        (0.01, CHAR_ECG, frame(65535, 1_002_000)),
+        (0.02, CHAR_ECG, frame(0, 1_004_000)),
+    ]
+    summary = record_ble(
+        "AA:BB:CC:DD:EE:02", tmp_path / "wrap.xdf", 0.3, transport=FakePodTransport(schedule)
+    )
+    assert summary["lost_frames"] == {}
+
+
+def test_a_late_frame_is_not_a_hole_and_does_not_double_count(tmp_path: Path) -> None:
+    """Delivery order 5, 7, 6, 8: one frame is late and none is lost.
+
+    The count follows the forward sequence, so the late frame must not be charged twice.
+    """
+
+    def frame(seq: int, ts_us: int) -> bytes:
+        return encode_frame(RawStream.ECG, seq, ts_us, 0, RawFormat.S16, [[5]])
+
+    schedule = [
+        (0.00, CHAR_ECG, frame(5, 1_000_000)),
+        (0.01, CHAR_ECG, frame(7, 1_004_000)),
+        (0.02, CHAR_ECG, frame(6, 1_002_000)),
+        (0.03, CHAR_ECG, frame(8, 1_006_000)),
+    ]
+    summary = record_ble(
+        "AA:BB:CC:DD:EE:03", tmp_path / "late.xdf", 0.3, transport=FakePodTransport(schedule)
+    )
+    # 5 -> 7 is a forward jump of 2 (one slot missing at that moment); 6 is late and ignored;
+    # 7 -> 8 is contiguous. The recorder reports what it can prove: slot 6 was empty when 7 came,
+    # so exactly one is counted, never two.
+    assert summary["lost_frames"] == {"ECG": 1}

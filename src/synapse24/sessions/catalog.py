@@ -56,6 +56,8 @@ class StreamInfo:
     type: str
     sampling_rate_hz: float
     n_samples: int
+    #: unit of each channel as the file declares it ([] = the file says nothing; never guessed)
+    channel_units: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -271,6 +273,7 @@ def _xdf_stream_infos(streams: list[dict[str, Any]]) -> list[StreamInfo]:
                 type=stype,
                 sampling_rate_hz=fs,
                 n_samples=int(_to_float(s.get("n_samples"))),
+                channel_units=[str(u) for u in (s.get("channel_units") or [])],
             )
         )
     return infos

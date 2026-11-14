@@ -134,6 +134,10 @@ def _stream_header_xml(stream: dict[str, Any]) -> bytes:
         f"<channel_format>{channel_format}</channel_format>",
         f"<source_id>{_escape_xml(str(stream.get('source_id', 'synapse24')))}</source_id>",
     ]
+    # LSL/XDF convention: the descriptive metadata lives under <desc>. Written straight under
+    # <info> (as this writer used to), a standard reader (pyxdf, MNE, ...) finds no channel label
+    # and no unit at all.
+    parts.append("<desc>")
     if channels:
         parts.append("<channels>")
         for index, label in enumerate(channels):
@@ -162,6 +166,7 @@ def _stream_header_xml(stream: dict[str, Any]) -> bytes:
         for key, value in metadata.items():
             parts.append(f"<{key}>{_escape_xml(str(value))}</{key}>")
         parts.append("</metadata>")
+    parts.append("</desc>")
     parts.append("</info>")
     return "".join(parts).encode("utf-8")
 

@@ -54,13 +54,14 @@ def normative_stream_rates() -> dict[RawStream, float]:
     The manifest is the single source of truth for the rates: the samples of
     a frame are spaced with the stream period, and a hardcoded literal is how
     the rates drifted in the first place.
-    """
-    try:
-        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
 
-        rates = forearm_hub_normative_rates()
-    except Exception:  # noqa: BLE001 - rates only affect intra-frame spacing
-        return {}
+    A manifest that cannot be read RAISES (``NormativeConfigError``). It used to return ``{}``, and
+    with no rate every sample of a frame was spaced one microsecond apart: a 500 Hz ECG became a
+    1 MHz signal, silently, on any install where the manifest was not found.
+    """
+    from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+    rates = forearm_hub_normative_rates()
     return {
         RawStream.ECG: float(rates["ecg_hz"]),
         RawStream.PPG: float(rates["ppg_hz"]),
@@ -71,8 +72,11 @@ def normative_stream_rates() -> dict[RawStream, float]:
     }
 
 
-# Unit divisors applied by the firmware when quantising (see
-# synapse_research_unit_t in ble_research_service.h).
+# Unit divisors applied by the firmware when quantising (see synapse_research_unit_t in
+# ble_research_service.h). The live LSL path hands the analysis code physical units: ECG in mV,
+# ACC in g, GYRO in rad/s, MAG in uT (the immobility gate, for one, thresholds the ACC in g). The
+# files that `synapse record` writes use the contract's display units instead (uV, mg, dps, uT);
+# every stream DECLARES its unit in the XDF header and readers use the declaration.
 UNIT_DIVISOR: dict[RawStream, float] = {
     RawStream.ECG: 1000.0,  # uV
     RawStream.PPG: 1.0,  # raw ADC counts

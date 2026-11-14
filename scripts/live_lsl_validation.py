@@ -339,7 +339,10 @@ class LiveLSLValidator:
 
     def _compute_segment_quality(self, results: dict) -> None:
         """Compute quality per segment for XDF metadata."""
-        segment_samples = int(self.segment_s * 500)  # ECG rate as reference
+        from synapse24.hardware.esp32_tier0 import forearm_hub_normative_rates
+
+        # ECG rate of the manifest as the reference (it was a literal 500)
+        segment_samples = int(self.segment_s * forearm_hub_normative_rates()["ecg_hz"])
 
         ecg_name = "SYNAPSE_ECG_T0"
         ppg_name = "SYNAPSE_PPG_T0"

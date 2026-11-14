@@ -62,6 +62,13 @@ MTU_TARGET = 247
 MTU_FLOOR = 115
 
 
+class StaleSyncReplyError(RuntimeError):
+    """The pod answered a clock-sync request with the reply to another one.
+
+    Not a measurement: nothing reached the clock model. A caller retries the exchange.
+    """
+
+
 class MtuFloorError(RuntimeError):
     """The link's negotiated ATT MTU can't carry the ECG throughput budget."""
 
@@ -128,6 +135,7 @@ class ResearchBleClient:
     streams: list[RawStream] = field(default_factory=lambda: [RawStream.ECG, RawStream.PPG])
     sync_sequence: int = 0
     sync_history: list[ClockSyncResult] = field(default_factory=list)
+    stale_sync_replies: int = 0
     clock_model: PodClockModel | None = None
     lsl_clock_fn: Callable[[], float] | None = None
     mtu: int | None = None
@@ -237,15 +245,17 @@ class ResearchBleClient:
             pod_send_us=pod_send,
         )
         if received_seq != seq:
-            # A stale reply means the pod is answering a previous request; do
-            # not let it poison the model.
-            result = ClockSyncResult(
-                sequence=seq,
-                hub_send_us=hub_send,
-                hub_recv_us=hub_recv,
-                pod_recv_us=pod_recv,
-                pod_send_us=pod_send,
+            # A stale reply: the pod answers with its LAST reply until a new request is written, so
+            # this is an answer to ANOTHER exchange and its times belong to another instant. It was
+            # relabelled with the current sequence and fed to the model, which is how it poisoned
+            # the offset; it is now counted and dropped (the caller may retry).
+            self.stale_sync_replies += 1
+            raise StaleSyncReplyError(
+                f"the pod answered sequence {received_seq} to request {seq}: a stale reply"
             )
+        # Anchor every stream's DeviceClock to the pod's full 64-bit time, so a frame stamp keeps
+        # its epoch on a pod that has been up for more than 71.6 minutes (2^32 us).
+        self.decoder.seed_from_sync(int(pod_send))
         if self.clock_model is not None:
             self.clock_model.record_exchange(
                 ClockExchange(

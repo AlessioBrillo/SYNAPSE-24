@@ -138,6 +138,13 @@ class ESP32Tier0Config:
     lsl_stream_mag: str = "SYNAPSE_MAG_T0"
 
 
+def _declare_units(info: Any, units: list[str]) -> None:
+    """Write the per-channel units into the LSL header, so a reader never has to guess them."""
+    channels = info.desc().append_child("channels")
+    for unit in units:
+        channels.append_child("channel").append_child_value("unit", unit)
+
+
 class ESP32Tier0Firmware:
     """ESP32 Tier 0 firmware simulation for CI/testing.
 
@@ -168,6 +175,7 @@ class ESP32Tier0Firmware:
             channel_format="float32",
             source_id=f"synapse24_ecg_t0_{self.config.ble_device_name}",
         )
+        _declare_units(ecg_info, ["mV"])
         ecg_info.desc().append_child_value("sensor", "AD8232")
         ecg_info.desc().append_child_value("placement", "chest_lead_I")
         self._ecg_outlet = StreamOutlet(ecg_info, chunk_size=32, max_buffered=360)
@@ -181,14 +189,16 @@ class ESP32Tier0Firmware:
             channel_format="float32",
             source_id=f"synapse24_ppg_t0_{self.config.ble_device_name}",
         )
+        _declare_units(ppg_info, ["a.u.", "a.u."])
         ppg_info.desc().append_child_value("sensor", "MAX30102")
         ppg_info.desc().append_child_value("wavelengths", "660nm,880nm")
         self._ppg_outlet = StreamOutlet(ppg_info, chunk_size=32, max_buffered=360)
 
         # IMU streams
+        # Units of what the host decoder pushes (research_client.UNIT_DIVISOR): g, rad/s, uT.
         for name, stream_type, unit in [
             (self.config.lsl_stream_acc, "ACC_T0", "g"),
-            (self.config.lsl_stream_gyro, "GYRO_T0", "deg/s"),
+            (self.config.lsl_stream_gyro, "GYRO_T0", "rad/s"),
             (self.config.lsl_stream_mag, "MAG_T0", "uT"),
         ]:
             imu_info = StreamInfo(
@@ -199,6 +209,7 @@ class ESP32Tier0Firmware:
                 channel_format="float32",
                 source_id=f"synapse24_{name.lower()}_{self.config.ble_device_name}",
             )
+            _declare_units(imu_info, [unit] * 3)
             imu_info.desc().append_child_value("sensor", "ICM-20948")
             if "ACC" in stream_type:
                 imu_info.desc().append_child_value("range", f"±{self.config.imu_accel_range}g")

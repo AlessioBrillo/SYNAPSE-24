@@ -28,6 +28,7 @@ from synapse24.hardware.research_ble_client import (
     ClockSyncResult,
     MtuFloorError,
     ResearchBleClient,
+    StaleSyncReplyError,
 )
 from synapse24.hardware.research_client import DeviceClock, ResearchStreamDecoder
 from tests.test_research_service_hil import SyntheticPod  # noqa: E402
@@ -518,3 +519,66 @@ def test_a_plain_giant_sequence_gap_is_still_a_gap() -> None:
     assert len(decoder.drops) == 1
     assert decoder.drops[0].gap == 989
     assert not decoder.is_clean()
+
+
+def test_a_stale_sync_reply_never_reaches_the_clock_model() -> None:
+    """The pod keeps answering with its last reply: a reply to ANOTHER request is not a measurement."""
+    lsl_now = [3_000.0]
+    # the pod answers sequence 7 whatever the request was
+    transport = FakeTransport(sync_reply=struct.pack("<Iqq", 7, 5000, 5100))
+    model = PodClockModel(pod_id="forearm_hub")
+    client = ResearchBleClient(
+        address="SYNAPSE-BAND",
+        transport=transport,
+        streams=[],
+        clock_model=model,
+        lsl_clock_fn=lambda: lsl_now[0],
+    )
+
+    with pytest.raises(StaleSyncReplyError):
+        _run(client.sync_once())
+
+    assert not model.is_calibrated
+    assert model.fit() is None
+    assert client.sync_history == [], "a stale reply is not an exchange"
+    assert client.stale_sync_replies == 1
+
+
+def test_a_good_sync_reply_anchors_the_stream_clocks_to_the_pod_time() -> None:
+    """A pod up for more than 71.6 minutes: the 64-bit time tells the decoder how many wraps passed."""
+    pod_full_us = (2 << 32) + 5_100  # two counter wraps and a bit
+    transport = FakeTransport(sync_reply=struct.pack("<Iqq", 1, pod_full_us - 100, pod_full_us))
+    client = ResearchBleClient(address="SYNAPSE-BAND", transport=transport, streams=[])
+
+    _run(client.sync_once())
+
+    clock = client.decoder.clocks[RawStream.ECG]
+    first = clock.extend(5_200, 0)  # the next frame's low 32 bits
+    assert first == (2 << 32) + 5_200, "the frame lands in the third epoch, not the first"
+
+
+def test_an_unreadable_rate_manifest_fails_loudly_instead_of_collapsing_the_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no rates the samples of a frame were spaced 1 us apart: 500 Hz became 1 MHz."""
+    from synapse24.hardware import esp32_tier0
+    from synapse24.hardware.research_client import normative_stream_rates
+
+    def unreadable() -> dict[str, int]:
+        raise esp32_tier0.NormativeConfigError("config/hardware.yaml not found")
+
+    monkeypatch.setattr(esp32_tier0, "forearm_hub_normative_rates", unreadable)
+    with pytest.raises(esp32_tier0.NormativeConfigError):
+        normative_stream_rates()
+    frame = encode_frame(RawStream.ECG, 0, 1000, 0, RawFormat.S16, [100, 200, 300])
+    with pytest.raises(esp32_tier0.NormativeConfigError):
+        ResearchStreamDecoder().feed(frame)  # the rates are read with the first frame
+
+
+def test_the_rates_come_from_the_manifest() -> None:
+    from synapse24.hardware.research_client import normative_stream_rates
+
+    rates = normative_stream_rates()
+    assert rates[RawStream.ECG] == 500.0
+    assert rates[RawStream.PPG] == 50.0
+    assert rates[RawStream.ACC] == rates[RawStream.GYRO] == rates[RawStream.MAG] == 50.0

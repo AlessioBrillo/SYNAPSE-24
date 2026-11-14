@@ -206,7 +206,10 @@ def read_xdf_hrv(path: Path, window_s: float = 30.0) -> list[dict]:
     import numpy as np
     import pyxdf  # imported lazily so the module imports without it
 
-    streams, _ = pyxdf.load_xdf(str(path))
+    # dejitter_timestamps=False: pyxdf's default re-times every segment with a linear fit and only
+    # breaks it at a gap over 1 s, so a lost frame (0.13 s of ECG at 500 Hz) is smoothed away and
+    # the beats after it keep contiguous times. The beat times here are the real ones.
+    streams, _ = pyxdf.load_xdf(str(path), dejitter_timestamps=False)
     candidates: list[tuple[str, str, np.ndarray, np.ndarray]] = []
     for s in streams:
         ts = s.get("time_stamps")
@@ -376,7 +379,10 @@ def _iter_xdf_streams(path: Path) -> Iterator[tuple[dict[str, Any], Any, Any]]:
     import numpy as np
     import pyxdf
 
-    streams, _ = pyxdf.load_xdf(str(path))
+    # dejitter_timestamps=False: pyxdf's default re-times every segment with a linear fit and only
+    # breaks it at a gap over 1 s, so a lost frame (0.13 s of ECG at 500 Hz) is smoothed away and
+    # the beats after it keep contiguous times. The beat times here are the real ones.
+    streams, _ = pyxdf.load_xdf(str(path), dejitter_timestamps=False)
     for s in streams:
         info = s.get("info", {}) or {}
         name = (
