@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#define SYNAPSE_CONTRACT_CONSUMER_VERSION "2.3"
+
 /* 128-bit UUIDs, in NimBLE's BLE_UUID128_INIT order (little-endian).
  *
  * Two forms per UUID:

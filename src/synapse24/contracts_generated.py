@@ -8,11 +8,15 @@ contracts/fit_developer_fields.json. Do not edit: run
 from __future__ import annotations
 
 __all__ = [
+    "CONSUMER_CONTRACT_VERSION",
     "FIT_DEV_FIELDS",
     "STREAM_IDS",
     "STREAM_RATES_HZ",
     "UUIDS",
 ]
+
+#: Version of the consumer contract (config/hardware.yaml ble.consumer_v2.version).
+CONSUMER_CONTRACT_VERSION: str = "2.3"
 
 #: 128-bit UUIDs of the GATT contract (canonical string form).
 UUIDS: dict[str, str] = {

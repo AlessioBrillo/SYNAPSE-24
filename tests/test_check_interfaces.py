@@ -325,3 +325,57 @@ def test_a_missing_v1_contract_is_a_failure_not_a_traceback(tmp_path: Path) -> N
     report = ci.Report()
     ci.check_gatt_v2_consistent(report, ci.GATT_CONTRACT_V2, tmp_path / "absent.json")
     assert any("is missing" in f for f in report.failures), report.failures
+
+
+# --- MVP-1.9 W5: the stream -> UUID pairs, not just the presence of the strings -----------------
+
+
+def _gatt_v2_with_research(tmp_path):
+    import json
+
+    doc = {
+        "research_service": {
+            "service": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c70",
+            "characteristics": {
+                "ecg": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c71",
+                "ppg": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c72",
+            },
+        }
+    }
+    path = tmp_path / "gatt_v2.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def test_swapped_characteristics_in_a_copy_are_caught(tmp_path) -> None:
+    gatt = _gatt_v2_with_research(tmp_path)
+    swapped = tmp_path / "transport.py"
+    # both UUIDs are still in the file (the old presence check passed), but the pairs are crossed
+    swapped.write_text(
+        'CHAR_ECG = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72"\n'
+        'CHAR_PPG = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71"\n',
+        encoding="utf-8",
+    )
+    report = ci.Report()
+    ci.check_research_uuid_pairs(report, gatt, {"transport": swapped})
+    assert len(report.failures) == 2
+    assert "ecg" in report.failures[0]
+
+
+def test_matching_pairs_pass_and_an_unparsable_source_fails_loudly(tmp_path) -> None:
+    gatt = _gatt_v2_with_research(tmp_path)
+    good = tmp_path / "transport.py"
+    good.write_text(
+        'CHAR_ECG = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71"\n'
+        'CHAR_PPG = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72"\n',
+        encoding="utf-8",
+    )
+    report = ci.Report()
+    ci.check_research_uuid_pairs(report, gatt, {"transport": good})
+    assert report.failures == []
+
+    empty = tmp_path / "bringup.yaml"
+    empty.write_text("nothing: here\n", encoding="utf-8")
+    report = ci.Report()
+    ci.check_research_uuid_pairs(report, gatt, {"bringup": empty})
+    assert report.failures, "an extractor that finds nothing must not pass silently"
