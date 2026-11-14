@@ -112,7 +112,7 @@ Ogni `file_path` è risolto (`Path.resolve()`) e deve cadere in una *root consen
 
 | File | Contenuto |
 |---|---|
-| `contracts/gatt_v1.json` | Contratto GATT v1, **congelato** (sha256 fissato). |
+| `contracts/gatt_v1.json` | Contratto GATT v1, **ritirato**: invariato byte per byte come documento storico (sha256 verificato da `check_interfaces`), non più registrato dal firmware. |
 | `contracts/gatt_v2.json` | Contratto consumer v2 (UUID, layout con offset e sentinelle, metadati degli stream, control point). **Generato** da `config/hardware.yaml`. |
 | `contracts/vectors/consumer_v2.json` | Golden vector, generati dall'encoder dell'SDK e riprodotti byte per byte dal firmware C: feature e status, **metadati degli stream**, **control point** (scritture accettate e rifiutate con il codice d'errore), **Heart Rate Measurement**, una **sequenza di feature attraverso il giro dei 16 bit**. |
 | `contracts/raw_frame_v1.json`, `contracts/vectors/raw_frame_v1.json` | Frame raw del servizio research (header, id degli stream, formati) e i suoi vettori. |

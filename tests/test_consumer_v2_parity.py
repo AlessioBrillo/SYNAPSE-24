@@ -651,3 +651,18 @@ def test_gatt_v2_carries_the_research_service_uuids() -> None:
     assert set(doc["characteristics"]) == {"ecg", "ppg", "acc", "gyro", "mag", "power", "sync"}
     assert doc["characteristics"]["ecg"].endswith("4c71")
     assert doc["frame_contract"] == "contracts/raw_frame_v1.json"
+
+
+def test_every_vector_is_what_the_sdk_encoders_produce() -> None:
+    """A hand-edited vector file must not pass: each hex is rebuilt from its own inputs."""
+    doc = json.loads(VECTORS.read_text(encoding="utf-8"))
+    for case in doc["control"]["accepted"]:
+        assert consumer.encode_control(case["op"], case["arg"]).hex() == case["hex"], case["name"]
+    for case in doc["heart_rate_measurement"]:
+        assert consumer.encode_hr_measurement(case["bpm"], case["rr_raw"]).hex() == case["hex"]
+    for case in doc["feature_sequence_wrap"]:
+        assert consumer.encode_feature(case["values"]).hex() == case["hex"]
+    for case in doc["feature"]:
+        assert consumer.encode_feature(case["values"]).hex() == case["hex"], case["name"]
+    for case in doc["status"]:
+        assert consumer.encode_status(case["values"]).hex() == case["hex"], case["name"]

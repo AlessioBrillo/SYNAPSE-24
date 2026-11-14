@@ -29,8 +29,9 @@ sys.path.insert(0, str(ROOT / "sdk" / "python"))
 from synapse_device import codec, consumer  # noqa: E402
 
 GATT_V2 = ROOT / "contracts" / "gatt_v2.json"
+_CONTRACT: dict[str, Any] = json.loads(GATT_V2.read_text(encoding="utf-8"))
 #: The contract version, read from the generated contract (hardware.yaml is its only source).
-CONSUMER_CONTRACT_VERSION: str = json.loads(GATT_V2.read_text(encoding="utf-8"))["version"]
+CONSUMER_CONTRACT_VERSION: str = _CONTRACT["version"]
 
 OUT_CONSUMER = ROOT / "contracts" / "vectors" / "consumer_v2.json"
 OUT_RAW = ROOT / "contracts" / "vectors" / "raw_frame_v1.json"
@@ -252,7 +253,7 @@ def _stream_metadata_vector() -> dict[str, Any]:
             rate_hz=s["rate_hz"],
             unit_scale=s["unit_scale"],
         )
-        for s in json.loads(GATT_V2.read_text(encoding="utf-8"))["stream_metadata"]["streams"]
+        for s in _CONTRACT["stream_metadata"]["streams"]
     ]
     return {
         "rows": [

@@ -138,8 +138,12 @@ def _v2_values(
     set_time_min = int(control["set_time_min_epoch_ms"])
     if "set_time" not in control["opcodes"]:
         raise SystemExit(f"{MANIFEST}: control_point.opcodes must declare set_time")
-    if not str(v2.get("version", "")).strip():
-        raise SystemExit(f"{MANIFEST}: ble.consumer_v2.version is required (the contract version)")
+    version = v2.get("version")
+    if not isinstance(version, str) or not version.strip():
+        # a YAML number would turn "2.10" into 2.1: the version is a quoted string
+        raise SystemExit(
+            f'{MANIFEST}: ble.consumer_v2.version must be a quoted string such as "2.3"'
+        )
     return {
         "version": str(v2["version"]),
         "flags": flags,

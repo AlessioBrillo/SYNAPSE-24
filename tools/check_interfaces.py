@@ -355,6 +355,8 @@ def check_gatt_uuids_consistent(report: Report, gatt_contract: Path) -> None:
         )
 
 
+#: Streams every copy of the UUIDs must carry (sync is optional: one copy keeps it apart).
+_CORE_STREAMS = frozenset({"ecg", "ppg", "acc", "gyro", "mag", "power"})
 _PAIR_RE = re.compile(
     r"([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"
 )
@@ -379,11 +381,13 @@ def _stream_uuid_pairs(source: str, text: str) -> dict[str, str]:
             r"^CHAR_(\w+)\s*=\s*\"" + _PAIR_RE.pattern + r"\"", text, re.M
         ):
             pairs[name.lower()] = uuid.lower()
-    elif source == "bringup":  # characteristics: {ecg: "UUID", ...}
-        block = text[text.index("characteristics:") :] if "characteristics:" in text else ""
-        for name, uuid in re.findall(r"^\s+(\w+):\s*\"" + _PAIR_RE.pattern + r"\"", block, re.M):
-            if name != "service":
-                pairs[name.lower()] = uuid.lower()
+    elif source == "bringup":  # bringup.ble.characteristics: {ecg: "UUID", ...}
+        import yaml  # the block is read as YAML, not scraped: other sections look the same
+
+        block = ((yaml.safe_load(text) or {}).get("bringup") or {}).get("ble") or {}
+        for name, uuid in (block.get("characteristics") or {}).items():
+            if name != "service" and isinstance(uuid, str):
+                pairs[str(name).lower()] = uuid.lower()
     return pairs
 
 
@@ -419,13 +423,15 @@ def check_research_uuid_pairs(
             report.fail(f"{path.name}: no research stream UUIDs found (the extractor is stale)")
             continue
         for name, uuid in sorted(found.items()):
-            if name not in reference:
-                report.fail(f"{path.name}: stream {name!r} is not in the contract")
-            elif reference[name] != uuid:
+            # a name the contract does not know is some other constant, not a research stream
+            if name in reference and reference[name] != uuid:
                 report.fail(
                     f"{path.name}: stream {name!r} has UUID {uuid}, the contract says "
                     f"{reference[name]}"
                 )
+        absent = sorted((_CORE_STREAMS & set(reference)) - set(found))
+        if absent:
+            report.fail(f"{path.name}: no UUID for the core streams {absent}")
 
 
 def check_gatt_v2_consistent(report: Report, gatt_v2: Path, gatt_v1: Path) -> None:
