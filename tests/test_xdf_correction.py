@@ -113,7 +113,6 @@ class TestXDFCorrection:
             src_id = info.get("source_id", [""])[0]
             if src_id == source_ids[0]:
                 timestamps = stream["time_stamps"]
-                original_start = 1000.0
                 expected_start = 1000.0 - 0.005
                 assert abs(timestamps[0] - expected_start) < XDF_OFFSET_TOLERANCE_S
 

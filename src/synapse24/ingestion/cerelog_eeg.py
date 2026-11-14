@@ -608,7 +608,7 @@ class CerelogEEGManager:
         if clock_sync is not None and pod_id is not None:
             timestamps = clock_sync.correct_pod_timestamps(pod_id, timestamps)
 
-        n_samples, n_channels = eeg_data.shape[1], eeg_data.shape[0]
+        _n_samples, n_channels = eeg_data.shape[1], eeg_data.shape[0]
 
         # Build streams list for XDF
         streams = []
@@ -768,7 +768,7 @@ def ingest_cerelog_eeg(
         manager.prepare()
 
         # Impedance check
-        impedance_results = manager.check_impedance()
+        manager.check_impedance()
         impedance_report = manager.get_impedance_report()
 
         # Acquire data with drift correction if clock_sync provided

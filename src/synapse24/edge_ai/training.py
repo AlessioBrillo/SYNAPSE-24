@@ -350,7 +350,7 @@ class EdgeImpulseTrainer:
         """Build MLP model (for pre-extracted features)."""
         # Flatten if time series
         if len(input_shape) > 1:
-            flat_size = np.prod(input_shape)
+            np.prod(input_shape)
             inputs = keras.Input(shape=input_shape)
             x = layers.Flatten()(inputs)
         else:

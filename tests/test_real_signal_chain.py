@@ -64,7 +64,7 @@ def test_the_framing_is_lossless_and_ordered(codec, recordings, record) -> None:
 def test_the_beats_survive_the_chain(codec, recordings, record) -> None:
     mv, ref, fs = recordings[record]
     result = rsr.replay_ecg(mv, ref, fs, codec)
-    before, after = result["untouched_recording"], result["after_the_chain"]
+    before, _after = result["untouched_recording"], result["after_the_chain"]
     assert before["sensitivity"] >= 0.95, "fixture must be detectable"
     assert before["ppv"] >= 0.95, "fixture must be detectable"
     # Resampling to 500 Hz and the 12-bit ADC may cost the odd beat, never a visible share of them.

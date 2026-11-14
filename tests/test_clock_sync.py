@@ -115,7 +115,7 @@ class TestSyncMarkerManager:
             received.append((marker.sequence, pod_time))
 
         manager.register_callback("pod1", callback)
-        marker = manager.broadcast_sync(1000.0)
+        manager.broadcast_sync(1000.0)
 
         assert len(received) == 1
         assert received[0][0] == 0

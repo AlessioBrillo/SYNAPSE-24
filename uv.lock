@@ -4020,7 +4020,6 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "synapse-device" },
-    { name = "tensorflow-cpu" },
     { name = "tqdm" },
     { name = "wfdb" },
     { name = "yasa" },
@@ -4028,6 +4027,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "bandit" },
     { name = "bleak" },
     { name = "esptool" },
     { name = "fastapi" },
@@ -4039,9 +4039,11 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pytest-json-report" },
     { name = "pytest-mock" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "types-pytz" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "types-tqdm" },
@@ -4058,6 +4060,9 @@ hardware = [
     { name = "esptool" },
     { name = "pylsl" },
     { name = "pyserial" },
+]
+train = [
+    { name = "tensorflow-cpu" },
 ]
 
 [package.dev-dependencies]
@@ -4094,6 +4099,7 @@ hardware = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.9.4" },
     { name = "biosppy", specifier = ">=2.2.0,<3.0" },
     { name = "bleak", marker = "extra == 'dev'", specifier = ">=0.22.0,<1.0" },
     { name = "bleak", marker = "extra == 'hardware'", specifier = ">=0.22.0,<1.0" },
@@ -4124,6 +4130,7 @@ requires-dist = [
     { name = "pyserial", marker = "extra == 'hardware'", specifier = ">=3.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2.0,<9.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0,<6.0" },
+    { name = "pytest-json-report", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14.0,<4.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0,<4.0" },
     { name = "pyxdf", specifier = ">=1.6.0,<2.0" },
@@ -4133,17 +4140,18 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.5.0,<2.0" },
     { name = "scipy", specifier = ">=1.13.0,<2.0" },
     { name = "synapse-device", editable = "sdk/python" },
-    { name = "tensorflow-cpu", specifier = ">=2.16.2" },
+    { name = "tensorflow-cpu", marker = "extra == 'train'", specifier = ">=2.16.2,<3.0" },
     { name = "tqdm", specifier = ">=4.66.0,<5.0" },
+    { name = "types-pytz", marker = "extra == 'dev'", specifier = ">=2026.3.1.20260727" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.31.0,<3.0" },
-    { name = "types-tqdm", marker = "extra == 'dev'", specifier = ">=4.24.0,<5.0" },
+    { name = "types-tqdm", marker = "extra == 'dev'", specifier = ">=4.70.0.20260827" },
     { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.24.0,<1.0" },
     { name = "wfdb", specifier = ">=4.2.0,<5.0" },
     { name = "yasa", specifier = ">=0.6.2,<1.0" },
     { name = "ziglang", marker = "extra == 'dev'", specifier = ">=0.16.0,<0.17" },
 ]
-provides-extras = ["dev", "hardware", "docs"]
+provides-extras = ["dev", "train", "hardware", "docs"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4183,7 +4191,6 @@ version = "0.1.0.dev0"
 source = { editable = "sdk/python" }
 dependencies = [
     { name = "numpy" },
-    { name = "pydantic" },
 ]
 
 [package.metadata]
@@ -4191,7 +4198,6 @@ requires-dist = [
     { name = "bleak", marker = "extra == 'ble'", specifier = ">=0.22.0,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", specifier = ">=1.26,<2.0" },
-    { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyxdf", marker = "extra == 'xdf'", specifier = ">=1.16,<2.0" },

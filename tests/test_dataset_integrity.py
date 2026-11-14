@@ -126,7 +126,7 @@ class TestMitbihIntegrity:
         import numpy as np
         import wfdb
 
-        record = wfdb.rdrecord(str(MITBIH_DIR / "119"))
+        wfdb.rdrecord(str(MITBIH_DIR / "119"))
         annotation = wfdb.rdann(str(MITBIH_DIR / "119"), "atr")
         symbols = np.array([str(s) for s in annotation.symbol])
         v_count = sum(1 for s in symbols if s == "V")

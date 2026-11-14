@@ -163,7 +163,6 @@ class TestTier1XDFDriftCorrection:
 
     def test_tier0_drift_tolerance_not_applied_to_tier1(self) -> None:
         """Verify Tier 0 tolerance (10ms) is NOT used for Tier 1 data."""
-        fs = 500
         n_samples = 5000
 
         hub_ts = np.linspace(1000.0, 1010.0, n_samples)

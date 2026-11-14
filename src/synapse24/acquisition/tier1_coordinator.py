@@ -340,7 +340,7 @@ class Tier1Coordinator:
         results = {}
         for pod_id, state in self._tier1_pods.items():
             if state.cerelog_manager:
-                impedance_results = state.cerelog_manager.check_impedance()
+                state.cerelog_manager.check_impedance()
                 state.impedance_checked = True
                 report = state.cerelog_manager.get_impedance_report()
                 state.quality_passed = report["passed"] > 0
@@ -596,9 +596,9 @@ class Tier1Coordinator:
             tier = self.controller.state_machine.current_tier
 
         if tier == QualityTier.T1:
-            max_drift = self.sync_config.tier_budget.tier1_max_residual_drift_ms
+            pass
         else:
-            max_drift = self.sync_config.tier_budget.tier0_max_residual_drift_ms
+            pass
 
         status = self.clock_sync.get_sync_status(tier=tier)
         return {pod_id: info["within_tolerance"] for pod_id, info in status["pods"].items()}

@@ -45,6 +45,7 @@ def run_cmd(cmd: list[str], cwd: Path | None = None, timeout: int = 300) -> tupl
         timeout=timeout,
         encoding="utf-8",
         errors="replace",
+        check=False,
     )
     return result.returncode, result.stdout, result.stderr
 

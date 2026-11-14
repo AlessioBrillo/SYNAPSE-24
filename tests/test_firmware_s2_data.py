@@ -217,9 +217,10 @@ def test_the_ecg_gain_is_the_boards_and_agrees_with_the_manifest() -> None:
         if "ecg_config" in p.get("metadata", {})
     )
     assert kconfig_gain == ecg["gain"] == 1100.0
-    # the host bring-up scripts already assumed the same total gain
-    for script in ("hardware_bringup.py", "validate_phase1_entry.py"):
-        assert "1.0 / 1100.0" in (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    # the host bring-up script already assumed the same total gain
+    assert "1.0 / 1100.0" in (ROOT / "scripts" / "validate_phase1_entry.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_a_real_qrs_fits_the_16_bit_microvolt_range_at_that_gain() -> None:

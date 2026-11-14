@@ -204,7 +204,6 @@ SYNAPSE-24/
 ├── scripts/
 │   ├── __init__.py
 │   ├── download_datasets.py      # Dataset downloader with verification
-│   ├── hardware_bringup.py       # Hardware bringup orchestration
 │   ├── ingest_datasets.py        # Main ingestion entry point
 │   ├── quantize_and_deploy.py    # Quantization & deployment
 │   ├── reproduce_wesad_fusion.py # WESAD fusion reproduction

@@ -224,6 +224,16 @@ bool synapse_power_has_measured_current(void)
  * the host gate compiles the assignment. */
 #include "ble_research_service.h"
 
+/* The research service is not linked into this library; the assignment below needs the symbol to
+ * exist. A shared object with an undefined symbol cannot be loaded on Linux (the six INA219 tests
+ * skipped there for that reason), so the host provides an empty body: only the SIGNATURE matters. */
+void synapse_research_service_submit_power(float voltage_mv, float current_ma, float battery_pct)
+{
+    (void)voltage_mv;
+    (void)current_ma;
+    (void)battery_pct;
+}
+
 int ina_host_wiring_smoke(void)
 {
     synapse_power_telemetry_sink_t sink = synapse_research_service_submit_power;

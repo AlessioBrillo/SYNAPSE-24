@@ -459,7 +459,7 @@ class Phase1Validator:
             self.logger.info("Cerelog EEG prepared successfully")
 
             # Run impedance check
-            impedance_results = self.cerelog_manager.check_impedance()
+            self.cerelog_manager.check_impedance()
             report = self.cerelog_manager.get_impedance_report()
             self.logger.info(
                 f"Impedance check: {report['passed']}/{report['total_channels']} channels passed"
@@ -734,7 +734,7 @@ class Phase1Validator:
 
             cfg = self.lsl_manager.stream_configs.get(name, {})
             stream_type = cfg.get("type", "Other")
-            channel_count = data_arr.shape[1]
+            data_arr.shape[1]
             sampling_rate = cfg.get("sampling_rate", 0)
             tier = cfg.get("tier", 0)
 
@@ -764,13 +764,13 @@ class Phase1Validator:
 
     def _collect_results(self, loop_results: dict, xdf_proof: dict) -> Phase1ValidationReport:
         run_id = uuid.uuid4().hex[:8]
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        time.strftime("%Y-%m-%dT%H:%M:%S")
 
         sync_status_t0, sync_status_t1 = self._get_sync_status()
-        power_status = self._get_power_status()
-        transitions = self._get_transitions()
+        self._get_power_status()
+        self._get_transitions()
         gates = self._evaluate_gates(loop_results, xdf_proof, sync_status_t0, sync_status_t1)
-        overall_pass = all(g.passed for g in gates)
+        all(g.passed for g in gates)
 
         return Phase1ValidationReport(
             run_id=run_id,
@@ -1035,7 +1035,7 @@ class Phase1Validator:
         }
         measured: dict[str, float] = {}
         for label, outlet in outlet_of.items():
-            rate = nominal.get(outlet, 0.0)
+            nominal.get(outlet, 0.0)
             n = counts.get(outlet, loop_results["sample_counts"].get(label.lower(), 0))
             measured[label] = n / duration if duration > 0 else 0.0
         rate_checks = {
@@ -1060,19 +1060,27 @@ class Phase1Validator:
 
         return gates
 
-    def _dry_run_report(self, duration_s: float) -> Phase1ValidationReport:
+    def _dry_run_report(
+        self, duration_s: float, problems: list[str] | None = None
+    ) -> Phase1ValidationReport:
         """Build the dry-run report after validating configuration only."""
+        problems = problems or []
+        gates = [
+            ValidationGateResult(
+                "config_validation",
+                not problems,
+                "OK" if not problems else "FAILED",
+                "OK",
+                "Config structure valid" if not problems else "; ".join(problems),
+            )
+        ]
         return Phase1ValidationReport(
             run_id="dry-run",
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
             config_path=str(self.config.get("_config_path", "unknown")),
             duration_s=duration_s,
-            gates=[
-                ValidationGateResult(
-                    "config_validation", True, "OK", "OK", "Config structure valid"
-                )
-            ],
-            overall_pass=True,
+            gates=gates,
+            overall_pass=all(g.passed for g in gates),
             sample_counts={},
             transitions=[],
             xdf_proof={"all_streams_valid": True, "total_dropped": 0},
@@ -1241,7 +1249,7 @@ class Phase1Validator:
 
         ecg = self._outlet_array("SYNAPSE_ECG_T0")
         ppg_red = self._outlet_array("SYNAPSE_PPG_T0", channel=0)
-        ppg_ir = self._outlet_array("SYNAPSE_PPG_T0", channel=1)
+        self._outlet_array("SYNAPSE_PPG_T0", channel=1)
 
         hr_bpm = rmssd_ms = sqi = map_ = None
         if ecg.size > 50:
@@ -1508,14 +1516,25 @@ class Phase1Validator:
 
         if dry_run:
             self.logger.info("DRY RUN MODE - validating configuration only")
-            # Validate config structure, env expansion, etc.
-            self._create_lsl_outlets()
-            self._setup_clock_sync()
-            self._setup_acquisition_controller()
+            # Validate config structure, env expansion, etc. What the setup raises is the
+            # verdict: the report used to say PASS whatever happened (it was a constant).
+            problems: list[str] = []
+            for step in (
+                self._create_lsl_outlets,
+                self._setup_clock_sync,
+                self._setup_acquisition_controller,
+            ):
+                try:
+                    step()
+                except Exception as exc:  # noqa: BLE001 - any failure of the setup is the finding
+                    problems.append(f"{step.__name__}: {exc}")
             # Skip Cerelog EEG hardware connection in dry-run
             self.cerelog_connected = False
-            self.logger.info("Configuration validation PASSED")
-            return self._dry_run_report(duration_s)
+            if problems:
+                self.logger.error("Configuration validation FAILED: %s", "; ".join(problems))
+            else:
+                self.logger.info("Configuration validation PASSED")
+            return self._dry_run_report(duration_s, problems)
 
         if record:
             return await self._run_with_recording(
@@ -1662,7 +1681,7 @@ class Phase1Validator:
             if fw_cfg["verify_after_flash"]:
                 cmd.extend(["--verify"])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
             if result.returncode == 0:
                 self.logger.info("Firmware flashed successfully")
                 return True
