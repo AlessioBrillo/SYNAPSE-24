@@ -48,7 +48,7 @@ void triage_features_push_imu(float ax, float ay, float az, float gx, float gy, 
 }
 
 void triage_features_push_ppg_ir(float ir) {
-    if (!ppg_processor_rate_nominal()) {  // motion-gated rate: drop the window, never time-warp it
+    if (!ppg_processor_rate_nominal()) {  // poll rate is not the nominal one: drop the window, never time-warp it
         portENTER_CRITICAL(&s_lock);
         s_ir_head = s_ir_count = 0;
         portEXIT_CRITICAL(&s_lock);

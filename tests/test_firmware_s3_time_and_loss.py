@@ -146,7 +146,7 @@ def test_the_ppg_driver_forwards_every_fifo_sample() -> None:
     assert "s_ctx.skipped_samples += (uint32_t)(avail - 1)" not in code  # the old 'keep the newest'
     assert "bool ppg_max30102_has_more(" in code
     # a burst that fails half way is counted, not hidden
-    assert "s_ctx.skipped_samples += (uint32_t)(avail - i)" in read
+    assert "s_ctx.skipped_samples += (uint32_t)avail" in read
 
 
 def test_the_scheduler_keeps_reading_while_the_driver_has_more_and_counts_a_full_ring() -> None:

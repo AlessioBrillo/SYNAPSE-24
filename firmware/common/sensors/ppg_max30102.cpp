@@ -44,6 +44,7 @@ typedef struct {
 } ppg_max30102_ctx_t;
 
 static ppg_max30102_ctx_t s_ctx = {};
+static int64_t s_last_ts_us = INT64_MIN;  // newest timestamp handed out: stamps never step back
 
 static esp_err_t max30102_write_reg(uint8_t reg, uint8_t value) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -147,6 +148,7 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
     CHK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
     s_ctx.skipped_samples = 0;
     s_ctx.lost_unreported = 0;
+    s_last_ts_us = INT64_MIN;  // a restarted clock must not be clamped to the previous run's stamps
     s_ctx.fifo_enabled = true;  // acquisition starts with the scheduler; nothing else enables the FIFO
 
     if (config->gpio_int >= 0) {
@@ -174,7 +176,6 @@ static float s_batch_ir[PPG_BATCH_MAX];
 static int64_t s_batch_ts[PPG_BATCH_MAX];
 static uint8_t s_batch_n = 0;
 static uint8_t s_batch_next = 0;
-static int64_t s_last_ts_us = INT64_MIN;  // newest timestamp handed out: stamps never step back
 
 static void ppg_deliver(sensor_sample_t* sample, uint8_t i) {
     sample->data.ppg.red = s_batch_red[i];
@@ -228,9 +229,10 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
     for (uint8_t i = 0; i < avail; i++) {
         esp_err_t rc = max30102_read_fifo(fifo_data, 6);
         if (rc != ESP_OK) {
-            // The samples already taken out of the FIFO are gone: count them, do not hide them.
-            s_ctx.skipped_samples += (uint32_t)(avail - i);
-            s_ctx.lost_unreported += (uint32_t)(avail - i);
+            // The whole burst is gone: the i samples already taken out of the FIFO sit in the batch
+            // arrays, which are never delivered (s_batch_n stays 0), so all `avail` are lost.
+            s_ctx.skipped_samples += (uint32_t)avail;
+            s_ctx.lost_unreported += (uint32_t)avail;
             return rc;
         }
         uint32_t red = (((uint32_t)fifo_data[0] << 16) | ((uint32_t)fifo_data[1] << 8) | fifo_data[2]) & 0x3FFFF;
