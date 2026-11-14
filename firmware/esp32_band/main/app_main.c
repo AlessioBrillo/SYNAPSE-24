@@ -102,11 +102,26 @@ static uint8_t device_health_mask(void)
     return mask;
 }
 
+// Bits shared by the feature frame and the status record (config/hardware.yaml ble.consumer_v2.flags).
+// t_dev_ms is the low 32 bits of the uptime in ms: it wraps after 49.7 days, and a consumer that
+// unwraps it needs to know that it did.
+static uint8_t common_flags(void)
+{
+    uint8_t flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
+    if (synapse_sensors_ecg_lead_off()) {
+        flags |= SYNAPSE_V2_FLAG_LEAD_OFF;
+    }
+    if (((uint64_t)esp_timer_get_time() / 1000u) >> 32) {
+        flags |= SYNAPSE_V2_FLAG_CLOCK_WRAPPED;
+    }
+    return flags;
+}
+
 static void fill_status(synapse_status_v2_t *st)
 {
     st->tier = (uint8_t)synapse_acquisition_get_tier();
     st->sensor_health = device_health_mask();
-    st->flags = s_transmitting ? SYNAPSE_V2_FLAG_TRANSMITTING : 0;
+    st->flags = common_flags();
     st->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     st->epoch_wraps = (uint16_t)synapse_research_service_epoch_wraps();
     // Both rings: the research service's and the scheduler's (a sample the scheduler could not
@@ -121,8 +136,8 @@ static void fill_status(synapse_status_v2_t *st)
 }
 
 // Consumer feature stream (Averyn integration).
-// synapse_ble_gatt_push_feature() is rate-limited to 1 Hz internally; we call
-// it every main-loop tick and let it drop when the gate is closed, so the
+// synapse_ble_gatt_push_heart_rate() and push_feature_v2() are rate-limited internally; we call
+// them every main-loop tick and let them drop when the gate is closed, so the
 // radio never dominates the power budget.
 
 void app_main(void)
@@ -311,8 +326,8 @@ void app_main(void)
         }
 
         // --- Consumer feature stream (Averyn integration) --------------------
-        // Push a real feature frame every main-loop tick; push_feature() rate-
-        // limits to 1 Hz internally and drops silently when nothing is
+        // Push a real feature frame every main-loop tick; push_feature_v2() rate-
+        // limits internally and drops silently when nothing is
         // subscribed. Values come from the signal-quality and edge-AI modules
         // (no placeholders). When stress triage is not yet valid we emit
         // stress_level=3 (unknown) so Averyn never shows a fabricated class.
@@ -351,16 +366,7 @@ void app_main(void)
                 ppg_map = synapse_unit_to_u8(ppg.motion_artifact_prob);
             }
 
-            (void)synapse_ble_gatt_push_feature(
-                hr_bpm,                     // hr_bpm (0xFFFF if invalid)
-                0xFFFF,                     // rr_interval_ms (genuine RR only; not RMSSD)
-                ppg_sqi,
-                ppg_map,
-                ecg_quality,
-                stress_level,
-                0xFF,                       // motion_level (0xFF = not available)
-                0x7FFF                       // temperature 0.01°C (0x7FFF = invalid until TMP117 wired)
-            );
+            (void)synapse_ble_gatt_push_heart_rate(hr_bpm);  // 0xFFFF if invalid
 
             // Consumer contract v2: the same measurements, with everything not measured
             // left at its NA sentinel (a consumer reads null, never 0).
@@ -373,7 +379,7 @@ void app_main(void)
             v2.motion_artifact = ppg_map;  // v1's ppg_map: the PPG window is motion-corrupted
             if (stress.valid) v2.stress_level = stress_level;  // otherwise it stays NA (null)
             v2.sensor_health = device_health_mask();
-            if (s_transmitting) v2.flags |= SYNAPSE_V2_FLAG_TRANSMITTING;
+            v2.flags |= common_flags();
 #if defined(CONFIG_SYNAPSE_RR_ENABLE)
             // RR and HRV leave only with a frame that really goes out and only from a fresh,
             // clean reading: otherwise they stay NA. The intervals are looked at (peek) here and

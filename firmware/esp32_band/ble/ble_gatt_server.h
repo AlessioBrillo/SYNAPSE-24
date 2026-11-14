@@ -93,7 +93,9 @@ extern "C" {
     (SYNAPSE_BLE_ADV_NAME_OVERHEAD_BYTES + (unsigned)(name_len))
 
 // ============================================================================
-// Feature Stream Payload Format (packed, fits in MTU-3 bytes)
+// Feature record, v1 layout. RETIRED as a GATT characteristic (contracts/gatt_v1.json): nothing
+// registers or notifies it any more. The layout lives on only as the input record of the on-device
+// FIT writer (synapse_fit_write_from_feature); the consumer stream is the v2 frame below.
 // ============================================================================
 #define SYNAPSE_FEATURE_STREAM_VERSION  1
 #define SYNAPSE_FEATURE_STREAM_MAX_HZ   10   // negotiated default 1 Hz, cap 10 Hz
@@ -121,7 +123,7 @@ typedef struct __attribute__((packed)) {
 #define SYNAPSE_FEATURE_STREAM_SIZE sizeof(synapse_feature_stream_t)
 // Size = 23 bytes (it was documented as 26, which was never true), so it needs an ATT MTU >= 26.
 // The default MTU 23 leaves 20 bytes: the sender must respect MTU-3 before notifying.
-// The layout is frozen: Averyn pins contracts/gatt_v1.json and its golden vectors.
+// The layout is frozen because the FIT writer and its tests read it.
 #ifndef __cplusplus
 _Static_assert(sizeof(synapse_feature_stream_t) == 23, "feature stream v1 is 23 bytes on the wire");
 #endif
@@ -232,13 +234,6 @@ void synapse_ble_gatt_start_advertising_normal(void);
 void synapse_ble_gatt_process_events(void);
 
 /**
- * @brief Send feature stream notification
- * @param feature Pointer to feature data
- * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not connected/not subscribed
- */
-esp_err_t synapse_ble_gatt_notify_features(const synapse_feature_stream_t *feature);
-
-/**
  * @brief Notify Heart Rate Measurement (0x2A37) with optional RR interval.
  * @param hr_bpm Heart rate in bpm (0xFFFF = invalid)
  * @param rr_interval_ms Latest RR interval in ms (0xFFFF = none)
@@ -261,16 +256,10 @@ esp_err_t synapse_ble_gatt_notify_battery(uint8_t level, bool charging);
 void synapse_ble_gatt_battery_changed(uint8_t level, bool charging);
 
 /**
- * @brief Build and notify a feature stream frame from raw inputs.
- * HR/RR are also pushed to the standard 0x2A37 characteristic.
- * Call from the feature/signal-quality module whenever a new frame is ready
- * (default 1 Hz, capped at SYNAPSE_FEATURE_STREAM_MAX_HZ).
- * @return ESP_OK on success
+ * @brief Standard Heart Rate (0x2A37): record and, when subscribed, notify the heart rate.
+ * Rate-limited to 1 Hz; 0xFFFF (no valid measurement) is ignored. Carries no RR (see the .c).
  */
-esp_err_t synapse_ble_gatt_push_feature(uint16_t hr_bpm, uint16_t rr_interval_ms,
-                                         uint8_t ppg_sqi, uint8_t ppg_map,
-                                         uint8_t ecg_quality, uint8_t stress_level,
-                                         uint8_t motion_level, int16_t temperature);
+esp_err_t synapse_ble_gatt_push_heart_rate(uint16_t hr_bpm);
 
 /**
  * @brief Consumer contract v2: notify a feature frame (config/hardware.yaml ble.consumer_v2).

@@ -260,10 +260,10 @@ def test_the_feature_frame_does_not_transmit_fabricated_values() -> None:
     """Invalid heart rate, quality and motion are sent as "not available"."""
     source = _read(APP_MAIN)
     # The call site (the header comment mentions the function too).
-    start = source.rindex("synapse_ble_gatt_push_feature(")
+    start = source.rindex("synapse_ble_gatt_push_heart_rate(")
     block = source[max(0, start - 1500) : start + 600]
 
-    assert re.search(r"synapse_ble_gatt_push_feature\(\s*hr_bpm\s*,", block), (
+    assert re.search(r"synapse_ble_gatt_push_heart_rate\(\s*hr_bpm\s*\)", block), (
         "the pushed heart rate must be the validated variable, not a cast of "
         "the raw measurement: an invalid reading would be transmitted as 0 bpm"
     )
@@ -272,9 +272,6 @@ def test_the_feature_frame_does_not_transmit_fabricated_values() -> None:
     assert "ppg_map = 0xFF" in block, "a missing MAP must be 0xFF (not available)"
     assert "ecg_quality = 0xFF" in block, (
         "the ECG quality has no validated value: it must be 0xFF (not available)"
-    )
-    assert re.search(r"0xFF,\s*//\s*motion_level", block), (
-        "the motion level placeholder must be 0xFF (not available)"
     )
     assert "(uint16_t)ppg.hr_bpm) " not in block, (
         "the heart rate must not be cast unconditionally: an invalid reading "

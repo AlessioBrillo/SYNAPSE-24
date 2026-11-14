@@ -125,6 +125,10 @@ bool synapse_sensors_temperature_ok(void);
 /** Bitmask of sensors whose init succeeded (bit n = sensor_type_t n). */
 uint8_t synapse_sensors_health_mask(void);
 
+/** True while the ECG lead-off input (AD8232 LO+) is asserted. False when the ECG did not
+ *  initialise or the pin is not wired (gpio_drdy < 0). */
+bool synapse_sensors_ecg_lead_off(void);
+
 /** Reads that failed (not counting "no new sample yet"), summed over the sensors. */
 uint32_t synapse_sensors_read_errors(void);
 

@@ -37,8 +37,9 @@ def test_the_four_v2_characteristics_sit_on_the_consumer_service() -> None:
     table = _consumer_service_table(_code(GATT))
     for uuid in ("FEAT2_UUID", "STATUS_UUID", "META_UUID", "CTL_UUID"):
         assert f".uuid = &{uuid}.u" in table, uuid
-    # v1 stays exactly where it was
-    for uuid in ("FEAT_UUID", "CFG_UUID", "PROV_UUID"):
+    # the retired v1 feature characteristic is gone; config and provisioning stay
+    assert ".uuid = &FEAT_UUID.u" not in table
+    for uuid in ("CFG_UUID", "PROV_UUID"):
         assert f".uuid = &{uuid}.u" in table, uuid
 
 
@@ -117,12 +118,19 @@ def test_the_status_mtu_is_the_negotiated_one() -> None:
     assert "st.mtu = g_mtu" in body
 
 
-def test_v1_push_is_untouched_by_v2() -> None:
+def test_the_v1_feature_characteristic_is_gone() -> None:
     code = _code(GATT)
-    body = code[code.index("esp_err_t synapse_ble_gatt_push_feature(") :]
-    body = body[: body.index("static esp_err_t notify_flat(")]
-    assert "f.version = SYNAPSE_FEATURE_STREAM_VERSION" in body
-    assert "feat2" not in body.lower()
+    for gone in (
+        "g_feat_seq",
+        "g_feat_subscribed",
+        "s_feat_handle",
+        "FEAT_UUID.u,",
+        "feat_access(",
+        "synapse_ble_gatt_push_feature(",
+        "synapse_ble_gatt_notify_features(",
+    ):
+        assert gone not in code, gone
+    assert "esp_err_t synapse_ble_gatt_push_heart_rate(" in code
 
 
 def test_app_main_wires_the_provider_the_handler_and_the_v2_push() -> None:

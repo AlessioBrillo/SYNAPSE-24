@@ -31,6 +31,10 @@ static adc_cali_handle_t g_cali_handle = NULL;
 static adc_channel_t g_bat_adc_channel = ADC_CHANNEL_3; // ADC1 CH3 = GPIO4 on ESP32-S3
 static float g_voltage_divider = 2.0f;
 static bool g_charging = false;
+// A single LiPo cell reads 3.0-4.4 V; outside this range the rail is not a battery (USB, no cell).
+#define SYNAPSE_POWER_BATTERY_MIN_V 3.0f
+#define SYNAPSE_POWER_BATTERY_MAX_V 4.4f
+
 static bool g_initialized = false;
 static synapse_power_telemetry_sink_t g_telemetry_sink = NULL;
 static synapse_power_battery_sink_t g_battery_sink = NULL;
@@ -179,8 +183,14 @@ void synapse_power_tick(void) {
             current_measured = true;
             g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
             if (g_telemetry_sink != NULL) {
+                // The percentage comes from the bus voltage, which is only a battery voltage when
+                // a single LiPo cell is on the rail. USB at 5 V would read as 100 %: say -1 (not
+                // available) on the POWER stream instead, as the Battery Service already does.
+                const bool battery_plausible =
+                    g_status.voltage_v >= SYNAPSE_POWER_BATTERY_MIN_V &&
+                    g_status.voltage_v <= SYNAPSE_POWER_BATTERY_MAX_V;
                 g_telemetry_sink(g_status.voltage_v * 1000.0f, g_status.current_ma,
-                                 (float)g_status.battery_level_pct);
+                                 battery_plausible ? (float)g_status.battery_level_pct : -1.0f);
             }
         }
     }
@@ -189,7 +199,8 @@ void synapse_power_tick(void) {
     // Battery Service / feature frame: report a plausible single-cell LiPo reading
     // when it changes. Outside 3.0-4.4 V the divider is not connected (USB-powered
     // smoke kit): publish nothing instead of noise.
-    if (g_battery_sink != NULL && g_status.voltage_v >= 3.0f && g_status.voltage_v <= 4.4f &&
+    if (g_battery_sink != NULL && g_status.voltage_v >= SYNAPSE_POWER_BATTERY_MIN_V &&
+        g_status.voltage_v <= SYNAPSE_POWER_BATTERY_MAX_V &&
         g_status.battery_level_pct != g_last_notified_pct) {
         g_last_notified_pct = g_status.battery_level_pct;
         g_battery_sink(g_status.battery_level_pct, g_status.charging);
@@ -233,8 +244,7 @@ void synapse_power_tick(void) {
     }
     
     // Check tier affordability
-    float reserve_mah = 300.0f;  // From config
-    float available_mah = g_status.battery_remaining_mah - reserve_mah;
+    float available_mah = g_status.battery_remaining_mah - hw_cfg.reserve_mah;
     if (available_mah < 0) available_mah = 0;
     
     g_status.can_afford_tier1 = (available_mah >= (hw_cfg.t1_avg_mw / 3.7f) * 1.0f);  // 1h Tier 1
@@ -283,7 +293,7 @@ bool synapse_power_can_afford_tier1(float duration_h) {
     synapse_config_get(&hw_cfg);
     
     float required_mah = (hw_cfg.t1_avg_mw / 3.7f) * duration_h;
-    float available_mah = g_status.battery_remaining_mah - 300.0f;  // reserve
+    float available_mah = g_status.battery_remaining_mah - hw_cfg.reserve_mah;
     
     return available_mah >= required_mah;
 }
@@ -295,7 +305,7 @@ bool synapse_power_can_afford_tier2(float duration_min) {
     synapse_config_get(&hw_cfg);
     
     float required_mah = (hw_cfg.t2_avg_mw / 3.7f) * (duration_min / 60.0f);
-    float available_mah = g_status.battery_remaining_mah - 300.0f;  // reserve
+    float available_mah = g_status.battery_remaining_mah - hw_cfg.reserve_mah;
     
     return available_mah >= required_mah;
 }

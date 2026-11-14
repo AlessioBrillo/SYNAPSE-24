@@ -53,6 +53,13 @@ CONFIG_BT_NIMBLE_GATT_MAX_CCCDS=8
 
 CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="SYNAPSE-BAND"
 
+# Link throughput. The contract and hardware.yaml (ble.mtu_target) say 247; the NimBLE default is
+# 256, so the band asked for an MTU its own docs never mention. The notification burst of one tick
+# (up to 16 raw frames) needs more than the default 12 mbuf blocks of 256 B, or the stack answers
+# "no buffer" and the frames are counted as dropped.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=32
+
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 CONFIG_ESP_IPC_TASK_STACK_SIZE=2048

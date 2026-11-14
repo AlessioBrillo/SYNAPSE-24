@@ -23,6 +23,9 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config);
 esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx);
 esp_err_t ecg_ad8232_deinit(void* user_ctx);
 bool ecg_ad8232_is_lead_off(void* user_ctx);
+/** Samples not delivered since the last call because the bias was being measured (the call resets
+ *  it); the scheduler turns them into a sequence hole. */
+uint32_t ecg_ad8232_take_lost(void* user_ctx);
 
 #ifdef __cplusplus
 }

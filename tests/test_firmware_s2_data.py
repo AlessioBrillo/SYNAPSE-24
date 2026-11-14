@@ -163,34 +163,40 @@ def test_app_main_applies_the_freshness_rule_to_the_ppg_values() -> None:
 # --- L0: the band as a plain heart-rate strap ------------------------------------------------------
 
 
-def _push_feature_body() -> str:
+def _push_heart_rate_body() -> str:
     code = GATT.read_text(encoding="utf-8")
-    body = code[code.index("esp_err_t synapse_ble_gatt_push_feature(") :]
+    body = code[code.index("esp_err_t synapse_ble_gatt_push_heart_rate(") :]
     return body[: body.index("static esp_err_t notify_flat(")]
 
 
-def test_the_standard_heart_rate_is_notified_before_and_apart_from_the_feature_stream() -> None:
+def test_the_standard_heart_rate_does_not_depend_on_the_feature_stream() -> None:
     """A client that subscribed only to 0x2A37 (Averyn's generic HR adapter) must get its beats."""
-    body = _push_feature_body()
-    hr = body.index("synapse_ble_gatt_notify_hr(")
-    feature_gate = body.index("if (!g_feat_subscribed")
-    assert hr < feature_gate, "HR is behind the feature-subscription check: L0 stays silent"
-    assert "s_hr_subscribed" in body[:feature_gate]
-    assert body.count("synapse_ble_gatt_notify_hr(") == 1, "the old mirror inside the feature path"
+    body = _push_heart_rate_body()
+    assert body.count("synapse_ble_gatt_notify_hr(") == 1
+    assert "feat" not in body.replace("feature", "").lower()  # no v1/v2 subscription in its way
     assert "s_last_hr_ms" in body  # its own 1 Hz gate
+    assert "0xFFFF" in body  # an invalid heart rate is never sent
+    # the value is recorded even while nobody is subscribed, so a READ sees the same measurement
+    assert "s_hr_subscribed" not in body
+
+
+def test_the_standard_heart_rate_carries_no_rr() -> None:
+    """RR sits behind the rr_recording consent; a generic HR client would get it unmasked."""
+    body = _push_heart_rate_body()
+    assert "synapse_ble_gatt_notify_hr(hr_bpm, 0xFFFF)" in body
 
 
 # --- the battery is never a placeholder ----------------------------------------------------------------
 
 
 def test_an_unmeasured_battery_is_not_reported_as_full() -> None:
-    body = _push_feature_body()
-    assert "f.battery_level = s_batt_known ? s_batt_level : 0xFF;" in body
-    assert "f.charging = 0; //" not in body
     code = GATT.read_text(encoding="utf-8")
     access = code[code.index("static int batt_access(") :]
     access = access[: access.index("\n}\n")]
     assert "if (!s_batt_known) return BLE_ATT_ERR_UNLIKELY;" in access
+    # the v2 frame only carries a battery that was measured
+    push = code[code.index("esp_err_t synapse_ble_gatt_push_feature_v2(") :]
+    assert "if (s_batt_known) {" in push[: push.index("synapse_feature_v2_encode")]
 
 
 # --- the ECG gain ------------------------------------------------------------------------------------------

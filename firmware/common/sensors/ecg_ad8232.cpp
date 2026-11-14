@@ -1,4 +1,5 @@
 #include "ecg_ad8232.h"
+#include "ecg_contact.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
@@ -14,6 +15,8 @@ typedef struct {
     adc_cali_handle_t cali_handle;
     bool initialized;
     bool lead_off_detected;
+    ecg_contact_t contact;  // lead-off history: when the bias is measured again
+    uint32_t lost_unreported;  // samples not delivered while the bias was measured again (sequence hole)
     float midrail_mv;     // DC bias removed from every sample
     bool midrail_ready;
     int cal_n;            // samples accumulated by the start-up calibration
@@ -39,6 +42,8 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
     s_ctx.config = *config;
     s_ctx.initialized = false;
     s_ctx.lead_off_detected = false;
+    s_ctx.contact = (ecg_contact_t){0u, 0u};
+    s_ctx.lost_unreported = 0u;
     s_ctx.cal_n = 0;
     s_ctx.cal_sum_mv = 0.0;
     s_ctx.midrail_mv = config->midrail_mv;
@@ -92,8 +97,11 @@ esp_err_t ecg_ad8232_init(const ecg_ad8232_config_t* config) {
         gpio_config_t io_conf = {
             .pin_bit_mask = (1ULL << config->gpio_drdy),
             .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_ENABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            // Pull-DOWN: LO+ is driven high by the AD8232 when an electrode is off. With a pull-up an
+            // unwired pin would read "lead off" forever; with a pull-down it reads "contact", so a
+            // missing wire flags nothing (and detects nothing).
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_ENABLE,
             .intr_type = GPIO_INTR_DISABLE
         };
         gpio_config(&io_conf);
@@ -125,12 +133,26 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
         s_ctx.lead_off_detected = (gpio_get_level((gpio_num_t)s_ctx.config.gpio_drdy) == 1);
     }
 
-    // Lead-off is reported, not used to gate the samples: with the LO pin left
-    // unwired (pull-up) it would read "off" forever and silence the stream.
+    // Lead-off is reported, not used to gate the samples: gating on it would silence the stream
+    // whenever the pin misreports. It only decides when the frozen bias is measured again: after
+    // a real lead-off, once the electrodes are on and steady (an explicit midrail_mv is trusted).
+    // The history is kept while the first bias is being measured too: electrodes that were off
+    // for the whole start-up second leave a bias taken from nothing, and the contact that follows
+    // must be able to correct it (and, if it comes during that second, restart it).
+    if (ecg_contact_update(&s_ctx.contact, s_ctx.lead_off_detected) &&
+        s_ctx.config.midrail_mv <= 0.0f) {
+        s_ctx.midrail_ready = false;
+        s_ctx.cal_n = 0;
+        s_ctx.cal_sum_mv = 0.0;
+        ESP_LOGI(TAG, "AD8232 electrodes applied after a lead-off: measuring the bias again");
+    }
     if (!s_ctx.midrail_ready) {
         s_ctx.cal_sum_mv += (double)voltage_mv;
         if (++s_ctx.cal_n < ECG_MIDRAIL_CAL_SAMPLES) {
-            return ESP_ERR_NOT_FOUND;  // calibrating: no sample yet (counted by the scheduler)
+            // Calibrating: no sample yet. The scheduler numbers only delivered samples, so these
+            // become a hole in the sequence (take_lost) instead of a silent shift of the timeline.
+            s_ctx.lost_unreported++;
+            return ESP_ERR_NOT_FOUND;
         }
         s_ctx.midrail_mv = (float)(s_ctx.cal_sum_mv / (double)s_ctx.cal_n);
         s_ctx.midrail_ready = true;
@@ -155,6 +177,13 @@ esp_err_t ecg_ad8232_deinit(void* user_ctx) {
     s_ctx.initialized = false;
     ESP_LOGI(TAG, "AD8232 ECG deinitialized");
     return ESP_OK;
+}
+
+uint32_t ecg_ad8232_take_lost(void* user_ctx) {
+    (void)user_ctx;
+    uint32_t lost = s_ctx.lost_unreported;
+    s_ctx.lost_unreported = 0u;
+    return lost;
 }
 
 bool ecg_ad8232_is_lead_off(void* user_ctx) {
