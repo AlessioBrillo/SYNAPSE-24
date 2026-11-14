@@ -279,3 +279,104 @@ def test_a_flush_never_needs_more_than_the_ring_holds() -> None:
     for name, spec in _stream_table().items():
         size = HW["raw_frame"]["header_bytes"] + spec["flush_at"] * spec["channels"] * spec["bytes"]
         assert size <= HW["raw_frame"]["max_payload_bytes"], name
+
+
+# --- MVP-1.9 W1: a stamp never steps back, and a FIFO overflow becomes a sequence hole ----------------
+
+
+def test_a_burst_never_steps_back_past_the_previous_one(batch: ctypes.CDLL) -> None:
+    batch.host_ppg_batch_monotonic.argtypes = [ctypes.c_int64, ctypes.c_int64]
+    batch.host_ppg_batch_monotonic.restype = ctypes.c_int64
+    period = 20_000
+    # poll 1 delivered one sample at t=1_000_000; poll 2 came only 5 ms later and found 2 samples:
+    # the oldest is stamped 1_005_000 - 20_000 = 985_000, BEFORE the sample already sent.
+    first = 1_000_000
+    stamps = [batch.host_ppg_batch_ts(1_005_000, 2, i, period) for i in range(2)]
+    assert stamps[0] < first, "premise: a plain back-stamp lands in the past"
+    last = first
+    out = []
+    for ts in stamps:
+        last = batch.host_ppg_batch_monotonic(ts, last)
+        out.append(last)
+    assert out == [first + 1, 1_005_000]
+    assert all(b > a for a, b in zip([first, *out], out, strict=False))
+    # an already ordered stamp is untouched
+    assert batch.host_ppg_batch_monotonic(2_000_000, 1_000_000) == 2_000_000
+
+
+def test_the_ppg_driver_keeps_stamps_monotonic_and_reports_what_the_fifo_lost() -> None:
+    code = _text(PPG)
+    read = code[code.index("esp_err_t ppg_max30102_read(") :]
+    read = read[: read.index("\n}\n")]
+    assert "ppg_batch_monotonic_us(" in read
+    # both loss paths (FIFO rollover, failed burst read) feed the count handed to the scheduler
+    assert read.count("s_ctx.lost_unreported +=") == 2
+    take = code[code.index("uint32_t ppg_max30102_take_lost(") :]
+    take = take[: take.index("\n}\n")]
+    assert "s_ctx.lost_unreported = 0;" in take
+
+
+def test_the_scheduler_turns_a_driver_loss_into_a_sequence_hole() -> None:
+    code = _text(SCHEDULER)
+    task = code[code.index("void sensor_task_fn(void* arg) {") :]
+    taken = task.index("config->take_lost(config->user_ctx)")
+    numbered = task.index("sample.sequence = scheduler->sample_counts[config->type]++;")
+    assert taken < numbered, "the loss must advance the counter BEFORE the survivor is numbered"
+    assert ".take_lost = ppg_max30102_take_lost" in _text(BAND / "sensors" / "synapse_sensors.c")
+
+
+# --- MVP-1.9 W1: the IMU samples faster than it is polled, so no poll re-reads a sample ------------------
+
+
+@pytest.fixture(scope="module")
+def imu_odr(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
+    lib = _lib(tmp_path_factory.mktemp("imuodr"), "host_glue_imu_odr.c", COMMON / "sensors")
+    lib.host_imu_div.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    lib.host_imu_div.restype = ctypes.c_uint32
+    lib.host_imu_odr_mhz.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    lib.host_imu_odr_mhz.restype = ctypes.c_uint32
+    return lib
+
+
+@pytest.mark.parametrize("base_hz", [1125, 1100])  # accel, gyro
+@pytest.mark.parametrize("poll_hz", [25, 50, 100])
+def test_the_imu_never_runs_slower_than_twice_its_poll(
+    imu_odr: ctypes.CDLL, base_hz: int, poll_hz: int
+) -> None:
+    div = imu_odr.host_imu_div(base_hz, poll_hz)
+    assert imu_odr.host_imu_odr_mhz(base_hz, div) >= 2 * poll_hz * 1000
+
+
+def test_the_old_divider_ran_the_accelerometer_slower_than_the_poll(imu_odr: ctypes.CDLL) -> None:
+    # 1125 Hz / 23 = 48.9 Hz < the 50 Hz poll: about 2 % of the polls re-read the same sample.
+    old_div = (1125 + 25) // 50 - 1
+    assert 1125_000 // (old_div + 1) < 50_000
+    new_div = imu_odr.host_imu_div(1125, 50)
+    assert (new_div, imu_odr.host_imu_odr_mhz(1125, new_div)) == (10, 102_272)
+    assert imu_odr.host_imu_odr_mhz(1100, imu_odr.host_imu_div(1100, 50)) == 100_000  # exact
+
+
+def test_the_imu_divider_is_clamped_and_never_zero_rate(imu_odr: ctypes.CDLL) -> None:
+    assert imu_odr.host_imu_div(1125, 2000) == 0  # a poll faster than the sensor: run flat out
+    assert imu_odr.host_imu_div(1100, 0) == imu_odr.host_imu_div(
+        1100, 50
+    )  # unset = the 50 Hz default
+    # beyond the 8-bit gyro register (255) the helper reports the true value; the driver clamps it
+    assert imu_odr.host_imu_div(1100, 1) == 549
+
+
+def test_the_imu_driver_reads_accel_and_gyro_in_one_burst_with_that_divider() -> None:
+    code = _text(COMMON / "sensors" / "imu_icm20948.cpp")
+    read = code[code.index("esp_err_t imu_icm20948_read(") :]
+    read = read[: read.index("\n}\n")]
+    assert "ICM20948_REG_ACCEL_XOUT_H, data, 12)" in read
+    assert "ICM20948_REG_GYRO_XOUT_H, data" not in read, "gyro is read inside the 12-byte burst"
+    assert "imu_smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ" in code
+    assert "imu_smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ" in code
+    assert "smplrt_div_for(" not in code.replace("imu_smplrt_div_for(", "")
+
+
+def test_the_motion_gate_no_longer_slows_the_ppg_poll() -> None:
+    code = _text(COMMON / "sensors" / "imu_processor.cpp")
+    assert "sensor_scheduler_set_rate" not in code
+    assert ", 16" not in code

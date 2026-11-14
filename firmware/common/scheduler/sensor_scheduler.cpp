@@ -373,6 +373,12 @@ void sensor_task_fn(void* arg) {
                     break;
                 }
             }
+            // Samples the driver lost before handing this one over take their sequence numbers
+            // with them: the hole is what tells the research service (and so the host) they
+            // existed.
+            if (config->take_lost) {
+                scheduler->sample_counts[config->type] += config->take_lost(config->user_ctx);
+            }
             sample.sequence = scheduler->sample_counts[config->type]++;
 
             // A full ring loses the sample: count it (it used to vanish without a trace).

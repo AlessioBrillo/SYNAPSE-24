@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from scipy.signal import lfilter, resample_poly
+from scipy.signal import resample_poly
 
 ROOT = Path(__file__).resolve().parents[1]
 for _p in (ROOT, ROOT / "sdk" / "python"):
@@ -68,7 +68,6 @@ MIDRAIL_MV = 1650.0
 CALIBRATION_SAMPLES = (
     500  # the driver averages the first second to find the mid-rail, and emits none of it
 )
-MIDRAIL_TRACK_ALPHA = 1.0 / 5000.0  # then follows it with a ~10 s time constant (ecg_ad8232.cpp)
 MIN_SECONDS = 5.0  # of ECG after the calibration second: less is not a recording to score
 MAX_BEAT_LOSS = 0.03  # Se/PPV the chain may cost against the untouched recording (a beat or two)
 # AD8232 breakout nominal, the same number as config/hardware.yaml ecg_config.gain and the Kconfig default.
@@ -87,8 +86,8 @@ def ecg_to_wire_uv(
     """What the band puts in the ECG frames for ``mv`` at the electrodes: s16 microvolts.
 
     Mirrors ``ecg_ad8232.cpp``: front end -> 12-bit ADC (rails at 0 and full scale) -> the first second
-    is only used to find the mid-rail and is NOT emitted -> from then on the mid-rail follows the signal
-    slowly (a ~0.016 Hz high-pass) -> (adc - mid-rail) / *configured* gain -> x1000, rounded, clipped to
+    is only used to find the mid-rail and is NOT emitted -> the mid-rail then stays fixed (a drift stays
+    on the wire) -> (adc - mid-rail) / *configured* gain -> x1000, rounded, clipped to
     s16. So the output starts ``CALIBRATION_SAMPLES`` samples after the input.
     Returns (microvolts, share of emitted samples that hit the ADC rails or the s16 limit).
     """
@@ -104,14 +103,8 @@ def ecg_to_wire_uv(
         )
     midrail0 = float(np.mean(adc_mv[:CALIBRATION_SAMPLES]))
     adc_mv, railed = adc_mv[CALIBRATION_SAMPLES:], railed[CALIBRATION_SAMPLES:]
-    # mid[n] = mid[n-1] + alpha * (adc[n] - mid[n-1]), updated before the sample is used, as in the driver
-    midrail = lfilter(
-        [MIDRAIL_TRACK_ALPHA],
-        [1.0, -(1.0 - MIDRAIL_TRACK_ALPHA)],
-        adc_mv,
-        zi=[(1.0 - MIDRAIL_TRACK_ALPHA) * midrail0],
-    )[0]
-    uv = np.rint((adc_mv - midrail) / configured_gain * 1000.0)
+    # the mid-rail is frozen after the calibration second, as in the driver: no on-board high-pass
+    uv = np.rint((adc_mv - midrail0) / configured_gain * 1000.0)
     saturated = railed | (np.abs(uv) > 32767)
     return np.clip(uv, -32768, 32767).astype(np.int16), float(np.mean(saturated))
 

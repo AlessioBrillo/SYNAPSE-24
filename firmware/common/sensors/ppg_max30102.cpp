@@ -40,6 +40,7 @@ typedef struct {
     bool initialized;
     bool fifo_enabled;
     uint32_t skipped_samples;  // FIFO samples lost: overwritten while the poll stalled, or a failed burst read
+    uint32_t lost_unreported;  // the part of skipped_samples the scheduler has not turned into a sequence hole yet
 } ppg_max30102_ctx_t;
 
 static ppg_max30102_ctx_t s_ctx = {};
@@ -145,6 +146,7 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
     CHK(max30102_write_reg(MAX30102_REG_OVF_COUNTER, 0x00));
     CHK(max30102_write_reg(MAX30102_REG_FIFO_RD_PTR, 0x00));
     s_ctx.skipped_samples = 0;
+    s_ctx.lost_unreported = 0;
     s_ctx.fifo_enabled = true;  // acquisition starts with the scheduler; nothing else enables the FIFO
 
     if (config->gpio_int >= 0) {
@@ -172,6 +174,7 @@ static float s_batch_ir[PPG_BATCH_MAX];
 static int64_t s_batch_ts[PPG_BATCH_MAX];
 static uint8_t s_batch_n = 0;
 static uint8_t s_batch_next = 0;
+static int64_t s_last_ts_us = INT64_MIN;  // newest timestamp handed out: stamps never step back
 
 static void ppg_deliver(sensor_sample_t* sample, uint8_t i) {
     sample->data.ppg.red = s_batch_red[i];
@@ -214,6 +217,7 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
         if (ovf == 0) return ESP_ERR_NOT_FOUND;  // nothing new since the last poll
         // The counter saturates at 15: at least that many samples were overwritten.
         s_ctx.skipped_samples += ovf;
+        s_ctx.lost_unreported += ovf;
         avail = PPG_BATCH_MAX;
     }
     if (avail > PPG_BATCH_MAX) avail = PPG_BATCH_MAX;
@@ -226,17 +230,27 @@ esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx) {
         if (rc != ESP_OK) {
             // The samples already taken out of the FIFO are gone: count them, do not hide them.
             s_ctx.skipped_samples += (uint32_t)(avail - i);
+            s_ctx.lost_unreported += (uint32_t)(avail - i);
             return rc;
         }
         uint32_t red = (((uint32_t)fifo_data[0] << 16) | ((uint32_t)fifo_data[1] << 8) | fifo_data[2]) & 0x3FFFF;
         uint32_t ir = (((uint32_t)fifo_data[3] << 16) | ((uint32_t)fifo_data[4] << 8) | fifo_data[5]) & 0x3FFFF;
         s_batch_red[i] = (float)red;
         s_batch_ir[i] = (float)ir;
-        s_batch_ts[i] = ppg_batch_timestamp_us(poll_us, avail, i, period_us);
+        s_last_ts_us = ppg_batch_monotonic_us(ppg_batch_timestamp_us(poll_us, avail, i, period_us),
+                                              s_last_ts_us);
+        s_batch_ts[i] = s_last_ts_us;
     }
     s_batch_n = avail;
     ppg_deliver(sample, s_batch_next++);
     return ESP_OK;
+}
+
+uint32_t ppg_max30102_take_lost(void* user_ctx) {
+    (void)user_ctx;
+    uint32_t lost = s_ctx.lost_unreported;
+    s_ctx.lost_unreported = 0;
+    return lost;
 }
 
 uint32_t ppg_max30102_skipped_samples(void) {

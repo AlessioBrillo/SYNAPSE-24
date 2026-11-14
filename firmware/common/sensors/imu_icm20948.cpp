@@ -1,4 +1,5 @@
 #include "imu_icm20948.h"
+#include "imu_odr.h"
 #include "esp_log.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
@@ -119,13 +120,6 @@ static esp_err_t ak09916_read_reg(uint8_t reg, uint8_t* value) {
     return i2c_read_reg(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, reg, value);
 }
 
-// Sample-rate divider: ODR = base / (1 + div), rounded to the nearest rate.
-static uint32_t smplrt_div_for(uint32_t base_hz, uint32_t odr_hz) {
-    if (odr_hz == 0) odr_hz = 50;
-    uint32_t div = (base_hz + odr_hz / 2) / odr_hz;
-    return div > 0 ? div - 1 : 0;
-}
-
 esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
@@ -180,7 +174,7 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
     // DLPF on (FCHOICE=1) at ~24 Hz so a 50 Hz poll does not alias.
     // ponytail: fixed filter, only right for ODR <= 50 Hz; derive it from the ODR if that ever rises.
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_CONFIG, accel_fsr | 0x20 | 0x01));
-    uint32_t adiv = smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ, config->accel_odr_hz);
+    uint32_t adiv = imu_smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ, (uint32_t)config->accel_odr_hz);
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_1, (uint8_t)(adiv >> 8)));
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_ACCEL_SMPLRT_DIV_2, (uint8_t)(adiv & 0xFF)));
     CHK(icm20948_select_bank(ICM20948_BANK_0));
@@ -195,13 +189,17 @@ esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config) {
         default: gyro_fsr = 0x00; s_ctx.gyro_scale = 250.0f / 32768.0f; break;
     }
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_CONFIG_1, gyro_fsr | 0x28 | 0x01));
-    uint32_t gdiv = smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, config->gyro_odr_hz);
+    uint32_t gdiv = imu_smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, (uint32_t)config->gyro_odr_hz);
     if (gdiv > 255) {  // 8-bit divider: the slowest gyro ODR is ~4.3 Hz
         ESP_LOGW(TAG, "gyro ODR %u Hz is below the divider range; running at the slowest rate", (unsigned)config->gyro_odr_hz);
         gdiv = 255;
     }
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_SMPLRT_DIV, (uint8_t)gdiv));
     CHK(icm20948_select_bank(ICM20948_BANK_0));
+    ESP_LOGI(TAG, "IMU poll %d/%d Hz: accel samples at %u mHz, gyro at %u mHz (x%u the poll, no duplicates)",
+             config->accel_odr_hz, config->gyro_odr_hz,
+             (unsigned)imu_odr_mhz(ICM20948_ACCEL_BASE_ODR_HZ, adiv),
+             (unsigned)imu_odr_mhz(ICM20948_GYRO_BASE_ODR_HZ, gdiv), (unsigned)IMU_ODR_OVERSAMPLE);
 
     // The magnetometer is optional: accel/gyro keep working if it does not answer.
     s_ctx.mag_scale = 0.15f;
@@ -243,16 +241,17 @@ esp_err_t imu_icm20948_read(sensor_sample_t* sample, void* user_ctx) {
 
     if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
 
-    uint8_t data[6];
-    CHK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_ACCEL_XOUT_H, data, 6));
+    // ACCEL_XOUT_H (0x2D) .. GYRO_ZOUT_L (0x38) are contiguous: one transaction instead of two,
+    // so accel and gyro come from the same instant of the shadow registers.
+    static_assert(ICM20948_REG_GYRO_XOUT_H == ICM20948_REG_ACCEL_XOUT_H + 6, "accel and gyro registers are contiguous");
+    uint8_t data[12];
+    CHK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_ACCEL_XOUT_H, data, 12));
     int16_t ax_raw = (int16_t)((data[0] << 8) | data[1]);
     int16_t ay_raw = (int16_t)((data[2] << 8) | data[3]);
     int16_t az_raw = (int16_t)((data[4] << 8) | data[5]);
-
-    CHK(i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_GYRO_XOUT_H, data, 6));
-    int16_t gx_raw = (int16_t)((data[0] << 8) | data[1]);
-    int16_t gy_raw = (int16_t)((data[2] << 8) | data[3]);
-    int16_t gz_raw = (int16_t)((data[4] << 8) | data[5]);
+    int16_t gx_raw = (int16_t)((data[6] << 8) | data[7]);
+    int16_t gy_raw = (int16_t)((data[8] << 8) | data[9]);
+    int16_t gz_raw = (int16_t)((data[10] << 8) | data[11]);
 
     // ST1, HXL..HZH, ST2 in one burst: reading ST2 releases the AK09916 data
     // protection, otherwise the output freezes after the first sample.

@@ -320,6 +320,16 @@ static bool stream_accepts(const synapse_research_stream_t *stream)
     return s_research.transmitting && stream->enabled;
 }
 
+/**
+ * Samples of @p stream were lost upstream of this service (@p lost of them, just before the
+ * sample being submitted). Send what is already buffered first, so the hole sits on a frame
+ * boundary: the frame that follows starts at the first surviving sample's own stamp and
+ * carries `dropped`, instead of the host spacing it at the stream period right after the
+ * samples before the hole. If the link refuses that flush the loss is still counted.
+ */
+static void note_upstream_loss(synapse_research_t *r, synapse_research_stream_t *stream,
+                               uint16_t lost);
+
 /** Append one 3-axis sample to its own stream, with its own bound.
  *  Returns true when the sample was lost to a full ring. */
 static bool imu_push(synapse_research_stream_t *s, int64_t now_us, float x, float y, float z,
@@ -554,6 +564,18 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
     }
 }
 
+static void note_upstream_loss(synapse_research_t *r, synapse_research_stream_t *stream,
+                               uint16_t lost)
+{
+    if (lost == 0u || !stream_accepts(stream)) {
+        return;
+    }
+    if (stream->pending != 0u) {
+        flush_stream(r, stream);
+    }
+    research_note_drop(stream, lost);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -614,12 +636,28 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
     }
     *last_us = now_us;
 
+    // Samples lost before reaching us show up as a hole in the sensor's own sequence. A stale
+    // sample returned above without moving next_sequence, so it is counted here by the next
+    // sample. Only a forward gap below half the range is a loss: a repeated or restarted
+    // sequence (scheduler restart) just resynchronises.
+    uint16_t lost = 0;
+    if (s_research.sequence_valid[sample->type]) {
+        uint16_t gap = (uint16_t)(sample->sequence - s_research.next_sequence[sample->type]);
+        if (gap != 0u && gap < 0x8000u) {
+            lost = gap;
+            s_research.upstream_lost += gap;
+        }
+    }
+    s_research.sequence_valid[sample->type] = true;
+    s_research.next_sequence[sample->type] = (uint16_t)(sample->sequence + 1u);
+
     switch (sample->type) {
     case SENSOR_TYPE_ECG: {
         synapse_research_stream_t *s = &s_research.streams[STREAM_ECG];
         if (!stream_accepts(s)) {
             break;
         }
+        note_upstream_loss(&s_research, s, lost);
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -646,6 +684,7 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         if (!stream_accepts(s)) {
             break;
         }
+        note_upstream_loss(&s_research, s, lost);
         if (s->pending < SYNAPSE_RESEARCH_RING_DEPTH) {
             if (s->pending == 0) {
                 s->first_ts_us = now_us;
@@ -667,16 +706,19 @@ void synapse_research_service_submit(const sensor_sample_t *sample)
         // g / rad/s / uT (see imu_icm20948.cpp).
         // `|` and not `||`: all three streams must be pushed. One IMU sample is one
         // loss for the shared counter however many of its streams overflowed.
-        bool lost = imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
+        note_upstream_loss(&s_research, &s_research.streams[STREAM_ACC], lost);
+        note_upstream_loss(&s_research, &s_research.streams[STREAM_GYRO], lost);
+        note_upstream_loss(&s_research, &s_research.streams[STREAM_MAG], lost);
+        bool overflowed = imu_push(&s_research.streams[STREAM_ACC], now_us, sample->data.imu.ax,
                              sample->data.imu.ay, sample->data.imu.az,
                              (float)SYNAPSE_RESEARCH_UNIT_MG);
-        lost |= imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
+        overflowed |= imu_push(&s_research.streams[STREAM_GYRO], now_us, sample->data.imu.gx,
                          sample->data.imu.gy, sample->data.imu.gz,
                          (float)SYNAPSE_RESEARCH_UNIT_MRAD_S);
-        lost |= imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
+        overflowed |= imu_push(&s_research.streams[STREAM_MAG], now_us, sample->data.imu.mx,
                          sample->data.imu.my, sample->data.imu.mz,
                          (float)SYNAPSE_RESEARCH_UNIT_CUT);
-        if (lost) {
+        if (overflowed) {
             s_research.ring_overflow++;
         }
         break;
@@ -851,6 +893,11 @@ uint32_t synapse_research_service_stale_samples(void)
     return s_research.stale_samples;
 }
 
+uint32_t synapse_research_service_upstream_lost(void)
+{
+    return s_research.upstream_lost;
+}
+
 uint32_t synapse_research_service_power_dropped(void)
 {
     return s_research.power_dropped;
@@ -866,7 +913,10 @@ void synapse_research_service_reset_counters(void)
     // session): a clock restarted from zero must not read as "going backwards".
     s_research.epoch_wraps = 0;
     s_research.newest_sample_us = 0;
+    s_research.upstream_lost = 0;
     for (size_t i = 0; i < sizeof(s_research.last_sample_us) / sizeof(s_research.last_sample_us[0]); i++) {
         s_research.last_sample_us[i] = 0;
+        s_research.sequence_valid[i] = false;
+        s_research.next_sequence[i] = 0;
     }
 }
