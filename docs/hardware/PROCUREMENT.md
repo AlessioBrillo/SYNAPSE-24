@@ -140,7 +140,7 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 
 | # | Measurement | Instrument | Pass criterion |
 |---|---|---|---|
-| 1 | Idle current, deep sleep between BLE events | Bench PSU + series R / USB power meter | No pass threshold at G1: the first measurement sets the baseline. Record it with its conditions (advertising interval, which sensors are powered, USB unplugged, INA219 in series) so the later runs are comparable; this is the number that decides 24 h feasibility. |
+| 1 | Idle current, deep sleep between BLE events | INA219 in series on the LiPo (USB unplugged); a bench PSU + series R or a USB power meter only for an off-body cross-check, never as the recorded baseline | No pass threshold at G1: the first measurement sets the baseline. Record it with its conditions (advertising interval, which sensors are powered, USB unplugged, INA219 in series) so the later runs are comparable; this is the number that decides 24 h feasibility. |
 | 2 | Average Tier-0 current, streaming raw | Same | Inside the **budget-kit** envelope 150–600 mW mean (`docs/hardware/POWER_BUDGET.md` for the component derivation). The `hardware.yaml` 5 mW T0 profile is the optimised-system target and is explicitly NOT a G1 criterion. |
 | 3 | BLE throughput, the raw research service | Host + `decoder.estimated_bytes()` | Per-stream budgets: ECG ≤1,1 kB/s, PPG ≤0,45 kB/s, each IMU sub-stream ≤0,32 kB/s; aggregate ≤3 kB/s sustained. The old "≤600 B/s" figure only ever applied to the PPG stream alone (raw volume of the full rig is ~2,3–2,4 kB/s — see `config/hardware.yaml` `raw_frame.*`). |
 | 4 | **Dropped frames over 30 min** | `ResearchStreamDecoder.drops` | **Zero.** Any gap fails the recording — see `research_client.py`. |

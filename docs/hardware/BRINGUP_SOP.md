@@ -220,10 +220,14 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    60 s of recording. Record the std of the raw stream in µV-equivalent units.
    *The µV-equivalent is only true once the AD8232's gain is calibrated
    (next): use the ADC counts until it is.*
-   **Pass (provisional): std ≤ 30 µV-equivalent** (the AD8232 datasheet input noise is
-   of the order of 100 µVpp ≈ 15 µV rms, plus margin for the ESP32 ADC). The number
-   is an estimate, not a measurement: if the first real run misses it, record the
-   value, find the cause (floating RL, USB noise, wiring) and only then revise the
+   **Pass (provisional): std ≤ 30 µV on the stream as emitted** (the wire carries µV
+   computed with the configured gain, nominal 1100, so this is ≈ 40 ADC counts).
+   Once step 2 gives `gain_measured`, restate the result as
+   `true_noise = std × 1100 / gain_measured`: that is the figure to keep, and the
+   30 µV bound applies to it too. The bound comes from the AD8232 datasheet input
+   noise (of the order of 100 µVpp ≈ 15 µV rms) plus margin for the ESP32 ADC; it is an
+   estimate, not a measurement. If the first real run misses it, record the value,
+   find the cause (floating RL, USB noise, wiring) and only then revise the
    threshold, with the reason, in this file.
 2. **AD8232 gain calibration (per-rig).** Generic clones' gain is set by
    their instrumentation resistors, not by `hardware.yaml`'s `gain: 1100.0`
@@ -308,7 +312,11 @@ Two rules that keep the bar honest:
   1.85 Wh at 3.7 V) that is 3.1–12.3 h of runtime, so the worst case does not
   reach 6 h. A soak that dies at hour three is a gate that never
   ran. Use the 1000+ mAh cell from the kit for the 6-hour soak, or log the
-  battery percentage at start and end (`measured_battery_pct`) and say so.
+  battery percentage at start and end (`measured_battery_pct`) and say so. The
+  firmware divides the charge it has consumed by `CONFIG_SYNAPSE_HUB_BATTERY_MAH`
+  (1000 in `band-core`): if the cell you fit is not 1000 mAh, set that value to its
+  real capacity in menuconfig and rebuild, or `measured_battery_pct` is wrong by the
+  ratio.
 
 ### 5a. What the bench must show about the loss counters
 

@@ -52,7 +52,10 @@ disqualifier for the kit — they are simply not what this rig demonstrates.
 | 425 mW | ~4.3 h | **no — the soak would die mid-run** |
 | 600 mW (envelope ceiling) | ~3.1 h | **no** |
 
-(500 mAh × 3.7 V = 1.85 Wh; runtime = 1.85 Wh / draw.)
+(500 mAh × 3.7 V = 1.85 Wh; runtime = 1.85 Wh / draw.) These are **upper bounds**: they
+ignore the regulator's efficiency and the cell's cutoff voltage, so only about 80 % of
+the nominal energy is usable. At 250 mW that is closer to 5.9 h than 7.4 h, which is one
+more reason the soak uses the 1000+ mAh cell.
 
 So the SOP now states the runtime explicitly before the soak starts, and the
 kit carries **one 1000–2000 mAh LiPo** (≈€8–12) for the 6-hour session. A
