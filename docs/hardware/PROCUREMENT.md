@@ -49,7 +49,7 @@ reason.
 | 9 | **INA219 current/power monitor breakout** | 1 | I²C, 0.1 Ω shunt, address 0x40 | 2–5 | Closes the energy budget: per-session measured current, streamed on the research service's POWER stream (`firmware/esp32_band/sensors/ina219.c`). A bench PSU reading is a one-off; the 24-hour feasibility claim needs the *actual* consumption logged with the recording. |
 | 10 | **ESP32-S3 DevKitC-1 (second pod)** | 1 | N8R8, same as row 1 | 12–15 | The G1→G2 sync criterion is **pod↔pod** (head pod vs forearm hub) — impossible with one board. A second devkit running the same `band-core` firmware, wired GPIO 10 between them (not 27: GPIO 26-37 are flash/PSRAM on the N8R8), exercises the real scenario and produces the first two-pod XDF *before* the €350 Cerelog is ordered. |
 | 11 | Resistor/capacitor kit + 4,7 kΩ pull-ups (pack) | 1 | — | 5–10 | The SOP assumes SDA/SCL pull-ups if your breakouts lack them (missing pull-ups read as `ESP_ERR_NOT_FOUND` on the PPG), and the INA219 check in §4a needs a known load. Not "if needed": they ARE needed the day the first sensor is silent. |
-| 12 | LiPo 3.7 V **1000+ mAh**, JST-PH 2-pin, with protection PCB | 1 | — | 8–12 | The kit envelope draws 150–600 mW (`docs/hardware/POWER_BUDGET.md`): on 500 mAh that is 4.3–7.4 h of runtime, and the MVP **6-hour** soak must not die mid-run. One bigger cell makes the soak a gate instead of a coin flip. |
+| 12 | LiPo 3.7 V **1000+ mAh**, JST-PH 2-pin, with protection PCB | 1 | — | 8–12 | The kit envelope draws 150–600 mW (`docs/hardware/POWER_BUDGET.md`): on 500 mAh (about 1.85 Wh) that is 3.1–12.3 h of runtime, and the MVP **6-hour** soak must not die mid-run. One bigger cell makes the soak a gate instead of a coin flip. |
 
 **Subtotal: ~€90–140.** Budget **€140** (was €125; the two additions above
 are the pull-up/load kit and the soak battery).
@@ -74,10 +74,11 @@ weeks lead time).
 
 ### Not needed yet (deliberately excluded)
 
-TMP117, MAX-M10S GPS, soldering gear, oscilloscope, a Raspberry Pi. The
-instrumentation you already own (bench PSU, multimeter, scope) covers every
-measurement in the SOP below; if you own none of it, `FIRST_HARDWARE_DAY.md` lists the cheap
-substitutes (a multimeter with an mA range, a USB power meter). (A *second* ESP32 **is** included — see row 10 —
+TMP117, MAX-M10S GPS, soldering gear, oscilloscope (optional: no G1 row needs one), a
+Raspberry Pi. **A multimeter with an mA range is required** (wiring checks and the INA219
+known-load check, `BRINGUP_SOP.md` §4a); a bench PSU is replaceable by a USB power meter,
+and a signal generator is only needed for the optional ECG gain calibration.
+`FIRST_HARDWARE_DAY.md` §1 lists the cheap substitutes if you own none of it. (A *second* ESP32 **is** included — see row 10 —
 because the sync criterion that gates the Cerelog order needs two pods.)
 
 ---
@@ -139,7 +140,7 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 
 | # | Measurement | Instrument | Pass criterion |
 |---|---|---|---|
-| 1 | Idle current, deep sleep between BLE events | Bench PSU + series R / USB power meter | As low as achievable; record the number, this is the number that decides 24 h feasibility. |
+| 1 | Idle current, deep sleep between BLE events | INA219 in series on the LiPo (USB unplugged); a bench PSU + series R or a USB power meter only for an off-body cross-check, never as the recorded baseline | No pass threshold at G1: the first measurement sets the baseline. Record it with its conditions (advertising interval, which sensors are powered, USB unplugged, INA219 in series) so the later runs are comparable; this is the number that decides 24 h feasibility. |
 | 2 | Average Tier-0 current, streaming raw | Same | Inside the **budget-kit** envelope 150–600 mW mean (`docs/hardware/POWER_BUDGET.md` for the component derivation). The `hardware.yaml` 5 mW T0 profile is the optimised-system target and is explicitly NOT a G1 criterion. |
 | 3 | BLE throughput, the raw research service | Host + `decoder.estimated_bytes()` | Per-stream budgets: ECG ≤1,1 kB/s, PPG ≤0,45 kB/s, each IMU sub-stream ≤0,32 kB/s; aggregate ≤3 kB/s sustained. The old "≤600 B/s" figure only ever applied to the PPG stream alone (raw volume of the full rig is ~2,3–2,4 kB/s — see `config/hardware.yaml` `raw_frame.*`). |
 | 4 | **Dropped frames over 30 min** | `ResearchStreamDecoder.drops` | **Zero.** Any gap fails the recording — see `research_client.py`. |
@@ -148,7 +149,7 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 | 7 | PPG SQI / MAP, seated and still | `signal_quality.ppg` | SQI ≥ 0.3 sustained >30 s, MAP ≤ 0.5. |
 | 8 | Clock residual drift vs host (pod↔host) **and pod↔pod** | `PodClockModel.status()` via the SYNC characteristic; ACC cross-correlation for pod↔pod | ≤10 ms (T0), ≤1 ms (T1). The pod↔pod number is the one that gates the Cerelog. |
 | 9 | XDF integrity | `utils.validate_xdf` | Zero dropped samples, monotonic timestamps. |
-| 10 | On-device triage latency | Serial log | ≤5 ms per inference. |
+| 10 | On-device triage latency | Serial log | **Not applicable at G1**: the Edge AI module is off in both build variants (MVP-1.9 debt). Re-enable it, and its ≤5 ms per inference criterion, when the module is switched back on. |
 | 11 | Measured Tier-0 power over the soak | POWER stream / `gate_report.json` (`measured_tier0_current_ma`, `measured_tier0_power_mw`, `measured_battery_pct`, `clock_residual_drift_ms`, `ble_throughput_bytes_per_s`, `dropped_frames` are filled automatically) | Inside the **budget-kit** envelope 150–600 mW (derivation: `docs/hardware/POWER_BUDGET.md`). NOT the 5 mW T0 profile: that is the optimised-system target, proven later by G3. The per-session figure is the input to the 24-hour model claim. |
 
 The validator writes rows 3, 4, 8, 9, 11 itself into
