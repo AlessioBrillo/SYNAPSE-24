@@ -58,6 +58,9 @@ typedef struct {
 typedef struct {
     int i2c_port;
     int i2c_addr;
+    int sda_gpio;          // shared bus SDA (< 0: SYNAPSE_I2C_DEFAULT_SDA_GPIO)
+    int scl_gpio;          // shared bus SCL (< 0: SYNAPSE_I2C_DEFAULT_SCL_GPIO)
+    uint32_t i2c_freq_hz;  // bus clock (0: SYNAPSE_I2C_DEFAULT_FREQ_HZ)
     int gpio_alert;
     uint16_t conversion_cycle_ms;
     bool continuous_mode;

@@ -133,7 +133,7 @@ def test_the_queue_falls_back_instead_of_stopping_the_band() -> None:
 def test_no_gpio_collides_with_the_octal_psram_bus() -> None:
     """Octal PSRAM owns GPIO 33-37 (and the flash 26-32): no Kconfig default may sit there."""
     kconfig = _text(BAND / "config" / "Kconfig")
-    for symbol in ("ECG_GPIO_DRDY", "PPG_GPIO_INT", "IMU_GPIO_INT"):
+    for symbol in ("ECG_GPIO_LEAD_OFF", "PPG_GPIO_INT", "IMU_GPIO_INT"):
         m = re.search(rf"config SYNAPSE_{symbol}\n(?:.*\n)*?\s+default (-?\d+)", kconfig)
         assert m is not None, symbol
         gpio = int(m.group(1))

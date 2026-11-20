@@ -134,6 +134,55 @@ class TestIna219HostGate:
         assert lib.ina219_is_healthy() in (0, 1)
 
 
+class TestIna219BusOwnership:
+    """Bus ownership of the monitor.
+
+    The shared I2C bus belongs to synapse_i2c: the monitor holds one reference on it while it is
+    initialised and none after a deinit or a failed init (it used to depend on the PPG or the IMU
+    having installed the bus first, and to be cut off when either was stopped).
+    """
+
+    ESP_ERR_INVALID_STATE = 0x103
+    ESP_ERR_TIMEOUT = 0x107
+
+    def test_an_initialised_monitor_holds_exactly_one_reference(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        assert lib.ina_host_bus_refs() == 1
+
+    def test_deinit_gives_the_reference_back(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_deinit()
+        assert lib.ina_host_bus_refs() == 0
+
+    def test_a_bus_that_is_not_available_fails_the_init_and_holds_nothing(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_bus_failure(self.ESP_ERR_INVALID_STATE)
+        assert lib.ina_host_try_init() == self.ESP_ERR_INVALID_STATE
+        assert lib.ina_host_bus_refs() == 0
+        assert lib.ina219_is_healthy() == 0
+
+    def test_a_monitor_that_does_not_answer_gives_the_bus_back(self, lib) -> None:
+        """The init took a reference, then the first register read failed: it must be released."""
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_read_error(self.ESP_ERR_TIMEOUT)
+        assert lib.ina_host_try_init() == self.ESP_ERR_TIMEOUT
+        assert lib.ina_host_bus_refs() == 0
+        assert lib.ina219_is_healthy() == 0
+
+    def test_a_working_monitor_initialises_again_after_a_failure(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_bus_failure(self.ESP_ERR_INVALID_STATE)
+        assert lib.ina_host_try_init() != 0
+        lib.ina_host_set_bus_failure(0)
+        assert lib.ina_host_try_init() == 0
+        assert lib.ina_host_bus_refs() == 1
+
+
 def _read_once(lib) -> int:
     """One driver read through the glue shim; 0 on success."""
     lib.ina_host_read_once.restype = ctypes.c_int

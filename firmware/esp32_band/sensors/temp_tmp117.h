@@ -60,6 +60,7 @@ typedef struct {
     temp_tmp117_config_t config;
     SemaphoreHandle_t mutex;
     bool initialized;
+    bool bus_held;      // holds a reference on the shared I2C bus (synapse_i2c)
     bool running;
     TaskHandle_t task;
     temp_data_t latest_data;

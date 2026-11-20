@@ -146,6 +146,7 @@ Expected first-boot log:
 
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
+I (xxx) synapse_i2c: port 0 up: SDA=8 SCL=9 400000 Hz
 I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
 I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
 ...
@@ -157,9 +158,13 @@ present only when the monitor is stocked); that file is the reference for the
 bring-up check.
 
 If you see `ESP_ERR_NOT_FOUND` from the PPG or IMU driver, the I²C bus is wrong:
-the Band firmware hard-codes **SDA = GPIO 8, SCL = GPIO 9** (GPIO 22–25 do not
-exist on the ESP32-S3 and GPIO 26–37 are flash/PSRAM on the N8R8 — do not use
-the classic ESP32 21/22 pair).
+the Band firmware defaults to **SDA = GPIO 8, SCL = GPIO 9** at 400 kHz
+(`CONFIG_SYNAPSE_I2C_SDA_GPIO` / `_SCL_GPIO` / `_FREQ_HZ` in menuconfig, one bus for
+PPG, IMU, TMP117 and INA219). GPIO 22–25 do not exist on the ESP32-S3 and
+GPIO 26–37 are the flash and PSRAM on the N8R8 — do not use the classic ESP32 21/22 pair. The
+configuration is validated at boot: a pin the module cannot use is reported in the log
+instead of producing a sensor that silently never answers. If a sensor that is present
+shows read errors, try `CONFIG_SYNAPSE_I2C_FREQ_HZ=100000` before changing hardware.
 
 ## 6. Partition table
 

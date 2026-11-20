@@ -93,7 +93,7 @@ def test_contact_that_does_not_settle_waits(contact: ctypes.CDLL) -> None:
 
 def test_the_lead_off_pin_is_pulled_down_so_an_unwired_pin_flags_nothing() -> None:
     code = _text(COMMON / "sensors" / "ecg_ad8232.cpp")
-    pin = code[code.index("if (config->gpio_drdy >= 0) {") :]
+    pin = code[code.index("if (config->gpio_lead_off >= 0) {") :]
     pin = pin[: pin.index("gpio_config(&io_conf);")]
     assert ".pull_down_en = GPIO_PULLDOWN_ENABLE" in pin
     assert ".pull_up_en = GPIO_PULLUP_DISABLE" in pin

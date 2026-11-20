@@ -15,7 +15,7 @@
 #include "synapse_power.h"
 
 #include "esp_err.h"
-#include "driver/i2c.h"
+#include "synapse_i2c.h"
 
 /* --- simulated device ---------------------------------------------------
  * 16 registers of 16 bits, plus the write buffer the driver last sent so the
@@ -57,13 +57,46 @@ uint8_t ina_host_last_written_register_address(void)
     return s_last_write_len ? s_last_write[0] : 0xFF;
 }
 
-esp_err_t i2c_master_write_to_device(i2c_port_t port, uint8_t addr,
-                                     const uint8_t *data, size_t len,
-                                     int timeout_ticks)
+/* Bus ownership (synapse_i2c): the driver must hold exactly one reference while it is
+ * initialised and none after a failed init or a deinit. s_bus_fail makes the acquire fail. */
+static int s_bus_refs;
+static esp_err_t s_bus_fail;
+
+int ina_host_bus_refs(void)
+{
+    return s_bus_refs;
+}
+
+void ina_host_set_bus_failure(esp_err_t err)
+{
+    s_bus_fail = err;
+}
+
+esp_err_t synapse_i2c_acquire(int port, int sda_gpio, int scl_gpio, uint32_t freq_hz)
+{
+    (void)port;
+    (void)sda_gpio;
+    (void)scl_gpio;
+    (void)freq_hz;
+    if (s_bus_fail != ESP_OK) {
+        return s_bus_fail;
+    }
+    s_bus_refs++;
+    return ESP_OK;
+}
+
+void synapse_i2c_release(int port)
+{
+    (void)port;
+    if (s_bus_refs > 0) {
+        s_bus_refs--;
+    }
+}
+
+esp_err_t synapse_i2c_write(int port, uint8_t addr, const uint8_t *data, size_t len)
 {
     (void)port;
     (void)addr;
-    (void)timeout_ticks;
     if (len > sizeof(s_last_write)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -75,14 +108,11 @@ esp_err_t i2c_master_write_to_device(i2c_port_t port, uint8_t addr,
     return ESP_OK;
 }
 
-esp_err_t i2c_master_write_read_device(i2c_port_t port, uint8_t addr,
-                                       const uint8_t *write, size_t write_len,
-                                       uint8_t *read, size_t read_len,
-                                       int timeout_ticks)
+esp_err_t synapse_i2c_write_read(int port, uint8_t addr, const uint8_t *write, size_t write_len,
+                                 uint8_t *read, size_t read_len)
 {
     (void)port;
     (void)addr;
-    (void)timeout_ticks;
     if (write_len != 1 || write[0] >= 16 || read_len != 2) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -166,7 +196,9 @@ int ina_host_smoke_main(void)
  * device that has just booted. */
 void ina_host_reset(void)
 {
+    s_bus_fail = ESP_OK;
     ina219_deinit();
+    s_bus_refs = 0; /* every test starts with no reference held, whatever the previous one did */
     ina_host_regs_reset();
     ina_host_set_register(INA219_REG_BUS_V, (uint16_t)(925u << 3));
     ina_host_set_register(INA219_REG_SHUNT_V, 1000);
@@ -178,6 +210,32 @@ void ina_host_reset(void)
     };
     ina219_init(&cfg);
 }
+
+/* Init from scratch with the usual configuration and return the driver's esp_err_t, so a test can
+ * make the bus or the first register read fail and check what the driver does with the bus
+ * reference (ina_host_bus_refs) on each path. */
+int ina_host_try_init(void)
+{
+    ina219_deinit();
+    ina219_config_t cfg = {
+        .i2c_port = 0,
+        .i2c_addr = 0x40,
+        .sda_gpio = -1,
+        .scl_gpio = -1,
+        .i2c_freq_hz = 0,
+        .shunt_ohm = 0.1f,
+        .max_expected_a = 2.0f,
+    };
+    return (int)ina219_init(&cfg);
+}
+
+void ina_host_deinit(void)
+{
+    ina219_deinit();
+}
+
+int ina_host_err_invalid_state(void) { return ESP_ERR_INVALID_STATE; }
+int ina_host_err_timeout(void) { return ESP_ERR_TIMEOUT; }
 
 /* --- python-facing helpers ---------------------------------------------
  * The module resets the simulated device between calls, so the Python test

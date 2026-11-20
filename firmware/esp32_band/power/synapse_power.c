@@ -73,31 +73,42 @@ esp_err_t synapse_power_init(void) {
     
     // Load hardware config
     synapse_hw_config_t hw_cfg;
-    ESP_ERROR_CHECK(synapse_config_get(&hw_cfg));
+    esp_err_t cfg_err = synapse_config_get(&hw_cfg);
+    if (cfg_err != ESP_OK) {
+        ESP_LOGE(TAG, "Hardware configuration unavailable: %s", esp_err_to_name(cfg_err));
+        return cfg_err;
+    }
     g_bat_adc_channel = (adc_channel_t)hw_cfg.bat_adc_channel;
     g_voltage_divider = hw_cfg.bat_voltage_divider;
 
     // Initialize ADC oneshot unit
     // ADC1 is shared with the ECG channel: borrow the single handle.
-    ESP_ERROR_CHECK(synapse_adc1_get(&g_adc_handle));
-
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc_handle, g_bat_adc_channel, &chan_cfg));
-
-    // ADC calibration (line fitting; falls back to raw scaling if eFuse missing)
-    adc_cali_curve_fitting_config_t cali_cfg = {
-        .unit_id = ADC_UNIT_1,
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    esp_err_t cali_ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &g_cali_handle);
-    if (cali_ret != ESP_OK) {
-        ESP_LOGW(TAG, "ADC calibration not available (%s), using raw scaling",
-                 esp_err_to_name(cali_ret));
-        g_cali_handle = NULL;
+    // A battery ADC that cannot be set up is reported and the rest keeps running (the voltage then
+    // reads 0 = unknown, see battery_mv_unchecked); it used to ESP_ERROR_CHECK, i.e. reboot the band.
+    esp_err_t adc_err = synapse_adc1_get(&g_adc_handle);
+    if (adc_err == ESP_OK) {
+        adc_oneshot_chan_cfg_t chan_cfg = {
+            .atten = ADC_ATTEN_DB_12,
+            .bitwidth = ADC_BITWIDTH_12,
+        };
+        adc_err = adc_oneshot_config_channel(g_adc_handle, g_bat_adc_channel, &chan_cfg);
+    }
+    if (adc_err != ESP_OK) {
+        ESP_LOGE(TAG, "Battery ADC unavailable: %s (battery voltage stays unknown)", esp_err_to_name(adc_err));
+        g_adc_handle = NULL;
+    } else {
+        // ADC calibration (line fitting; falls back to raw scaling if eFuse missing)
+        adc_cali_curve_fitting_config_t cali_cfg = {
+            .unit_id = ADC_UNIT_1,
+            .atten = ADC_ATTEN_DB_12,
+            .bitwidth = ADC_BITWIDTH_12,
+        };
+        esp_err_t cali_ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &g_cali_handle);
+        if (cali_ret != ESP_OK) {
+            ESP_LOGW(TAG, "ADC calibration not available (%s), using raw scaling",
+                     esp_err_to_name(cali_ret));
+            g_cali_handle = NULL;
+        }
     }
 
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
@@ -107,6 +118,9 @@ esp_err_t synapse_power_init(void) {
     ina219_config_t ina_cfg = {
         .i2c_port = CONFIG_SYNAPSE_INA219_I2C_PORT,
         .i2c_addr = CONFIG_SYNAPSE_INA219_I2C_ADDR,
+        .sda_gpio = hw_cfg.i2c_sda_gpio,
+        .scl_gpio = hw_cfg.i2c_scl_gpio,
+        .i2c_freq_hz = hw_cfg.i2c_freq_hz,
         .shunt_ohm = CONFIG_SYNAPSE_INA219_SHUNT_MOHM / 1000.0f,
         .max_expected_a = CONFIG_SYNAPSE_INA219_MAX_CURRENT_MA / 1000.0f,
     };

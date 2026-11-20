@@ -43,8 +43,7 @@ static volatile uint8_t s_sensor_health;
 static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     // ECG
     g_sensors.ecg_config.adc_channel = hw_cfg->ecg_adc_channel;
-    g_sensors.ecg_config.gpio_drdy = hw_cfg->ecg_gpio_drdy;
-    g_sensors.ecg_config.vref_mv = hw_cfg->ecg_vref_mv;
+    g_sensors.ecg_config.gpio_lead_off = hw_cfg->ecg_gpio_lead_off;
     g_sensors.ecg_config.gain = hw_cfg->ecg_gain;
     adc_oneshot_unit_handle_t adc1 = NULL;
     if (synapse_adc1_get(&adc1) == ESP_OK) {
@@ -54,24 +53,27 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     }
 
     // PPG
-    g_sensors.ppg_config.i2c_port = (i2c_port_t)hw_cfg->ppg_i2c_port;
+    // The bus wiring is one set of values for every sensor on it (CONFIG_SYNAPSE_I2C_*, default
+    // SDA 8 / SCL 9: GPIO 22-25 do not exist on the ESP32-S3 and 26-37 are flash/PSRAM on the N8R8).
+    g_sensors.ppg_config.i2c_port = hw_cfg->ppg_i2c_port;
     g_sensors.ppg_config.i2c_addr = hw_cfg->ppg_i2c_addr;
     g_sensors.ppg_config.gpio_int = hw_cfg->ppg_gpio_int;
-    g_sensors.ppg_config.sda_gpio_num = 8;  // S3-safe (no GPIO22-25 on ESP32-S3)
-    g_sensors.ppg_config.scl_gpio_num = 9;
+    g_sensors.ppg_config.sda_gpio_num = hw_cfg->i2c_sda_gpio;
+    g_sensors.ppg_config.scl_gpio_num = hw_cfg->i2c_scl_gpio;
+    g_sensors.ppg_config.i2c_freq_hz = hw_cfg->i2c_freq_hz;
     g_sensors.ppg_config.led_current_red = hw_cfg->ppg_led_current_red;
     g_sensors.ppg_config.led_current_ir = hw_cfg->ppg_led_current_ir;
-    g_sensors.ppg_config.led_current_green = hw_cfg->ppg_led_current_green;
     g_sensors.ppg_config.sample_rate = hw_cfg->ppg_sample_rate;
     g_sensors.ppg_config.pulse_width = hw_cfg->ppg_pulse_width;
     g_sensors.ppg_config.adc_range = hw_cfg->ppg_adc_range;
 
     // IMU
-    g_sensors.imu_config.i2c_port = (i2c_port_t)hw_cfg->imu_i2c_port;
+    g_sensors.imu_config.i2c_port = hw_cfg->imu_i2c_port;
     g_sensors.imu_config.i2c_addr = hw_cfg->imu_i2c_addr;
     g_sensors.imu_config.gpio_int = hw_cfg->imu_gpio_int;
-    g_sensors.imu_config.sda_gpio_num = 8;
-    g_sensors.imu_config.scl_gpio_num = 9;
+    g_sensors.imu_config.sda_gpio_num = hw_cfg->i2c_sda_gpio;
+    g_sensors.imu_config.scl_gpio_num = hw_cfg->i2c_scl_gpio;
+    g_sensors.imu_config.i2c_freq_hz = hw_cfg->i2c_freq_hz;
     g_sensors.imu_config.accel_fsr_g = hw_cfg->imu_accel_fsr_g;
     g_sensors.imu_config.gyro_fsr_dps = hw_cfg->imu_gyro_fsr_dps;
     g_sensors.imu_config.accel_odr_hz = hw_cfg->imu_accel_odr_hz;
@@ -88,9 +90,21 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     // Temperature
     g_sensors.temp_config.i2c_port = hw_cfg->temp_i2c_port;
     g_sensors.temp_config.i2c_addr = hw_cfg->temp_i2c_addr;
+    g_sensors.temp_config.sda_gpio = hw_cfg->i2c_sda_gpio;
+    g_sensors.temp_config.scl_gpio = hw_cfg->i2c_scl_gpio;
+    g_sensors.temp_config.i2c_freq_hz = hw_cfg->i2c_freq_hz;
     g_sensors.temp_config.gpio_alert = hw_cfg->temp_gpio_alert;
     g_sensors.temp_config.conversion_cycle_ms = 1000; // 1Hz updates
     g_sensors.temp_config.continuous_mode = true;
+}
+
+// A failing sensor must be reported and skipped, never ESP_ERROR_CHECK'd: that aborts and reboots
+// the whole band, which then fails the same way on the next boot (a reboot loop that also hides
+// the cause). The sensors that work keep streaming.
+static void log_if_failed(esp_err_t err, const char *what) {
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s failed: %s (continuing)", what, esp_err_to_name(err));
+    }
 }
 
 // Scheduler-compatible wrappers (exact signature match, no casts)
@@ -219,7 +233,11 @@ esp_err_t synapse_sensors_init(void) {
 
     // Load hardware configuration
     synapse_hw_config_t hw_cfg;
-    ESP_ERROR_CHECK(synapse_config_get(&hw_cfg));
+    esp_err_t cfg_err = synapse_config_get(&hw_cfg);
+    if (cfg_err != ESP_OK) {
+        ESP_LOGE(TAG, "Hardware configuration unavailable: %s", esp_err_to_name(cfg_err));
+        return cfg_err;
+    }
     populate_sensor_configs(&hw_cfg);
 
     // Create sample queue
@@ -244,7 +262,15 @@ esp_err_t synapse_sensors_init(void) {
     }
 
     // Initialize sensor scheduler
-    ESP_ERROR_CHECK(sensor_scheduler_init(&g_sensors.scheduler, g_sensors.sample_queue));
+    esp_err_t sched_err = sensor_scheduler_init(&g_sensors.scheduler, g_sensors.sample_queue);
+    if (sched_err != ESP_OK) {
+        ESP_LOGE(TAG, "Sensor scheduler init failed: %s", esp_err_to_name(sched_err));
+        vSemaphoreDelete(g_sensors.data_mutex);
+        g_sensors.data_mutex = NULL;
+        vQueueDelete(g_sensors.sample_queue);
+        g_sensors.sample_queue = NULL;
+        return sched_err;
+    }
 
     // Register ECG sensor
     sensor_config_t ecg_sensor = {
@@ -333,16 +359,24 @@ esp_err_t synapse_sensors_start(void) {
     if (g_sensors.running) return ESP_OK;
 
     // Start sensor scheduler (creates ECG/PPG/IMU tasks)
-    ESP_ERROR_CHECK(sensor_scheduler_start(&g_sensors.scheduler));
+    esp_err_t start_err = sensor_scheduler_start(&g_sensors.scheduler);
+    if (start_err != ESP_OK) {
+        ESP_LOGE(TAG, "Sensor scheduler start failed: %s", esp_err_to_name(start_err));
+        return start_err;
+    }
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
-    // Start GPS
-    ESP_ERROR_CHECK(gps_max_m10s_start());
+    // Start GPS (only if it initialised: s_gps_ok), a missing chip does not stop the rest
+    if (s_gps_ok) {
+        log_if_failed(gps_max_m10s_start(), "GPS start");
+    }
 #endif
 
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
-    // Start Temperature
-    ESP_ERROR_CHECK(temp_tmp117_start());
+    // Start Temperature (only if it initialised: s_temp_ok)
+    if (s_temp_ok) {
+        log_if_failed(temp_tmp117_start(), "Temperature start");
+    }
 #endif
 
     g_sensors.running = true;
@@ -354,16 +388,16 @@ esp_err_t synapse_sensors_stop(void) {
     if (!g_sensors.running) return ESP_OK;
 
     // Stop sensor scheduler
-    ESP_ERROR_CHECK(sensor_scheduler_stop(&g_sensors.scheduler));
+    log_if_failed(sensor_scheduler_stop(&g_sensors.scheduler), "Sensor scheduler stop");
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Stop GPS
-    ESP_ERROR_CHECK(gps_max_m10s_stop());
+    log_if_failed(gps_max_m10s_stop(), "GPS stop");
 #endif
 
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Stop Temperature
-    ESP_ERROR_CHECK(temp_tmp117_stop());
+    log_if_failed(temp_tmp117_stop(), "Temperature stop");
 #endif
 
     g_sensors.running = false;
@@ -376,12 +410,12 @@ esp_err_t synapse_sensors_deinit(void) {
 
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS
     // Deinitialize GPS
-    ESP_ERROR_CHECK(gps_max_m10s_deinit());
+    log_if_failed(gps_max_m10s_deinit(), "GPS deinit");
 #endif
 
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
     // Deinitialize Temperature
-    ESP_ERROR_CHECK(temp_tmp117_deinit());
+    log_if_failed(temp_tmp117_deinit(), "Temperature deinit");
 #endif
 
     // The sensor tasks hold pointers into the scheduler: delete them first.
@@ -394,7 +428,7 @@ esp_err_t synapse_sensors_deinit(void) {
     s_sensor_health = 0;
 
     // Deinitialize sensor scheduler
-    ESP_ERROR_CHECK(sensor_scheduler_deinit(&g_sensors.scheduler));
+    log_if_failed(sensor_scheduler_deinit(&g_sensors.scheduler), "Sensor scheduler deinit");
 
     // Cleanup
     if (g_sensors.sample_queue) {

@@ -178,7 +178,7 @@ def _band_gpio_map() -> dict[str, int]:
     return {
         "ecg_adc": _kconfig_int("SYNAPSE_ECG_ADC_CHANNEL") + 1,
         "bat_adc": _kconfig_int("SYNAPSE_BAT_ADC_CHANNEL") + 1,
-        "ecg_leadoff": _kconfig_int("SYNAPSE_ECG_GPIO_DRDY"),
+        "ecg_leadoff": _kconfig_int("SYNAPSE_ECG_GPIO_LEAD_OFF"),
         "ppg_int": _kconfig_int("SYNAPSE_PPG_GPIO_INT"),
         "imu_int": _kconfig_int("SYNAPSE_IMU_GPIO_INT"),
         "temp_alert": _kconfig_int("SYNAPSE_TEMP_GPIO_ALERT"),
@@ -211,7 +211,7 @@ def test_the_hardware_yaml_agrees_with_the_firmware_pins() -> None:
     pins = _band_gpio_map()
     assert re.search(rf"wired_sync_gpio:\s*{pins['wired_sync']}\b", yaml_text)
     assert re.search(rf"adc_pin:\s*{pins['ecg_adc']}\b", yaml_text)
-    assert re.search(rf"gpio_drdy:\s*{pins['ecg_leadoff']}\b", yaml_text)
+    assert re.search(rf"gpio_lead_off:\s*{pins['ecg_leadoff']}\b", yaml_text)
 
 
 # --- edge AI ----------------------------------------------------------------------

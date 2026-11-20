@@ -13,8 +13,12 @@
 
 typedef int BaseType_t;
 typedef void *SemaphoreHandle_t;
+typedef struct {
+    int unused;
+} StaticSemaphore_t;
 
 SemaphoreHandle_t xSemaphoreCreateMutex(void);
+SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *buffer);
 BaseType_t xSemaphoreTake(SemaphoreHandle_t mutex, TickType_t ticks);
 void xSemaphoreGive(SemaphoreHandle_t mutex);
 void vSemaphoreDelete(SemaphoreHandle_t mutex);

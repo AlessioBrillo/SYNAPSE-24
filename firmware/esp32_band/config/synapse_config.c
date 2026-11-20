@@ -14,6 +14,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "synapse_config.h"
+#include "synapse_config_limits.h"
 
 static const char *TAG = "SYNAPSE_CONFIG";
 
@@ -25,9 +26,13 @@ static bool g_config_dirty = false;
 static const synapse_hw_config_t g_default_config = {
     // ECG AD8232
     .ecg_adc_channel = CONFIG_SYNAPSE_ECG_ADC_CHANNEL,
-    .ecg_gpio_drdy = CONFIG_SYNAPSE_ECG_GPIO_DRDY,
-    .ecg_vref_mv = (float)CONFIG_SYNAPSE_ECG_VREF_MV,
+    .ecg_gpio_lead_off = CONFIG_SYNAPSE_ECG_GPIO_LEAD_OFF,
     .ecg_gain = (float)CONFIG_SYNAPSE_ECG_GAIN / 100.0f,
+
+    // Shared I2C bus
+    .i2c_sda_gpio = CONFIG_SYNAPSE_I2C_SDA_GPIO,
+    .i2c_scl_gpio = CONFIG_SYNAPSE_I2C_SCL_GPIO,
+    .i2c_freq_hz = CONFIG_SYNAPSE_I2C_FREQ_HZ,
 
     // PPG MAX30102
     .ppg_i2c_port = CONFIG_SYNAPSE_PPG_I2C_PORT,
@@ -35,7 +40,6 @@ static const synapse_hw_config_t g_default_config = {
     .ppg_gpio_int = CONFIG_SYNAPSE_PPG_GPIO_INT,
     .ppg_led_current_red = CONFIG_SYNAPSE_PPG_LED_CURRENT_RED,
     .ppg_led_current_ir = CONFIG_SYNAPSE_PPG_LED_CURRENT_IR,
-    .ppg_led_current_green = CONFIG_SYNAPSE_PPG_LED_CURRENT_GREEN,
     .ppg_sample_rate = CONFIG_SYNAPSE_PPG_SAMPLE_RATE,
     .ppg_pulse_width = CONFIG_SYNAPSE_PPG_PULSE_WIDTH,
     .ppg_adc_range = CONFIG_SYNAPSE_PPG_ADC_RANGE,
@@ -89,12 +93,19 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
         ESP_LOGE(TAG, "Invalid ECG ADC channel: %d", cfg->ecg_adc_channel);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->ecg_gpio_drdy != -1 && (cfg->ecg_gpio_drdy < 0 || cfg->ecg_gpio_drdy > 47)) {
-        ESP_LOGE(TAG, "Invalid ECG DRDY GPIO: %d", cfg->ecg_gpio_drdy);
+    if (!synapse_cfg_gpio_ok(cfg->ecg_gpio_lead_off, true)) {
+        ESP_LOGE(TAG, "Invalid ECG lead-off GPIO: %d (-1 or a usable N8R8 pin)", cfg->ecg_gpio_lead_off);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->ecg_vref_mv <= 0 || cfg->ecg_vref_mv > 3300) {
-        ESP_LOGE(TAG, "Invalid ECG VREF: %.1f", cfg->ecg_vref_mv);
+    if (cfg->ecg_gain <= 0.0f) {
+        ESP_LOGE(TAG, "Invalid ECG gain: %.2f", cfg->ecg_gain);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Shared I2C bus validation
+    if (!synapse_cfg_i2c_bus_ok(cfg->i2c_sda_gpio, cfg->i2c_scl_gpio, cfg->i2c_freq_hz)) {
+        ESP_LOGE(TAG, "Invalid I2C bus: SDA=%d SCL=%d %lu Hz (two different usable pins, 10 kHz - 1 MHz)",
+                 cfg->i2c_sda_gpio, cfg->i2c_scl_gpio, (unsigned long)cfg->i2c_freq_hz);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -103,8 +114,17 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
         ESP_LOGE(TAG, "Invalid PPG I2C port: %d", cfg->ppg_i2c_port);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->ppg_gpio_int < 0 || cfg->ppg_gpio_int > 47) {
-        ESP_LOGE(TAG, "Invalid PPG INT GPIO: %d", cfg->ppg_gpio_int);
+    if (!synapse_cfg_i2c_addr_ok(cfg->ppg_i2c_addr)) {
+        ESP_LOGE(TAG, "Invalid PPG I2C address: 0x%02X", cfg->ppg_i2c_addr);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!synapse_cfg_gpio_ok(cfg->ppg_gpio_int, true)) {
+        ESP_LOGE(TAG, "Invalid PPG INT GPIO: %d (-1 if not wired)", cfg->ppg_gpio_int);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!synapse_cfg_ppg_codes_ok(cfg->ppg_sample_rate, cfg->ppg_pulse_width, cfg->ppg_adc_range)) {
+        ESP_LOGE(TAG, "Invalid PPG codes: sample_rate=%u (0-7) pulse_width=%u (0-3) adc_range=%u (0-3)",
+                 (unsigned)cfg->ppg_sample_rate, (unsigned)cfg->ppg_pulse_width, (unsigned)cfg->ppg_adc_range);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -113,18 +133,18 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
         ESP_LOGE(TAG, "Invalid IMU I2C port: %d", cfg->imu_i2c_port);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->imu_gpio_int < 0 || cfg->imu_gpio_int > 47) {
-        ESP_LOGE(TAG, "Invalid IMU INT GPIO: %d", cfg->imu_gpio_int);
+    if (!synapse_cfg_i2c_addr_ok(cfg->imu_i2c_addr)) {
+        ESP_LOGE(TAG, "Invalid IMU I2C address: 0x%02X", cfg->imu_i2c_addr);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->imu_accel_fsr_g != 2 && cfg->imu_accel_fsr_g != 4 && 
-        cfg->imu_accel_fsr_g != 8 && cfg->imu_accel_fsr_g != 16) {
-        ESP_LOGE(TAG, "Invalid IMU accel FSR: %d", cfg->imu_accel_fsr_g);
+    if (!synapse_cfg_gpio_ok(cfg->imu_gpio_int, true)) {
+        ESP_LOGE(TAG, "Invalid IMU INT GPIO: %d (-1 if not wired)", cfg->imu_gpio_int);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cfg->imu_gyro_fsr_dps != 250 && cfg->imu_gyro_fsr_dps != 500 &&
-        cfg->imu_gyro_fsr_dps != 1000 && cfg->imu_gyro_fsr_dps != 2000) {
-        ESP_LOGE(TAG, "Invalid IMU gyro FSR: %d", cfg->imu_gyro_fsr_dps);
+    if (!synapse_cfg_imu_ok(cfg->imu_accel_fsr_g, cfg->imu_gyro_fsr_dps, cfg->imu_accel_odr_hz,
+                            cfg->imu_gyro_odr_hz)) {
+        ESP_LOGE(TAG, "Invalid IMU config: accel %d g @ %d Hz, gyro %d dps @ %d Hz",
+                 cfg->imu_accel_fsr_g, cfg->imu_accel_odr_hz, cfg->imu_gyro_fsr_dps, cfg->imu_gyro_odr_hz);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -147,6 +167,10 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
     // Temperature validation
     if (cfg->temp_i2c_port < 0 || cfg->temp_i2c_port > 1) {
         ESP_LOGE(TAG, "Invalid TEMP I2C port: %d", cfg->temp_i2c_port);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!synapse_cfg_i2c_addr_ok(cfg->temp_i2c_addr)) {
+        ESP_LOGE(TAG, "Invalid TEMP I2C address: 0x%02X", cfg->temp_i2c_addr);
         return ESP_ERR_INVALID_ARG;
     }
     if (cfg->temp_gpio_alert != -1 && (cfg->temp_gpio_alert < 0 || cfg->temp_gpio_alert > 47)) {
@@ -307,6 +331,13 @@ esp_err_t synapse_config_load(void) {
     } else {
         // Keep defaults, mark as dirty to save on first change
         g_config_dirty = true;
+    }
+
+    // The Kconfig defaults reach the drivers without any check when NVS holds nothing: a value
+    // menuconfig let through that the hardware cannot take must be visible at boot, not found as a
+    // sensor that quietly does not start.
+    if (validate_config(&g_config) != ESP_OK) {
+        ESP_LOGE(TAG, "The active configuration is invalid (reason above): the sensors it concerns will not start");
     }
 
     g_config_loaded = true;
