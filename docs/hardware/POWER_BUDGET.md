@@ -13,7 +13,7 @@ to demonstrate it.
 |---|---|---|
 | Scope | Smoke-kit rig as bought: ESP32-S3 + AD8232 + MAX30102 + ICM-20948 + INA219 | Optimised pod per Architecture.md: on-device processing, compress-before-transmit |
 | Streaming | Raw, uncompressed, BLE connected continuously (~2.3–2.4 kB/s) | Compressed / duty-cycled radio (§55-62, gate **G3**) |
-| Expected draw | **200–500 mW** (see derivation below) | **5 mW avg / 10 mW peak** (T0 profile) |
+| Expected draw | **250–425 mW** estimated, judged against the 150–600 mW envelope (see derivation below) | **5 mW avg / 10 mW peak** (T0 profile) |
 | Proven by | `data/live_validation/gate_report.json` → `measured_tier0_power_mw` (POWER stream, INA219) | Not yet — G3 after G1 |
 | Gates | G1 rows 2 and 11 (vs. the kit range) | G3 (post-G1), separate gate, separate criterion |
 
@@ -47,8 +47,12 @@ disqualifier for the kit — they are simply not what this rig demonstrates.
 
 | Draw | 500 mAh runtime | 6 h SOP soak? |
 |---|---|---|
+| 150 mW (envelope floor) | ~12.3 h | yes |
 | 250 mW | ~7.4 h | yes |
 | 425 mW | ~4.3 h | **no — the soak would die mid-run** |
+| 600 mW (envelope ceiling) | ~3.1 h | **no** |
+
+(500 mAh × 3.7 V = 1.85 Wh; runtime = 1.85 Wh / draw.)
 
 So the SOP now states the runtime explicitly before the soak starts, and the
 kit carries **one 1000–2000 mAh LiPo** (≈€8–12) for the 6-hour session. A

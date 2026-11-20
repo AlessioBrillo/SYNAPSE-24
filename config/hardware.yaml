@@ -71,7 +71,7 @@ pods:
         imu: "ICM-20948"
       ecg_config:
         adc_pin: 1                     # ADC1_CH0 = GPIO1 on the S3 (GPIO36 is octal PSRAM)
-        gpio_drdy: 15                  # lead-off (LO+ / LO- combined on the module's LO pin)
+        gpio_drdy: 15                  # lead-off sense (the name is historical): breakout LO+, or LO+/LO- OR-ed by two diodes; -1 = not wired
         lead_off_plus: 15
         lead_off_minus: null           # single combined line; GPIO34 is octal PSRAM
         vref_mv: 1100

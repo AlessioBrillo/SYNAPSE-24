@@ -139,8 +139,10 @@ config SYNAPSE_ECG_GPIO_DRDY
     int "ECG DRDY/Lead-off GPIO (-1 to disable)"
     default 15
     help
-        GPIO for AD8232 lead-off detection (LO+ and LO- OR-ed on the module's
-        single LO output). -1 to disable. Not GPIO4: that is the battery ADC.
+        GPIO for AD8232 lead-off detection: wire the breakout's LO+ pin here
+        (breakouts expose LO+ and LO- separately; to sense both, OR them through
+        two diodes, see docs/hardware/BRINGUP_SOP.md). -1 to disable. Not GPIO4:
+        that is the battery ADC.
 
 config SYNAPSE_ECG_VREF_MV
     int "ECG ADC Reference Voltage (mV)"

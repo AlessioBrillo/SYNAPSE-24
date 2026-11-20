@@ -22,7 +22,7 @@ side of the wire:
    validator. Six concrete contradictions, each of which becomes a bench
    session once hardware is on the desk.
 3. **The canonical firmware had no raw path.** `esp32_band` exposed only a
-   20-byte consumer feature stream (HR/RR/SQI/stress). For a project whose
+   consumer feature stream (23 bytes today; it was documented as 20 at the time) (HR/RR/SQI/stress). For a project whose
    asset *is* the multimodal dataset, that is the wrong interface.
 4. **Nothing about the live path was tested.** Zero host code exercised a real
    BLE notification, and no bench existed that could catch a clock or gap bug
@@ -32,7 +32,7 @@ side of the wire:
 
 ### Sprint 0 — toolchain and build variants
 - `tools/check_toolchain.py` — makes "can this machine build the firmware?" an
-  executable question. Currently reports **BLOCKED**: ESP-IDF is not installed.
+  executable question. Reports READY once ESP-IDF's environment is active in the shell and BLOCKED otherwise (at the time of Sprint 0 ESP-IDF was not installed at all; G0 is now closed, see below).
 - `firmware/esp32_band/sdkconfig.defaults.core` + real gating of
   `SYNAPSE_FEATURE_GPS/TEMPERATURE`. Those Kconfig flags were previously
   declared and consulted nowhere, so GPS and TMP117 compiled unconditionally
@@ -59,7 +59,7 @@ side of the wire:
 - `src/synapse24/hardware/research_client.py`: decoder with 16-bit
   sequence-gap detection and a `DeviceClock` that rebuilds a monotonic 64-bit
   timeline from the pod's 32-bit microsecond stamp (which wraps every
-  ~4295 s — without this, a 24 h Tier-0 recording would jump backwards).
+  ~4295 s, i.e. ~71.6 min — without this, a 24 h Tier-0 recording would jump backwards).
 - `tests/test_research_service_hil.py`: a synthetic pod that speaks the real
   frame format (ECG 500 Hz, PPG 50 Hz red+IR, IMU sub-streams at 50 Hz) with
   injected faults.

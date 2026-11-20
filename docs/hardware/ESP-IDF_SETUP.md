@@ -85,7 +85,7 @@ environment variables do not persist to the rest of your session):
 ### Linux / macOS
 
 ```bash
-git clone --depth 1 --branch v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+git clone --depth 1 --branch v5.5.5 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
 cd ~/esp/esp-idf && ./install.sh esp32s3
 source ~/esp/esp-idf/export.sh
 ```
@@ -97,7 +97,10 @@ uv run python tools/check_toolchain.py
 ```
 
 Expected: every `OK`, no `FAIL`. A `WARN` on the Python interpreter is acceptable
-if you build through the `uv`-managed 3.11 used by the rest of the project.
+if you build through the `uv`-managed 3.11 used by the rest of the project. The
+Windows ESP-IDF 5.5.5 environment installed for the firmware build uses its own
+Python 3.12; that is expected and is the interpreter that must be first on `PATH`
+for `idf.py` (see `FIRST_HARDWARE_DAY.md`).
 
 ## 3. Python interpreter
 
@@ -114,7 +117,7 @@ The Band firmware has two build profiles, selected with `SDKCONFIG_DEFAULTS`:
 
 | Variant | Sensors / features | Use |
 |---|---|---|
-| `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS, no TMP117, no FIT, no provisioning, no OTA | **Smoke kit bringup** — the €65–90 rig. This is what Phase 1 hardware validation runs against. |
+| `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS, no TMP117, no FIT, no provisioning, no OTA | **Smoke kit bringup** — the ~€140 rig (`PROCUREMENT.md`). This is what Phase 1 hardware validation runs against. |
 | `band-full` (default) | Everything: + GPS MAX-M10S, + TMP117, + FIT writer, + BLE provisioning, + signed OTA | Product firmware for the Synapse Band v1. |
 
 `band-core` exists so that bringup does not block on hardware you have not
@@ -143,10 +146,15 @@ Expected first-boot log:
 
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
-I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz)
-I (xxx) SYNAPSE_RESEARCH: Research service ready (raw PPG/ECG/IMU + sync)
+I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
+I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
+...
 I (xxx) SYNAPSE_BAND: Entering main loop
 ```
+
+This is the same sequence as `BRINGUP_SOP.md` §1 (which also lists the INA219 lines,
+present only when the monitor is stocked); that file is the reference for the
+bring-up check.
 
 If you see `ESP_ERR_NOT_FOUND` from the PPG or IMU driver, the I²C bus is wrong:
 the Band firmware hard-codes **SDA = GPIO 8, SCL = GPIO 9** (GPIO 22–25 do not
@@ -155,10 +163,16 @@ the classic ESP32 21/22 pair).
 
 ## 6. Partition table
 
-`sdkconfig.defaults` requests a 16 MB flash with a custom partition table
-(`partitions.csv`): 1.5 MB app + 2 MB TFLM arena + OTA slots + NVS + SPIFFS for
-FIT storage. If your board only has 4 MB, set
-`CONFIG_ESPTOOLPY_FLASHSIZE_4MB` and disable `SYNAPSE_FEATURE_FIT_STORAGE`.
+`sdkconfig.defaults` requests the 8 MB flash of the ESP32-S3 DevKitC-1 N8R8 with a
+custom partition table (`partitions.csv`): NVS, PHY, three 1.5 MB app slots
+(factory + two OTA), OTA data, a core-dump partition and ~1.4 MB SPIFFS for FIT
+storage. There is no TFLM partition (the model arena is heap-allocated, PSRAM first). If your board
+only has 4 MB, set `CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, shrink the table and disable
+`SYNAPSE_FEATURE_FIT_STORAGE`.
+
+After changing `sdkconfig.defaults*` or switching variant, delete the generated
+`firmware/esp32_band/sdkconfig` first (`rm -f sdkconfig`): a stale one silently
+overrides the defaults (this is how the ECG gain trap happens).
 
 ## References
 

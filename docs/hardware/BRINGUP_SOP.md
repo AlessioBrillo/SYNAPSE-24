@@ -19,6 +19,30 @@ as corrupted data rather than as a broken build.
 > (`--soak-rehearsal` does not need the recorder: it writes a marked
 > synthetic spool, and its output is never G1 evidence.)
 
+## Safety — read before touching an electrode
+
+This rig is a research prototype, **not a medical device**, and it is built from
+breadboard parts with no galvanic isolation. These rules are not optional:
+
+1. **Electrodes on the body only when the board runs on its LiPo, with the USB cable
+   unplugged.** A board on USB is referenced to a PC (and through its charger to
+   mains); a body-worn ECG input in that loop has no isolation barrier. Flash,
+   configure and read logs *before* the electrodes go on, then unplug.
+2. **Live monitoring while wearing the rig is BLE only**, or a laptop on battery and
+   not charging. If you must have USB while wearing electrodes, use a USB isolator
+   rated for it (optional, not part of the kit) — never a bare cable.
+3. **A signal generator or any mains-powered bench instrument is connected to the
+   inputs only off the body** (the gain test of §4a). Never to a person.
+4. **LiPo:** charge off the body and never unattended; use cells with a protection PCB;
+   do not use a swollen, dented or hot cell; never short the JST; keep it out of the
+   strap contact area.
+5. **Electrodes:** single-use Ag/AgCl, clean dry skin, no broken or irritated skin;
+   remove at the first sign of redness or itching; do not wear for more than the
+   duration of the session you are running (the 6 h soak is the longest).
+
+If any of these cannot be met for a step, skip the on-body part of that step and use
+the generator/bench alternative.
+
 ## 0. Wiring
 
 ESP32-S3 DevKitC-1 ← sensor breakouts. **I²C on GPIO 8 (SDA) / 9 (SCL)** —
@@ -79,6 +103,7 @@ alcohol; a wet electrode is the difference between a clean QRS and noise.
 ## 1. Build and flash
 
 ```bash
+rm -f firmware/esp32_band/sdkconfig   # a stale sdkconfig overrides the defaults (gain trap)
 uv run python tools/check_contract.py
 uv run python scripts/build_and_flash_firmware.py --variant band-core \
     --port COM3 --clean monitor
@@ -113,6 +138,9 @@ research service is registered only when `CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVIC
 which `sdkconfig.defaults.core` sets.
 
 ## 3. Capture and validate
+
+> **Safety:** unplug USB before the electrodes go on (see *Safety* above). The
+> capture runs over BLE; the PC never needs a cable to the board for this step.
 
 ```bash
 export SYNAPSE_FOREARM_BLE="aa:bb:cc:dd:ee:ff"   # or leave as auto
@@ -192,6 +220,11 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    60 s of recording. Record the std of the raw stream in µV-equivalent units.
    *The µV-equivalent is only true once the AD8232's gain is calibrated
    (next): use the ADC counts until it is.*
+   **Pass (provisional): std ≤ 30 µV-equivalent** (the AD8232 datasheet input noise is
+   of the order of 100 µVpp ≈ 15 µV rms, plus margin for the ESP32 ADC). The number
+   is an estimate, not a measurement: if the first real run misses it, record the
+   value, find the cause (floating RL, USB noise, wiring) and only then revise the
+   threshold, with the reason, in this file.
 2. **AD8232 gain calibration (per-rig).** Generic clones' gain is set by
    their instrumentation resistors, not by `hardware.yaml`'s `gain: 1100.0`
    nominal value. Feed a known signal into the electrode inputs (a function
@@ -200,22 +233,32 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    Write it into `config/hardware.yaml` (`ecg_config.gain_measured`) and into
    `SYNAPSE_ECG_GAIN` (menuconfig, gain x 100: this is the knob the firmware reads); the µV
    scale of every ECG SNR claim hangs on this number, so it is per-rig and
-   recalibrated whenever a breakout is replaced.
+   recalibrated whenever a breakout is replaced. The generator is connected
+   **off the body only** (see *Safety*).
+   **Pass:** three consecutive runs agree within ±5 % (the 1 % divider and the
+   generator amplitude set the floor); a `gain_measured` more than ±15 % away from
+   the nominal 1100 is accepted but must be written down as "clone differs from
+   nominal", and one more than 2× away means a wrong Kconfig value or breakout.
 3. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
    pull-ups on SDA/SCL before replacing sensors — see the troubleshooting
    table. (The kit assumes your breakouts include them; if not, add them
    before blaming the sensors.)
 4. **INA219 reality check**: with the known load from §0 (wiring), the POWER
-   stream's `current_ma` must match the resistor's expected current within a
-   few percent; a zero or wildly low reading means the shunt is miswired, not
-   that the pod is efficient.
-5. **RR from the PPG (`CONFIG_SYNAPSE_RR_ENABLE`, off until this is done).** Record 5 minutes seated
+   stream's `current_ma` must match the resistor's expected current within
+   **±5 %**; a zero or wildly low reading means the shunt is miswired, not
+   that the pod is efficient. Procedure: use a 1 % resistor of about 100 Ω
+   (≈ 37 mA at 3.7 V), measure the rail voltage `V` with the multimeter, expected
+   current = `V / R`; the INA219 reading **with the load minus without it** must be
+   within ±5 % of that. (With the 0.1 Ω shunt, 37 mA is a 3.7 mV drop, well above
+   the INA219's 10 µV step.)
+5. **RR from the PPG (`CONFIG_SYNAPSE_RR_ENABLE`, off until this is done).** On the body, so
+   battery only and USB unplugged (see *Safety*). Record 5 minutes seated
    with the PPG on a fingertip and a reference ECG (the band's own AD8232 on the other hand is
    enough) at the same time, with the RR switched on. Compare the intervals the band publishes
    (`rr_last`, in 1/1024 s) with the ECG R-R intervals beat by beat: the mean absolute error must
    be under 15 ms and RMSSD within 15 ms of the ECG's. If it is not, tune the thresholds in
    `firmware/esp32_band/signal_quality/synapse_rr.h` (amplitude floor, 20 % tolerance, 75 % clean
-   share) and `synapse_feature_map.h` (SQI 0.5, motion 0.3), repeat, and only then enable the flag
+   share) and `firmware/esp32_band/main/synapse_feature_map.h` (SQI 0.5, motion 0.3), repeat, and only then enable the flag
    in the product build. The detector has only ever seen synthetic pulses
    (`tests/test_firmware_s5_rr.py`).
 
@@ -261,8 +304,9 @@ Two rules that keep the bar honest:
   cause, and **re-run** — every attempt goes into the gate report, green or
   red. A half-empty history is a signal; a deleted history is a lie.
 - **Size the battery before the run, not after.** The kit envelope is
-  150–600 mW (`docs/hardware/POWER_BUDGET.md`): on a 500 mAh cell that is
-  4.3–7.4 h of runtime. A soak that dies at hour three is a gate that never
+  150–600 mW (`docs/hardware/POWER_BUDGET.md`): on a 500 mAh cell (about
+  1.85 Wh at 3.7 V) that is 3.1–12.3 h of runtime, so the worst case does not
+  reach 6 h. A soak that dies at hour three is a gate that never
   ran. Use the 1000+ mAh cell from the kit for the 6-hour soak, or log the
   battery percentage at start and end (`measured_battery_pct`) and say so.
 
