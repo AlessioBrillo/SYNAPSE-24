@@ -56,8 +56,11 @@ extern "C" {
 typedef struct {
     uint8_t i2c_port;
     uint8_t i2c_addr;        /**< 0x40 with A0/A1 grounded */
+    int sda_gpio;            /**< shared bus SDA (< 0: SYNAPSE_I2C_DEFAULT_SDA_GPIO) */
+    int scl_gpio;            /**< shared bus SCL (< 0: SYNAPSE_I2C_DEFAULT_SCL_GPIO) */
+    uint32_t i2c_freq_hz;    /**< bus clock (0: SYNAPSE_I2C_DEFAULT_FREQ_HZ) */
     float shunt_ohm;         /**< 0.1 on standard breakouts */
-    float max_expected_a;    /**< selects the PGA and calibration scaling */
+    float max_expected_a;    /**< sets the current LSB / calibration register; the PGA is always +-320 mV */
 } ina219_config_t;
 
 typedef struct {
@@ -73,6 +76,7 @@ typedef struct {
     float power_lsb_w;       /**< 20 * current_lsb_a (datasheet) */
     SemaphoreHandle_t mutex;
     bool initialized;
+    bool bus_held;           /**< holds a reference on the shared I2C bus (synapse_i2c) */
     bool healthy;
     uint32_t read_count;
     uint32_t error_count;

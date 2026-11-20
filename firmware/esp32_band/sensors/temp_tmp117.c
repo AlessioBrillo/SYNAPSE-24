@@ -8,24 +8,24 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "driver/i2c.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "synapse_i2c.h"
 #include "temp_tmp117.h"
 
 static const char *TAG = "TEMP_TMP117";
 
 static temp_tmp117_t g_temp = {0};
 
-// I2C register read/write helpers
+// I2C register read/write helpers (the shared bus is owned by synapse_i2c)
 static esp_err_t i2c_write_reg(uint8_t reg, uint16_t value) {
     uint8_t data[3] = {reg, (value >> 8) & 0xFF, value & 0xFF};
-    return i2c_master_write_to_device((i2c_port_t)g_temp.config.i2c_port, g_temp.config.i2c_addr, data, 3, pdMS_TO_TICKS(100));
+    return synapse_i2c_write(g_temp.config.i2c_port, (uint8_t)g_temp.config.i2c_addr, data, 3);
 }
 
 static esp_err_t i2c_read_reg(uint8_t reg, uint16_t *value) {
     uint8_t data[2];
-    esp_err_t ret = i2c_master_write_read_device((i2c_port_t)g_temp.config.i2c_port, g_temp.config.i2c_addr, &reg, 1, data, 2, pdMS_TO_TICKS(100));
+    esp_err_t ret = synapse_i2c_write_read(g_temp.config.i2c_port, (uint8_t)g_temp.config.i2c_addr, &reg, 1, data, 2);
     if (ret == ESP_OK) {
         *value = (data[0] << 8) | data[1];
     }
@@ -86,16 +86,27 @@ esp_err_t temp_tmp117_init(const temp_tmp117_config_t *config) {
         return ESP_ERR_NO_MEM;
     }
     
+    // The shared bus belongs to synapse_i2c. This driver used to work only when the PPG or the IMU
+    // had installed it first, and every failure below returned with the mutex still allocated.
+    esp_err_t ret = synapse_i2c_acquire(g_temp.config.i2c_port, g_temp.config.sda_gpio,
+                                        g_temp.config.scl_gpio, g_temp.config.i2c_freq_hz);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus unavailable: %s", esp_err_to_name(ret));
+        goto fail;
+    }
+    g_temp.bus_held = true;
+
     // Verify device ID
     uint16_t device_id;
-    esp_err_t ret = i2c_read_reg(TMP117_REG_DEVICE_ID, &device_id);
+    ret = i2c_read_reg(TMP117_REG_DEVICE_ID, &device_id);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read device ID: %s", esp_err_to_name(ret));
-        return ret;
+        goto fail;
     }
     if (device_id != TMP117_DEVICE_ID) {
         ESP_LOGE(TAG, "Invalid device ID: 0x%04X (expected 0x%04X)", device_id, TMP117_DEVICE_ID);
-        return ESP_ERR_NOT_FOUND;
+        ret = ESP_ERR_NOT_FOUND;
+        goto fail;
     }
     ESP_LOGI(TAG, "TMP117 detected (ID: 0x%04X)", device_id);
     
@@ -117,17 +128,27 @@ esp_err_t temp_tmp117_init(const temp_tmp117_config_t *config) {
     ret = i2c_write_reg(TMP117_REG_CONFIGURATION, cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write configuration: %s", esp_err_to_name(ret));
-        return ret;
+        goto fail;
     }
-    
+
     // Initialize latest data
     memset(&g_temp.latest_data, 0, sizeof(temp_data_t));
-    
+
     g_temp.initialized = true;
-    ESP_LOGI(TAG, "TMP117 initialized on I2C%d (addr 0x%02X, cycle: %d ms, mode: %s)", 
+    ESP_LOGI(TAG, "TMP117 initialized on I2C%d (addr 0x%02X, cycle: %d ms, mode: %s)",
              config->i2c_port, config->i2c_addr, config->conversion_cycle_ms,
              config->continuous_mode ? "continuous" : "one-shot");
     return ESP_OK;
+
+fail:
+    // Not initialised: give back the bus reference and the mutex instead of leaking both.
+    if (g_temp.bus_held) {
+        synapse_i2c_release(g_temp.config.i2c_port);
+        g_temp.bus_held = false;
+    }
+    vSemaphoreDelete(g_temp.mutex);
+    g_temp.mutex = NULL;
+    return ret;
 }
 
 esp_err_t temp_tmp117_start(void) {
@@ -162,12 +183,16 @@ esp_err_t temp_tmp117_stop(void) {
 
 esp_err_t temp_tmp117_deinit(void) {
     temp_tmp117_stop();
-    
+
     if (g_temp.mutex) {
         vSemaphoreDelete(g_temp.mutex);
         g_temp.mutex = NULL;
     }
-    
+    if (g_temp.bus_held) {
+        synapse_i2c_release(g_temp.config.i2c_port);
+        g_temp.bus_held = false;
+    }
+
     g_temp.initialized = false;
     ESP_LOGI(TAG, "TMP117 deinitialized");
     return ESP_OK;

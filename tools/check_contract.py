@@ -29,6 +29,7 @@ HARDWARE_YAML = ROOT / "config" / "hardware.yaml"
 BRINGUP_YAML = ROOT / "config" / "hardware_bringup.yaml"
 FIRMWARE_DIR = ROOT / "firmware" / "esp32_band"
 SENSORS_C = FIRMWARE_DIR / "sensors" / "synapse_sensors.c"
+CONFIG_KCONFIG = FIRMWARE_DIR / "config" / "Kconfig"
 GATT_H = FIRMWARE_DIR / "ble" / "ble_gatt_server.h"
 RESEARCH_C = FIRMWARE_DIR / "ble" / "ble_research_service.c"
 # The UUIDs of the contract are generated from hardware.yaml (see
@@ -161,21 +162,41 @@ def check_sampling_rates(hw: dict, bringup: dict, report: Report) -> None:
             )
 
 
+def _kconfig_default(symbol: str) -> int | None:
+    """The integer ``default`` of ``config <symbol>`` in the firmware Kconfig, or None."""
+    text = CONFIG_KCONFIG.read_text(encoding="utf-8") if CONFIG_KCONFIG.is_file() else ""
+    block = re.search(rf"^config {symbol}\b(.*?)(?=^config |^endmenu|\Z)", text, re.S | re.M)
+    if block is None:
+        return None
+    default = re.search(r"^\s*default\s+(\S+)", block.group(1), re.M)
+    return _as_int(default.group(1)) if default else None
+
+
 def check_i2c_pins(hw: dict, report: Report) -> None:
     """The shared I2C bus pins must match the firmware and the bringup doc.
 
     ESP32-S3 has no usable GPIO 21-25 on octal-PSRAM modules; the classic ESP32
-    21/22 pair must never appear.
+    21/22 pair must never appear. The pins are firmware configuration
+    (CONFIG_SYNAPSE_I2C_SDA_GPIO / _SCL_GPIO, read by every sensor driver through
+    synapse_config), so the manifest is checked against the Kconfig default, and
+    synapse_sensors.c must take the pins from the configuration, not hard-code them.
     """
     i2c = _pod(hw, "forearm_hub").get("metadata", {}).get("i2c", {})
     sda, scl = i2c.get("sda_gpio"), i2c.get("scl_gpio")
 
     src = SENSORS_C.read_text(encoding="utf-8") if SENSORS_C.is_file() else ""
     for role, pin in (("SDA", sda), ("SCL", scl)):
+        default = _kconfig_default(f"SYNAPSE_I2C_{role}_GPIO")
         report.check(
-            pin is not None and f"{role.lower()}_gpio_num = {pin}" in src,
-            f"firmware synapse_sensors.c does not set {role.lower()}_gpio_num = {pin} "
+            pin is not None and default == pin,
+            f"firmware Kconfig SYNAPSE_I2C_{role}_GPIO defaults to {default} "
             f"(hardware.yaml declares {pin})",
+        )
+        report.check(
+            f"{role.lower()}_gpio_num = hw_cfg->i2c_{role.lower()}_gpio" in src
+            and not re.search(rf"{role.lower()}_gpio_num\s*=\s*\d+", src),
+            f"firmware synapse_sensors.c must take {role} from hw_cfg->i2c_{role.lower()}_gpio, "
+            "not hard-code a pin",
         )
         report.check(
             isinstance(pin, int) and not 21 <= pin <= 25,

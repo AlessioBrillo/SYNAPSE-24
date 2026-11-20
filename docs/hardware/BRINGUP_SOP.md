@@ -86,7 +86,7 @@ Electrodes: RA (red) proximal near the elbow, LA (yellow) distal near the
 wrist, RL (green) on a bony prominence as reference. Clean the skin with
 alcohol; a wet electrode is the difference between a clean QRS and noise.
 
-> **`ecg_config.gpio_drdy: 15` in `hardware.yaml` is optional.** The driver
+> **`ecg_config.gpio_lead_off: 15` in `hardware.yaml` is optional.** The driver
 > uses it as the lead-off sense pin (LO+; the AD8232 breakouts expose LO+ and
 > LO− separately, OR them through two diodes if you want both). The pin is
 > pulled **down**: if your clone has no LO pin, leave GPIO 15 unconnected and it
@@ -97,7 +97,7 @@ alcohol; a wet electrode is the difference between a clean QRS and noise.
 > again, which takes one second without ECG samples (reported as a gap in
 > `dropped`). With the pin unwired nothing ever flags a lead-off, so that re-measure never
 > happens either: start the band with the electrodes already applied (the bias is measured
-> in the first second). Or set `gpio_drdy: -1`.
+> in the first second). Or set `gpio_lead_off: -1`.
 > It used to be GPIO 4, which is also the battery-divider input: do not share them.
 
 ## 1. Build and flash
@@ -113,6 +113,7 @@ Expected first-boot sequence:
 
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
+I (xxx) synapse_i2c: port 0 up: SDA=8 SCL=9 400000 Hz
 I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
 I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
 I (xxx) INA219: INA219 ready at 0x40 (bus 3.70 V, shunt 0.100 ohm)
@@ -120,6 +121,13 @@ I (xxx) SYNAPSE_POWER: INA219 power monitor active: measured current telemetry e
 I (xxx) SYNAPSE_POWER: power telemetry sink attached
 I (xxx) SYNAPSE_BAND: Entering main loop
 ```
+
+The `synapse_i2c` line shows the wiring the firmware actually uses (the one bus of the PPG, IMU
+and INA219; it is configuration, `CONFIG_SYNAPSE_I2C_*`, validated at boot). A sensor that does
+not answer is reported (`<sensor> init failed ... continuing without it`) and skipped: the band
+keeps running and the rest keeps streaming. During a capture, `ECG input stuck` means the signal
+has been on a rail or constant for ~2 s (AD8232 unpowered, broken wire to the ADC pin): that is
+not a quiet ECG, and the lead-off pin cannot tell it.
 
 `[band-core]` must appear. If GPS/Temp lines appear instead, the wrong variant
 was built. The INA219 lines appear only when the monitor is stocked and
@@ -353,7 +361,7 @@ from the generated contract header
 |---|---|---|
 | `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups |
 | `[band-core]` missing from the boot log | Wrong build variant | Rebuild with `--variant band-core` |
-| ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_drdy: -1` |
+| ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_lead_off: -1` |
 | ECG flat or stuck at a rail (about +1.3 / −1.5 mV) from the start | The band started with the electrodes off or still settling, so the resting level was measured from nothing | Apply the electrodes and restart the band; with LO+ wired, a long lead-off followed by steady contact re-measures it by itself |
 | Research service absent | `RESEARCH_SERVICE` disabled or wrong firmware | Check `sdkconfig.defaults.core` |
 | HR reads 0 or 200+ bpm | Electrode contact / motion | Clean skin, snug electrodes, hold still |

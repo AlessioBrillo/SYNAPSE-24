@@ -13,9 +13,9 @@
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "driver/i2c.h"
 #include "esp_log.h"
 #include "ina219.h"
+#include "synapse_i2c.h"
 
 static const char *TAG = "INA219";
 
@@ -26,15 +26,13 @@ static ina219_t g_ina = {0};
 static esp_err_t ina_write_reg(uint8_t reg, uint16_t value)
 {
     uint8_t data[3] = {reg, (uint8_t)(value >> 8), (uint8_t)(value & 0xFF)};
-    return i2c_master_write_to_device(
-        (i2c_port_t)g_ina.config.i2c_port, g_ina.config.i2c_addr, data, 3, pdMS_TO_TICKS(100));
+    return synapse_i2c_write(g_ina.config.i2c_port, g_ina.config.i2c_addr, data, 3);
 }
 
 static esp_err_t ina_read_reg(uint8_t reg, uint16_t *value)
 {
     uint8_t data[2] = {0};
-    esp_err_t ret = i2c_master_write_read_device(
-        (i2c_port_t)g_ina.config.i2c_port, g_ina.config.i2c_addr, &reg, 1, data, 2, pdMS_TO_TICKS(100));
+    esp_err_t ret = synapse_i2c_write_read(g_ina.config.i2c_port, g_ina.config.i2c_addr, &reg, 1, data, 2);
     if (ret == ESP_OK) {
         *value = (uint16_t)((data[0] << 8) | data[1]);
     }
@@ -96,28 +94,36 @@ esp_err_t ina219_init(const ina219_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
+    // The bus is shared and owned by synapse_i2c: this monitor used to work only if the PPG or the
+    // IMU had installed it first, and stopped working when either was deinitialised.
+    esp_err_t ret = synapse_i2c_acquire(g_ina.config.i2c_port, g_ina.config.sda_gpio,
+                                        g_ina.config.scl_gpio, g_ina.config.i2c_freq_hz);
+    if (ret != ESP_OK) {
+        vSemaphoreDelete(g_ina.mutex);
+        g_ina.mutex = NULL;
+        ESP_LOGE(TAG, "I2C bus unavailable: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    g_ina.bus_held = true;
+
     // 32 V bus, ±320 mV shunt (PGA /8), 12-bit with averaging, continuous.
     uint16_t cfg = (uint16_t)(INA219_CFG_BUS_RANGE_32V | INA219_CFG_PGA_DIV8 |
                               INA219_CFG_ADC_12BIT_1S | INA219_CFG_SADC_12BIT_8S |
                               INA219_CFG_MODE_CONT_ALL);
-    esp_err_t ret = ina_write_reg(INA219_REG_CONFIG, cfg);
+    ret = ina_write_reg(INA219_REG_CONFIG, cfg);
     if (ret == ESP_OK) {
         ret = ina_calibrate();
     }
     if (ret != ESP_OK) {
-        vSemaphoreDelete(g_ina.mutex);
-        g_ina.mutex = NULL;
         ESP_LOGE(TAG, "init failed: %s", esp_err_to_name(ret));
-        return ret;
+        goto fail;
     }
 
     // A device present on the bus answers; a LiPo rail reads ~3.0-4.2 V.
     uint16_t raw = 0;
     ret = ina_read_reg(INA219_REG_BUS_V, &raw);
     if (ret != ESP_OK) {
-        vSemaphoreDelete(g_ina.mutex);
-        g_ina.mutex = NULL;
-        return ret;
+        goto fail;
     }
     float bus_v = ((float)(raw >> 3) * 4.0f) / 1000.0f;
     if (bus_v < 1.0f || bus_v > 40.0f) {
@@ -130,6 +136,14 @@ esp_err_t ina219_init(const ina219_config_t *config)
     ESP_LOGI(TAG, "INA219 ready at 0x%02x (bus %.2f V, shunt %.3f ohm)",
              g_ina.config.i2c_addr, bus_v, g_ina.config.shunt_ohm);
     return ESP_OK;
+
+fail:
+    // Not initialised: nothing may keep the shared bus (or the mutex) alive on this driver's behalf.
+    synapse_i2c_release(g_ina.config.i2c_port);
+    g_ina.bus_held = false;
+    vSemaphoreDelete(g_ina.mutex);
+    g_ina.mutex = NULL;
+    return ret;
 }
 
 esp_err_t ina219_read_once(ina219_data_t *data)
@@ -201,6 +215,10 @@ esp_err_t ina219_get_stats(uint32_t *reads, uint32_t *errors)
 
 esp_err_t ina219_deinit(void)
 {
+    if (g_ina.bus_held) {  // before the memset below forgets which port it was
+        synapse_i2c_release(g_ina.config.i2c_port);
+        g_ina.bus_held = false;
+    }
     if (g_ina.mutex != NULL) {
         vSemaphoreDelete(g_ina.mutex);
         g_ina.mutex = NULL;

@@ -1,5 +1,6 @@
 idf_component_register(SRCS "synapse_sensors.c" "synapse_adc1.c"
                        "../../common/scheduler/sensor_scheduler.cpp"
+                       "../../common/sensors/synapse_i2c.c"
                        "../../common/sensors/ecg_ad8232.cpp"
                        "../../common/sensors/ppg_max30102.cpp"
                        "../../common/sensors/ppg_sqi.cpp"

@@ -23,7 +23,9 @@ extern "C" {
 #define SYNAPSE_CONFIG_KEY "hw_config"
 #define SYNAPSE_CONFIG_VERSION_KEY "cfg_version"
 
-#define SYNAPSE_CONFIG_VERSION 1
+// 2: ecg_vref_mv and ppg_led_current_green removed (neither was ever used), the shared I2C bus
+// (pins, clock) added. A blob stored by version 1 has another size and is dropped for the defaults.
+#define SYNAPSE_CONFIG_VERSION 2
 
 // Firmware/Hardware version strings (from Kconfig.projbuild)
 #define SYNAPSE_FW_VERSION CONFIG_SYNAPSE_FIRMWARE_VERSION
@@ -36,20 +38,25 @@ typedef struct {
     // ECG AD8232
     // ========================================================================
     int ecg_adc_channel;          // ADC1 channel (ADC1_CHANNEL_0 = 0 -> GPIO1 on the S3)
-    int ecg_gpio_drdy;            // GPIO for DRDY/lead-off (-1 = disabled)
-    float ecg_vref_mv;            // ADC reference voltage in mV
+    int ecg_gpio_lead_off;        // GPIO for lead-off sense, the breakout LO+ (-1 = disabled)
     float ecg_gain;               // total front-end gain (nominal 1100, Kconfig value / 100)
+
+    // ========================================================================
+    // Shared I2C bus (PPG, IMU, TMP117, INA219 all sit on it; owner: synapse_i2c)
+    // ========================================================================
+    int i2c_sda_gpio;             // SDA (8 on the DevKitC-1 N8R8)
+    int i2c_scl_gpio;             // SCL (9)
+    uint32_t i2c_freq_hz;         // bus clock (400000)
 
     // ========================================================================
     // PPG MAX30102
     // ========================================================================
     int ppg_i2c_port;             // I2C_NUM_0 or I2C_NUM_1
     int ppg_i2c_addr;             // I2C address (0x57)
-    int ppg_gpio_int;             // GPIO for INT pin
-    uint8_t ppg_led_current_red;  // Red LED current register (0x00-0x3F)
-    uint8_t ppg_led_current_ir;   // IR LED current register (0x00-0x3F)
-    uint8_t ppg_led_current_green;// Green LED current register (0x00-0x3F)
-    uint8_t ppg_sample_rate;      // MAX30102 SPO2_SR code (datasheet): 0=50 1=100 2=200 3=400 4=800 5=1000 6=1600 7=3200 Hz
+    int ppg_gpio_int;             // GPIO for INT pin (-1 = not wired, the driver polls)
+    uint8_t ppg_led_current_red;  // Red LED pulse amplitude: 8 bits, 0.2 mA per step
+    uint8_t ppg_led_current_ir;   // IR LED pulse amplitude: 8 bits, 0.2 mA per step
+    uint8_t ppg_sample_rate;     // MAX30102 SPO2_SR code (datasheet): 0=50 1=100 2=200 3=400 4=800 5=1000 6=1600 7=3200 Hz
     uint8_t ppg_pulse_width;      // Pulse width register (0x03=411us)
     uint8_t ppg_adc_range;        // ADC range register (0x03=16384nA)
 
@@ -58,7 +65,7 @@ typedef struct {
     // ========================================================================
     int imu_i2c_port;             // I2C_NUM_0 or I2C_NUM_1
     int imu_i2c_addr;             // I2C address (0x68)
-    int imu_gpio_int;             // GPIO for INT pin
+    int imu_gpio_int;             // GPIO for INT pin (-1 = not wired, the driver polls)
     int imu_accel_fsr_g;          // Accel FSR: 2, 4, 8, 16g
     int imu_gyro_fsr_dps;         // Gyro FSR: 250, 500, 1000, 2000 dps
     int imu_accel_odr_hz;         // Accel ODR in Hz

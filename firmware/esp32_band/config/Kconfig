@@ -135,20 +135,14 @@ config SYNAPSE_ECG_ADC_CHANNEL
         ADC1 channel for AD8232 output. On the ESP32-S3 ADC1_CH0 = GPIO1
         (GPIO36 is octal-PSRAM on the N8R8 module and cannot be used).
 
-config SYNAPSE_ECG_GPIO_DRDY
-    int "ECG DRDY/Lead-off GPIO (-1 to disable)"
+config SYNAPSE_ECG_GPIO_LEAD_OFF
+    int "ECG lead-off GPIO (-1 to disable)"
     default 15
     help
         GPIO for AD8232 lead-off detection: wire the breakout's LO+ pin here
         (breakouts expose LO+ and LO- separately; to sense both, OR them through
         two diodes, see docs/hardware/BRINGUP_SOP.md). -1 to disable. Not GPIO4:
         that is the battery ADC.
-
-config SYNAPSE_ECG_VREF_MV
-    int "ECG ADC Reference Voltage (mV)"
-    default 1100
-    help
-        ADC reference voltage for ESP32-S3 ADC calibration.
 
 config SYNAPSE_ECG_GAIN
     int "ECG AD8232 total gain (x100)"
@@ -161,6 +155,32 @@ config SYNAPSE_ECG_GAIN
         old default, made it 180 times too large and clipped every QRS at the 16-bit limit).
         Clones differ: measure it with a known signal (docs/hardware/BRINGUP_SOP.md) and set
         the measured value here.
+
+config SYNAPSE_I2C_SDA_GPIO
+    int "I2C SDA GPIO (shared bus: PPG, IMU, TMP117, INA219)"
+    default 8
+    range 0 48
+    help
+        SDA of the one I2C bus all the sensors share. GPIO 8 on the DevKitC-1 N8R8:
+        GPIO 21-25 are unusable with octal PSRAM (and 26-37 are flash/PSRAM), and the
+        classic ESP32 pair 21/22 must not be used. tools/check_contract.py checks this
+        default against config/hardware.yaml.
+
+config SYNAPSE_I2C_SCL_GPIO
+    int "I2C SCL GPIO"
+    default 9
+    range 0 48
+    help
+        SCL of the shared I2C bus (GPIO 9 on the DevKitC-1 N8R8, see SDA above).
+
+config SYNAPSE_I2C_FREQ_HZ
+    int "I2C clock (Hz)"
+    default 400000
+    range 10000 1000000
+    help
+        Bus clock. 400 kHz is what every sensor on the bus supports. Lower it (100000)
+        when a long wire or weak pull-ups make the boot log show read errors on a
+        sensor that is present.
 
 config SYNAPSE_PPG_I2C_PORT
     int "PPG I2C Port"
@@ -176,28 +196,28 @@ config SYNAPSE_PPG_I2C_ADDR
         I2C address for MAX30102.
 
 config SYNAPSE_PPG_GPIO_INT
-    int "PPG Interrupt GPIO"
+    int "PPG Interrupt GPIO (-1 if not wired)"
     default 5
+    range -1 48
     help
-        GPIO for MAX30102 INT pin.
+        GPIO for the MAX30102 INT pin. The driver polls the FIFO either way, so -1 (not
+        wired) is fine.
 
 config SYNAPSE_PPG_LED_CURRENT_RED
     hex "PPG Red LED Current"
     default 0x1F
+    range 0x00 0xFF
     help
-        MAX30102 red LED current register value (0x00-0x3F).
+        MAX30102 red LED pulse-amplitude register: 8 bits, 0.2 mA per step
+        (0x1F = 6.2 mA, 0xFF = about 51 mA).
 
 config SYNAPSE_PPG_LED_CURRENT_IR
     hex "PPG IR LED Current"
     default 0x1F
+    range 0x00 0xFF
     help
-        MAX30102 IR LED current register value (0x00-0x3F).
-
-config SYNAPSE_PPG_LED_CURRENT_GREEN
-    hex "PPG Green LED Current"
-    default 0x0F
-    help
-        MAX30102 green LED current register value (0x00-0x3F).
+        MAX30102 IR LED pulse-amplitude register: 8 bits, 0.2 mA per step.
+        (The MAX30102 has only a red and an IR LED; there is no green one.)
 
 config SYNAPSE_PPG_SAMPLE_RATE
     hex "PPG Sample Rate Register (SPO2_SR code)"
@@ -234,10 +254,12 @@ config SYNAPSE_IMU_I2C_ADDR
         I2C address for ICM-20948.
 
 config SYNAPSE_IMU_GPIO_INT
-    int "IMU Interrupt GPIO"
+    int "IMU Interrupt GPIO (-1 if not wired)"
     default 6
+    range -1 48
     help
-        GPIO for ICM-20948 INT pin.
+        GPIO for the ICM-20948 INT pin. The driver polls either way, so -1 (not wired)
+        is fine.
 
 config SYNAPSE_IMU_ACCEL_FSR_G
     int "IMU Accelerometer FSR (g)"
@@ -354,8 +376,10 @@ config SYNAPSE_INA219_MAX_CURRENT_MA
     default 2000
     range 10 3200
     help
-        Maximum expected current in mA. Selects the PGA range and the
-        programmed current LSB; the range follows this value.
+        Maximum expected current in mA. Sets the programmed current LSB
+        (max / 2^15) and so the calibration register. It does NOT select the
+        PGA range: the driver always uses the widest one (+-320 mV), so the
+        shunt voltage, and the current derived from it, is correct for any value.
 
 config SYNAPSE_BLE_DEVICE_NAME
     string "BLE Device Name"

@@ -1,7 +1,6 @@
 #include "ppg_max30102.h"
 #include "ppg_fifo_batch.h"
 #include "esp_log.h"
-#include "driver/i2c.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -38,6 +37,7 @@ static const char* TAG = "ppg_max30102";
 typedef struct {
     ppg_max30102_config_t config;
     bool initialized;
+    bool bus_held;     // this driver owns a reference on the shared I2C bus (synapse_i2c)
     bool fifo_enabled;
     uint32_t skipped_samples;  // FIFO samples lost: overwritten while the poll stalled, or a failed burst read
     uint32_t lost_unreported;  // the part of skipped_samples the scheduler has not turned into a sequence hole yet
@@ -47,72 +47,30 @@ static ppg_max30102_ctx_t s_ctx = {};
 static int64_t s_last_ts_us = INT64_MIN;  // newest timestamp handed out: stamps never step back
 
 static esp_err_t max30102_write_reg(uint8_t reg, uint8_t value) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (s_ctx.config.i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_write_byte(cmd, value, true);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(s_ctx.config.i2c_port, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
+    const uint8_t buf[2] = {reg, value};
+    return synapse_i2c_write(s_ctx.config.i2c_port, (uint8_t)s_ctx.config.i2c_addr, buf, sizeof(buf));
 }
 
 static esp_err_t max30102_read_reg(uint8_t reg, uint8_t* value) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (s_ctx.config.i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (s_ctx.config.i2c_addr << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, value, I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(s_ctx.config.i2c_port, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
+    return synapse_i2c_write_read(s_ctx.config.i2c_port, (uint8_t)s_ctx.config.i2c_addr, &reg, 1, value, 1);
 }
 
+// One burst from the FIFO data register: the register does not auto-increment, so `len`
+// bytes (a multiple of 6 here) are consecutive samples.
 static esp_err_t max30102_read_fifo(uint8_t* data, size_t len) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (s_ctx.config.i2c_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, MAX30102_REG_FIFO_DATA, true);
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (s_ctx.config.i2c_addr << 1) | I2C_MASTER_READ, true);
-    for (size_t i = 0; i < len - 1; i++) {
-        i2c_master_read_byte(cmd, &data[i], I2C_MASTER_ACK);
-    }
-    i2c_master_read_byte(cmd, &data[len - 1], I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(s_ctx.config.i2c_port, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
+    const uint8_t reg = MAX30102_REG_FIFO_DATA;
+    return synapse_i2c_write_read(s_ctx.config.i2c_port, (uint8_t)s_ctx.config.i2c_addr, &reg, 1, data, len);
 }
 
-esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
-    if (!config) return ESP_ERR_INVALID_ARG;
-
-    s_ctx.config = *config;
-    s_ctx.initialized = false;
-    s_ctx.fifo_enabled = false;
-
-    i2c_config_t i2c_conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = (s_ctx.config.sda_gpio_num >= 0) ? s_ctx.config.sda_gpio_num : SYNAPSE_I2C_SDA_GPIO_DEFAULT,
-        .scl_io_num = (s_ctx.config.scl_gpio_num >= 0) ? s_ctx.config.scl_gpio_num : SYNAPSE_I2C_SCL_GPIO_DEFAULT,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-    };
-    i2c_conf.master.clk_speed = 400000;
-    esp_err_t err = i2c_param_config(config->i2c_port, &i2c_conf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C param config failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = i2c_driver_install(config->i2c_port, i2c_conf.mode, 0, 0, 0);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "I2C driver install failed: %s", esp_err_to_name(err));
-        return err;
+// Everything after the bus is up. Split from init so that a failure at any step goes through
+// one place that gives the bus reference back.
+static esp_err_t ppg_configure(const ppg_max30102_config_t* config) {
+    // Codes are validated, not masked: an out-of-range code used to be cut to its low bits and
+    // configure a different sensor than the one asked for.
+    if (config->sample_rate > 0x07 || config->pulse_width > 0x03 || config->adc_range > 0x03) {
+        ESP_LOGE(TAG, "invalid PPG codes: sample_rate=%u (0-7) pulse_width=%u (0-3) adc_range=%u (0-3)",
+                 (unsigned)config->sample_rate, (unsigned)config->pulse_width, (unsigned)config->adc_range);
+        return ESP_ERR_INVALID_ARG;
     }
 
     uint8_t part_id;
@@ -159,6 +117,34 @@ esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
             .intr_type = GPIO_INTR_NEGEDGE
         };
         gpio_config(&io_conf);
+    }
+    return ESP_OK;
+}
+
+esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config) {
+    if (!config) return ESP_ERR_INVALID_ARG;
+
+    if (s_ctx.bus_held) {  // re-init without a deinit: do not leak the previous reference
+        synapse_i2c_release(s_ctx.config.i2c_port);
+        s_ctx.bus_held = false;
+    }
+    s_ctx.config = *config;
+    s_ctx.initialized = false;
+    s_ctx.fifo_enabled = false;
+
+    esp_err_t err = synapse_i2c_acquire(config->i2c_port, config->sda_gpio_num, config->scl_gpio_num,
+                                        config->i2c_freq_hz);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus unavailable: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_ctx.bus_held = true;
+
+    err = ppg_configure(config);
+    if (err != ESP_OK) {
+        synapse_i2c_release(config->i2c_port);  // a sensor that did not come up must not keep the bus alive
+        s_ctx.bus_held = false;
+        return err;
     }
 
     s_ctx.initialized = true;
@@ -266,7 +252,12 @@ esp_err_t ppg_max30102_get_sqi(ppg_sqi_result_t* result) {
 esp_err_t ppg_max30102_deinit(void* user_ctx) {
     (void)user_ctx;
     ppg_max30102_disable_fifo(NULL);
-    i2c_driver_delete(s_ctx.config.i2c_port);
+    // Only this driver's reference goes: the bus stays up for the IMU, TMP117 and INA219 that
+    // still use it (this driver used to delete the whole bus here and took them down with it).
+    if (s_ctx.bus_held) {
+        synapse_i2c_release(s_ctx.config.i2c_port);
+        s_ctx.bus_held = false;
+    }
     s_ctx.initialized = false;
     ESP_LOGI(TAG, "MAX30102 PPG deinitialized");
     return ESP_OK;
