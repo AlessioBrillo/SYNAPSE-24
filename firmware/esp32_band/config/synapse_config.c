@@ -102,7 +102,13 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Shared I2C bus validation
+    // Shared I2C bus validation: one bus, one port. Sensors on different ports would be two
+    // controllers on the same SDA/SCL pins.
+    if (cfg->ppg_i2c_port != cfg->imu_i2c_port || cfg->ppg_i2c_port != cfg->temp_i2c_port) {
+        ESP_LOGE(TAG, "PPG, IMU and TEMP must share one I2C port (ppg=%d imu=%d temp=%d)",
+                 cfg->ppg_i2c_port, cfg->imu_i2c_port, cfg->temp_i2c_port);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (!synapse_cfg_i2c_bus_ok(cfg->i2c_sda_gpio, cfg->i2c_scl_gpio, cfg->i2c_freq_hz)) {
         ESP_LOGE(TAG, "Invalid I2C bus: SDA=%d SCL=%d %lu Hz (two different usable pins, 10 kHz - 1 MHz)",
                  cfg->i2c_sda_gpio, cfg->i2c_scl_gpio, (unsigned long)cfg->i2c_freq_hz);
@@ -337,7 +343,10 @@ esp_err_t synapse_config_load(void) {
     // menuconfig let through that the hardware cannot take must be visible at boot, not found as a
     // sensor that quietly does not start.
     if (validate_config(&g_config) != ESP_OK) {
-        ESP_LOGE(TAG, "The active configuration is invalid (reason above): the sensors it concerns will not start");
+        // Only reported here: the values are still handed on. The PPG and IMU drivers refuse codes and
+        // ranges the part cannot take, and the I2C driver refuses a pin that is not a pin; for the
+        // rest the error is this line, not a silent failure later.
+        ESP_LOGE(TAG, "The active configuration is invalid (reason above): fix it in menuconfig");
     }
 
     g_config_loaded = true;

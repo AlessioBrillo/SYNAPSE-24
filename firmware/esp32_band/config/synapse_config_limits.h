@@ -7,7 +7,11 @@
  * function answers "can the part do this?", never "is this a good idea?".
  *
  * GPIO rule (ESP32-S3-DevKitC-1 N8R8, the board of the kit): GPIO 22-25 do not exist, 26-32 are the
- * SPI flash and 33-37 the octal PSRAM. A pin there does not fail loudly, it just never works.
+ * SPI flash and 33-37 the octal PSRAM, 19/20 are the USB D-/D+ and 43/44 the UART0 console. A pin
+ * there does not fail loudly, it just never works. NOT covered: the strapping pins (0, 3, 45, 46:
+ * usable, but a sensor that pulls one at reset can change the boot mode) and a pin chosen twice by
+ * different functions (e.g. the ADC pins of the ECG on GPIO1 and of the battery on GPIO4): this
+ * checks one value at a time.
  */
 #ifndef SYNAPSE_CONFIG_LIMITS_H
 #define SYNAPSE_CONFIG_LIMITS_H
@@ -20,6 +24,9 @@ static inline bool synapse_cfg_gpio_ok(int pin, bool optional)
 {
     if (pin == -1) {
         return optional;
+    }
+    if (pin == 19 || pin == 20 || pin == 43 || pin == 44) {
+        return false; /* USB D-/D+ and the UART0 console */
     }
     return (pin >= 0 && pin <= 21) || (pin >= 38 && pin <= 48);
 }

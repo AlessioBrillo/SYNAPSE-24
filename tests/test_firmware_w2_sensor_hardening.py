@@ -168,6 +168,31 @@ def test_the_two_ports_are_independent(bus: ctypes.CDLL) -> None:
     assert bus.h_write(1, 0x40, b"\x05\x00\x00", 3) == 0, "port 1 is untouched by port 0 leaving"
 
 
+def test_two_ports_on_the_same_pins_are_refused(bus: ctypes.CDLL) -> None:
+    """A sensor whose port setting differs from the others' would put a second controller on SDA/SCL."""
+    assert bus.h_acquire(0, 8, 9, 400000) == 0
+    assert bus.h_acquire(1, 8, 9, 400000) == ESP_ERR_INVALID_STATE, "same pins"
+    assert bus.h_acquire(1, 9, 10, 400000) == ESP_ERR_INVALID_STATE, "SCL of port 0 used as SDA"
+    assert bus.h_buses_created() == 1
+    assert bus.h_acquire(1, 10, 11, 400000) == 0, "other pins are another bus"
+    bus.h_release(0)
+    bus.h_release(1)
+    assert bus.h_acquire(1, 8, 9, 400000) == 0, "and the pins are free again when port 0 is gone"
+
+
+def test_a_transfer_holds_the_lock_so_release_cannot_free_its_handle() -> None:
+    code = _text(COMMON / "sensors" / "synapse_i2c.c")
+    for func, transfer in (
+        ("synapse_i2c_write(", "i2c_master_transmit("),
+        ("synapse_i2c_write_read(", "i2c_master_transmit_receive("),
+    ):
+        body = code[code.index(f"esp_err_t {func}") :]
+        body = body[: body.index("\n}\n")]
+        assert body.index("xSemaphoreTake") < body.index(transfer) < body.index("xSemaphoreGive"), (
+            func
+        )
+
+
 def test_a_port_that_does_not_exist_is_an_argument_error(bus: ctypes.CDLL) -> None:
     assert bus.h_acquire(2, 8, 9, 400000) == ESP_ERR_INVALID_ARG
     assert bus.h_acquire(-1, 8, 9, 400000) == ESP_ERR_INVALID_ARG
@@ -199,6 +224,8 @@ def limits(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
 def test_gpio_rule_is_the_n8r8_module(limits: ctypes.CDLL) -> None:
     for pin in (0, 1, 15, 21, 38, 48):
         assert limits.host_gpio_ok(pin, 0) == 1, pin
+    for pin in (19, 20, 43, 44):
+        assert limits.host_gpio_ok(pin, 1) == 0, f"GPIO {pin} is the USB or the console"
     for pin in (22, 23, 24, 25, 26, 32, 33, 37, 49, -2, 100):
         assert limits.host_gpio_ok(pin, 1) == 0, f"GPIO {pin} does not work on the N8R8"
     assert limits.host_gpio_ok(-1, 1) == 1, "-1 is 'not wired' for an optional pin"
@@ -427,6 +454,10 @@ def test_the_settings_nobody_used_are_gone() -> None:
     ):
         text = re.sub(r"(//[^\n]*|#[^\n]*)", "", _text(path))  # comments may say why they went
         assert not gone.search(text), f"{path.name} still carries a setting that does nothing"
+
+
+def test_the_sensors_cannot_be_split_over_two_i2c_ports() -> None:
+    assert "must share one I2C port" in _text(BAND / "config" / "synapse_config.c")
 
 
 def test_the_stored_configuration_layout_changed_so_its_version_did() -> None:

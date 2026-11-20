@@ -36,8 +36,8 @@ static bus_t s_bus[SYNAPSE_I2C_PORTS];
 
 /* The table is touched from the sensor tasks and from the power init: one lock. It is created
  * lazily because there is no earlier single-threaded place to do it; the creation itself is the
- * only part that needs the spinlock (it never blocks). The transaction runs outside the lock,
- * the driver serialises the bus on its own. */
+ * only part that needs the spinlock (it never blocks). The lock is held across a transfer too (see
+ * device_get_locked). */
 static StaticSemaphore_t s_lock_storage;
 static SemaphoreHandle_t s_lock;
 static portMUX_TYPE s_create_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -55,6 +55,18 @@ static SemaphoreHandle_t lock_get(void)
 static bool port_ok(int port)
 {
     return port >= 0 && port < SYNAPSE_I2C_PORTS;
+}
+
+/* Caller holds the lock. */
+static bool pins_used_by_another_port(int port, int sda, int scl)
+{
+    for (int p = 0; p < SYNAPSE_I2C_PORTS; p++) {
+        if (p != port && s_bus[p].refs > 0 &&
+            (s_bus[p].sda == sda || s_bus[p].scl == scl || s_bus[p].sda == scl || s_bus[p].scl == sda)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 esp_err_t synapse_i2c_acquire(int port, int sda_gpio, int scl_gpio, uint32_t freq_hz)
@@ -79,6 +91,12 @@ esp_err_t synapse_i2c_acquire(int port, int sda_gpio, int scl_gpio, uint32_t fre
         } else {
             b->refs++;
         }
+    } else if (pins_used_by_another_port(port, sda_gpio, scl_gpio)) {
+        /* Two controllers on the same SDA/SCL: the second bus would fight the first for the pins.
+         * Happens when a sensor's port setting differs from the others'. */
+        ESP_LOGE(TAG, "port %d: SDA=%d/SCL=%d are already wired to another I2C port; all sensors on the "
+                      "shared bus must use the same port", port, sda_gpio, scl_gpio);
+        err = ESP_ERR_INVALID_STATE;
     } else {
         i2c_master_bus_config_t cfg = {
             .i2c_port = port,
@@ -123,14 +141,15 @@ void synapse_i2c_release(int port)
     xSemaphoreGive(lock);
 }
 
-/* Device handle for `addr` on `port`, created on first use. */
-static esp_err_t device_get(int port, uint8_t addr, i2c_master_dev_handle_t *out)
+/* Device handle for `addr` on `port`, created on first use. The caller holds the lock, and keeps
+ * it for the whole transfer: release() frees the handles under the same lock, so a transfer in
+ * flight can never run on a handle that has just been freed. The driver serialises the bus anyway,
+ * so holding the lock costs no throughput (a transfer is bounded by SYNAPSE_I2C_TIMEOUT_MS). */
+static esp_err_t device_get_locked(int port, uint8_t addr, i2c_master_dev_handle_t *out)
 {
     if (!port_ok(port)) {
         return ESP_ERR_INVALID_ARG;
     }
-    SemaphoreHandle_t lock = lock_get();
-    xSemaphoreTake(lock, portMAX_DELAY);
     bus_t *b = &s_bus[port];
     esp_err_t err = ESP_ERR_INVALID_STATE;  /* nobody acquired the bus */
     if (b->refs > 0) {
@@ -162,33 +181,38 @@ static esp_err_t device_get(int port, uint8_t addr, i2c_master_dev_handle_t *out
             }
         }
     }
-    xSemaphoreGive(lock);
     return err;
 }
 
 esp_err_t synapse_i2c_write(int port, uint8_t addr, const uint8_t *data, size_t len)
 {
-    if (data == NULL || len == 0) {
+    if (data == NULL || len == 0 || !port_ok(port)) {
         return ESP_ERR_INVALID_ARG;
     }
+    SemaphoreHandle_t lock = lock_get();
+    xSemaphoreTake(lock, portMAX_DELAY);
     i2c_master_dev_handle_t h = NULL;
-    esp_err_t err = device_get(port, addr, &h);
-    if (err != ESP_OK) {
-        return err;
+    esp_err_t err = device_get_locked(port, addr, &h);
+    if (err == ESP_OK) {
+        err = i2c_master_transmit(h, data, len, SYNAPSE_I2C_TIMEOUT_MS);
     }
-    return i2c_master_transmit(h, data, len, SYNAPSE_I2C_TIMEOUT_MS);
+    xSemaphoreGive(lock);
+    return err;
 }
 
 esp_err_t synapse_i2c_write_read(int port, uint8_t addr, const uint8_t *write, size_t write_len,
                                  uint8_t *read, size_t read_len)
 {
-    if (write == NULL || write_len == 0 || read == NULL || read_len == 0) {
+    if (write == NULL || write_len == 0 || read == NULL || read_len == 0 || !port_ok(port)) {
         return ESP_ERR_INVALID_ARG;
     }
+    SemaphoreHandle_t lock = lock_get();
+    xSemaphoreTake(lock, portMAX_DELAY);
     i2c_master_dev_handle_t h = NULL;
-    esp_err_t err = device_get(port, addr, &h);
-    if (err != ESP_OK) {
-        return err;
+    esp_err_t err = device_get_locked(port, addr, &h);
+    if (err == ESP_OK) {
+        err = i2c_master_transmit_receive(h, write, write_len, read, read_len, SYNAPSE_I2C_TIMEOUT_MS);
     }
-    return i2c_master_transmit_receive(h, write, write_len, read, read_len, SYNAPSE_I2C_TIMEOUT_MS);
+    xSemaphoreGive(lock);
+    return err;
 }

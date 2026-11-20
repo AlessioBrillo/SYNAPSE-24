@@ -138,8 +138,12 @@ esp_err_t ecg_ad8232_read(sensor_sample_t* sample, void* user_ctx) {
     const bool was_stuck = s_ctx.signal_stuck;
     s_ctx.signal_stuck = ecg_stuck_update(&s_ctx.stuck, raw);
     if (s_ctx.signal_stuck && !was_stuck) {
-        ESP_LOGW(TAG, "ECG input stuck (raw code %d for ~%u s): check the AD8232 power and the wire to GPIO ADC1 CH%d",
-                 raw, (unsigned)(ECG_STUCK_MIN_SAMPLES / 500u), s_ctx.config.adc_channel);
+        // With the electrodes off the AD8232 can drive its output to a rail by itself: say which case.
+        ESP_LOGW(TAG, "ECG input stuck (raw code %d for ~%u s): %s", raw,
+                 (unsigned)(ECG_STUCK_MIN_SAMPLES / 500u),
+                 s_ctx.lead_off_detected
+                     ? "the electrodes are off (lead-off), apply them"
+                     : "lead-off is not asserted, so check the AD8232 power and the wire to the ADC pin");
     } else if (!s_ctx.signal_stuck && was_stuck) {
         ESP_LOGI(TAG, "ECG input is moving again");
     }
