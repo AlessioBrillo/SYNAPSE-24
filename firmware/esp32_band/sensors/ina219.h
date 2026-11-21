@@ -15,6 +15,7 @@
 #ifndef INA219_H
 #define INA219_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
@@ -77,6 +78,8 @@ typedef struct {
     SemaphoreHandle_t mutex;
     bool initialized;
     bool bus_held;           /**< holds a reference on the shared I2C bus (synapse_i2c) */
+    uint16_t cfg_programmed; /**< what init wrote to CONFIG, for the self-test read-back */
+    uint16_t cal_programmed; /**< what init wrote to CALIBRATION */
     bool healthy;
     uint32_t read_count;
     uint32_t error_count;
@@ -96,6 +99,12 @@ esp_err_t ina219_read_once(ina219_data_t *data);
 
 /** @brief True when the last read succeeded and the voltage is plausible. */
 bool ina219_is_healthy(void);
+
+/**
+ * CONFIG and CALIBRATION hold what init programmed, and the bus voltage is plausible. ESP_OK =
+ * pass, ESP_FAIL = a check failed, other = bus error; `detail` says what was read.
+ */
+esp_err_t ina219_self_test(char *detail, size_t detail_len);
 
 /** @brief Driver statistics (reads / errors). */
 esp_err_t ina219_get_stats(uint32_t *reads, uint32_t *errors);

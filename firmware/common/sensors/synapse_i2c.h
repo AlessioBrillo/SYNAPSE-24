@@ -39,6 +39,13 @@ esp_err_t synapse_i2c_acquire(int port, int sda_gpio, int scl_gpio, uint32_t fre
 /** Drop a reference taken by acquire(); the bus is removed when the last one goes. Safe without acquire(). */
 void synapse_i2c_release(int port);
 
+/**
+ * Does a device acknowledge 7-bit `addr`? ESP_OK = yes, ESP_ERR_NOT_FOUND = nobody answers there,
+ * anything else = the bus itself failed (not acquired, timeout). Used by the I2C scan; it
+ * transfers no data, so it cannot disturb a sensor.
+ */
+esp_err_t synapse_i2c_probe(int port, uint8_t addr);
+
 /** Write `len` bytes (register address first) to the device at 7-bit `addr`. */
 esp_err_t synapse_i2c_write(int port, uint8_t addr, const uint8_t *data, size_t len);
 

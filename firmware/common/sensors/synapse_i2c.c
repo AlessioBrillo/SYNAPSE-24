@@ -20,6 +20,7 @@ static const char *TAG = "synapse_i2c";
 
 #define SYNAPSE_I2C_MAX_DEVICES 8   /* PPG, IMU, magnetometer, TMP117, INA219 and room for the next */
 #define SYNAPSE_I2C_TIMEOUT_MS  100
+#define SYNAPSE_I2C_PROBE_TIMEOUT_MS 50   /* an empty address is a NACK after one byte time; this is the stuck-bus bound */
 
 typedef struct {
     i2c_master_bus_handle_t bus;
@@ -181,6 +182,22 @@ static esp_err_t device_get_locked(int port, uint8_t addr, i2c_master_dev_handle
             }
         }
     }
+    return err;
+}
+
+esp_err_t synapse_i2c_probe(int port, uint8_t addr)
+{
+    if (!port_ok(port)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    SemaphoreHandle_t lock = lock_get();
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bus_t *b = &s_bus[port];
+    esp_err_t err = ESP_ERR_INVALID_STATE;  /* nobody acquired the bus */
+    if (b->refs > 0) {
+        err = i2c_master_probe(b->bus, addr, SYNAPSE_I2C_PROBE_TIMEOUT_MS);
+    }
+    xSemaphoreGive(lock);
     return err;
 }
 

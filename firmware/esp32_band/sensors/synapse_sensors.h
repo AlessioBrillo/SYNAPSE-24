@@ -129,6 +129,10 @@ uint8_t synapse_sensors_health_mask(void);
  *  initialise or the pin is not wired (gpio_lead_off < 0). */
 bool synapse_sensors_ecg_lead_off(void);
 
+/** True while the ECG input has been on a rail or constant for ~2 s (a dead front end, which the
+ *  lead-off pin cannot tell). Reported only; not on the wire until contract 2.4. */
+bool synapse_sensors_ecg_signal_stuck(void);
+
 /** Reads that failed (not counting "no new sample yet"), summed over the sensors. */
 uint32_t synapse_sensors_read_errors(void);
 

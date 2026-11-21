@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
@@ -28,7 +29,14 @@ typedef struct {
 esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config);
 esp_err_t imu_icm20948_read(sensor_sample_t* sample, void* user_ctx);
 esp_err_t imu_icm20948_deinit(void* user_ctx);
-esp_err_t imu_icm20948_self_test(void* user_ctx);
+/**
+ * Static sanity check of a band lying still on the bench (the factory station): WHO_AM_I 0xEA,
+ * |accel| ~ 1 g with the gyro near zero, and a magnetometer that reads an Earth-sized field.
+ * ESP_OK = pass, ESP_FAIL = a check failed, other = bus error; `detail` says what was measured.
+ * This is NOT the datasheet self-test (the ST_CTRL registers against the factory trim values):
+ * that procedure is not implemented, and the always-OK stub that stood here is gone.
+ */
+esp_err_t imu_icm20948_self_test(char* detail, size_t detail_len);
 
 #ifdef __cplusplus
 }

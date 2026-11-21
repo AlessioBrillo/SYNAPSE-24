@@ -10,7 +10,9 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include <stdio.h>
 #include "synapse_i2c.h"
+#include "synapse_selftest.h"
 #include "temp_tmp117.h"
 
 static const char *TAG = "TEMP_TMP117";
@@ -230,6 +232,36 @@ esp_err_t temp_tmp117_get_latest(temp_data_t *data) {
         return data->valid ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
     return ESP_ERR_TIMEOUT;
+}
+
+esp_err_t temp_tmp117_self_test(char *detail, size_t len) {
+    if (!g_temp.initialized) {
+        snprintf(detail, len, "not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint16_t id = 0;
+    esp_err_t e = i2c_read_reg(TMP117_REG_DEVICE_ID, &id);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "DEVICE_ID: %s", esp_err_to_name(e));
+        return e;
+    }
+    if (id != TMP117_DEVICE_ID) {
+        snprintf(detail, len, "DEVICE_ID 0x%04X, expected 0x%04X", id, TMP117_DEVICE_ID);
+        return ESP_FAIL;
+    }
+    uint16_t raw = 0;
+    e = i2c_read_reg(TMP117_REG_TEMP_RESULT, &raw);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "TEMP_RESULT: %s", esp_err_to_name(e));
+        return e;
+    }
+    const float c = raw_to_celsius((int16_t)raw);
+    if (!st_temp_plausible_c(c)) {
+        snprintf(detail, len, "temperature %.2f C is not plausible", (double)c);
+        return ESP_FAIL;
+    }
+    snprintf(detail, len, "id 0x%04X, %.2f C", id, (double)c);
+    return ESP_OK;
 }
 
 bool temp_tmp117_is_healthy(void) {

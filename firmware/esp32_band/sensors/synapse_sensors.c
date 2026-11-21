@@ -22,6 +22,8 @@
 #include "gps_max_m10s.h"
 #include "temp_tmp117.h"
 #include "synapse_adc1.h"
+#include "synapse_diag.h"
+#include "synapse_i2c.h"
 
 #if defined(CONFIG_SYNAPSE_FEATURE_GPS) || defined(CONFIG_SYNAPSE_FEATURE_TEMPERATURE)
 #define SYNAPSE_HAS_AUX_SENSORS 1
@@ -105,6 +107,30 @@ static void log_if_failed(esp_err_t err, const char *what) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "%s failed: %s (continuing)", what, esp_err_to_name(err));
     }
+}
+
+// Log who answers on the I2C bus. The bus may have no owner left (every driver failed and let go),
+// so take a reference for the scan with the wiring the drivers use.
+static void log_bus_scan(const synapse_hw_config_t *c) {
+    if (synapse_i2c_acquire(c->ppg_i2c_port, c->i2c_sda_gpio, c->i2c_scl_gpio, c->i2c_freq_hz) != ESP_OK) {
+        ESP_LOGE(TAG, "cannot scan the I2C bus (it could not be set up)");
+        return;
+    }
+    uint8_t found[SYNAPSE_DIAG_MAX_FOUND];
+    const int n = synapse_diag_i2c_scan(c->ppg_i2c_port, found, SYNAPSE_DIAG_MAX_FOUND);
+    if (n < 0) {
+        ESP_LOGE(TAG, "I2C scan failed: %s", esp_err_to_name(-n));
+    } else if (n == 0) {
+        ESP_LOGW(TAG, "I2C scan: nobody answers (SDA=%d SCL=%d): check the power, the wiring and the pull-ups",
+                 c->i2c_sda_gpio, c->i2c_scl_gpio);
+    } else {
+        const int listed = n < SYNAPSE_DIAG_MAX_FOUND ? n : SYNAPSE_DIAG_MAX_FOUND;
+        for (int i = 0; i < listed; i++) {
+            const char *name = synapse_diag_i2c_name(found[i]);
+            ESP_LOGW(TAG, "I2C scan: 0x%02X answers (%s)", found[i], name ? name : "unknown device");
+        }
+    }
+    synapse_i2c_release(c->ppg_i2c_port);
 }
 
 // Scheduler-compatible wrappers (exact signature match, no casts)
@@ -203,6 +229,10 @@ uint8_t synapse_sensors_health_mask(void) {
 bool synapse_sensors_ecg_lead_off(void) {
     // Only meaningful while the ECG initialised; otherwise nothing is measured and nothing is flagged.
     return (s_sensor_health & (1u << SENSOR_TYPE_ECG)) && ecg_ad8232_is_lead_off(NULL);
+}
+
+bool synapse_sensors_ecg_signal_stuck(void) {
+    return (s_sensor_health & (1u << SENSOR_TYPE_ECG)) && ecg_ad8232_is_signal_stuck(NULL);
 }
 
 uint32_t synapse_sensors_ppg_skipped(void) {
@@ -326,6 +356,12 @@ esp_err_t synapse_sensors_init(void) {
     // Initialize Temperature: fail soft like ECG/PPG/IMU, and say so in sensor_health.
     note_temp_init(temp_tmp117_init(&g_sensors.temp_config));
 #endif
+
+    // A PPG or IMU that did not come up: show who does answer on the bus, so a wiring fault is
+    // told from a wrong address or a missing part without a debugger. (The ECG is on the ADC.)
+    if (!(s_sensor_health & (1u << SENSOR_TYPE_PPG)) || !(s_sensor_health & (1u << SENSOR_TYPE_IMU))) {
+        log_bus_scan(&hw_cfg);
+    }
 
     // Initialize latest data
 #ifdef CONFIG_SYNAPSE_FEATURE_GPS

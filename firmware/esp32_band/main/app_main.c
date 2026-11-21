@@ -39,6 +39,7 @@
 #endif
 #include "synapse_acquisition.h"
 #include "synapse_sensors.h"
+#include "synapse_factory.h"
 #include "synapse_edge_ai.h"
 #include "synapse_signal_quality.h"
 #include "synapse_config.h"
@@ -275,6 +276,13 @@ void app_main(void)
     //      here (Architecture.md §23-31 decoupled pod/hub).
     synapse_power_set_telemetry_sink(synapse_research_service_submit_power);
     synapse_power_set_battery_sink(synapse_ble_gatt_battery_changed);
+
+    // 12b'. Factory test (CONFIG_SYNAPSE_FACTORY_MODE, off in every shipped profile): bus scan,
+    //       self-tests and 10 s of acquisition, one PASS/FAIL on the console. Runs before the
+    //       main loop, so it is the only consumer of the sample queue while it lasts.
+#if defined(CONFIG_SYNAPSE_FACTORY_MODE)
+    (void)synapse_factory_run();
+#endif
 
     // 12c. Wired sync (GPIO 10; 27 is a flash pin on the N8R8) as HUB output: the forearm hub is the tier
     //      reference for a second pod. The driver ships now so the two-pod

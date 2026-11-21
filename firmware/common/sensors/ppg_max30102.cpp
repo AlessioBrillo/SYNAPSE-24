@@ -1,6 +1,8 @@
 #include "ppg_max30102.h"
 #include "ppg_fifo_batch.h"
+#include "synapse_selftest.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,6 +30,9 @@ static const char* TAG = "ppg_max30102";
 #define MAX30102_REG_LED2_PA        0x0D
 #define MAX30102_REG_LED3_PA        0x0E
 #define MAX30102_REG_PILOT_PA       0x0F
+#define MAX30102_REG_TEMP_INT       0x1F
+#define MAX30102_REG_TEMP_FRAC      0x20
+#define MAX30102_REG_TEMP_CONFIG    0x21   // bit 0 = TEMP_EN: one conversion, ~29 ms
 #define MAX30102_REG_PART_ID        0xFF
 
 #define MAX30102_MODE_HR_ONLY       0x02
@@ -260,6 +265,62 @@ esp_err_t ppg_max30102_deinit(void* user_ctx) {
     }
     s_ctx.initialized = false;
     ESP_LOGI(TAG, "MAX30102 PPG deinitialized");
+    return ESP_OK;
+}
+
+// One failed step of the self-test: the esp_err_t is the verdict, the text is for the report.
+static esp_err_t st_bus_fail(char* detail, size_t len, const char* what, esp_err_t e) {
+    snprintf(detail, len, "%s: %s", what, esp_err_to_name(e));
+    return e;
+}
+
+esp_err_t ppg_max30102_self_test(char* detail, size_t len) {
+    if (!s_ctx.initialized) {
+        snprintf(detail, len, "not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t e;
+
+    uint8_t id = 0;
+    if ((e = max30102_read_reg(MAX30102_REG_PART_ID, &id)) != ESP_OK) return st_bus_fail(detail, len, "PART_ID", e);
+    if (id != 0x15) {
+        snprintf(detail, len, "PART_ID 0x%02X, expected 0x15", id);
+        return ESP_FAIL;
+    }
+
+    // Die temperature: proves the analogue side answers, not only the register file.
+    if ((e = max30102_write_reg(MAX30102_REG_TEMP_CONFIG, 0x01)) != ESP_OK) return st_bus_fail(detail, len, "TEMP_EN", e);
+    vTaskDelay(pdMS_TO_TICKS(40));
+    uint8_t t_int = 0, t_frac = 0;
+    if ((e = max30102_read_reg(MAX30102_REG_TEMP_INT, &t_int)) != ESP_OK) return st_bus_fail(detail, len, "DIE_TEMP_INT", e);
+    if ((e = max30102_read_reg(MAX30102_REG_TEMP_FRAC, &t_frac)) != ESP_OK) return st_bus_fail(detail, len, "DIE_TEMP_FRAC", e);
+    const float die_c = st_max30102_temp_c((int8_t)t_int, t_frac);
+    if (!st_temp_plausible_c(die_c)) {
+        snprintf(detail, len, "die temperature %.1f C is not plausible", (double)die_c);
+        return ESP_FAIL;
+    }
+
+    // The LED drive that init programmed is still there (a brown-out or a reset would have cleared it).
+    uint8_t red = 0, ir = 0;
+    if ((e = max30102_read_reg(MAX30102_REG_LED1_PA, &red)) != ESP_OK) return st_bus_fail(detail, len, "LED1_PA", e);
+    if ((e = max30102_read_reg(MAX30102_REG_LED2_PA, &ir)) != ESP_OK) return st_bus_fail(detail, len, "LED2_PA", e);
+    if (red != s_ctx.config.led_current_red || ir != s_ctx.config.led_current_ir) {
+        snprintf(detail, len, "LED current red/IR reads %02X/%02X, programmed %02X/%02X", red, ir,
+                 s_ctx.config.led_current_red, s_ctx.config.led_current_ir);
+        return ESP_FAIL;
+    }
+
+    // It is sampling: the FIFO write pointer moves (5 samples at 50 Hz in 100 ms).
+    uint8_t wr0 = 0, wr1 = 0;
+    if ((e = max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr0)) != ESP_OK) return st_bus_fail(detail, len, "FIFO_WR_PTR", e);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    if ((e = max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr1)) != ESP_OK) return st_bus_fail(detail, len, "FIFO_WR_PTR", e);
+    if (!st_fifo_advanced(wr0, wr1)) {
+        snprintf(detail, len, "FIFO write pointer stuck at %u: the part is not sampling", (unsigned)wr0);
+        return ESP_FAIL;
+    }
+
+    snprintf(detail, len, "id 0x15, die %.1f C, LED %02X/%02X, FIFO running", (double)die_c, red, ir);
     return ESP_OK;
 }
 

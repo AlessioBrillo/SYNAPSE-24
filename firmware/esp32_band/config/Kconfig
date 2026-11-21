@@ -81,6 +81,17 @@ config SYNAPSE_RR_ENABLE
         reading with a good signal quality and little motion; otherwise it stays 'not
         available'. The standard Heart Rate characteristic keeps carrying no RR.
 
+config SYNAPSE_FACTORY_MODE
+    bool "Run the factory self-test at every boot"
+    default n
+    help
+        After the sensors start, run the factory test once (about 13 s): every sensor of this
+        build initialised, an I2C scan finds each part at its address, each part passes its
+        self-test, and every stream delivers its rate over 10 s. The report is on the console,
+        one line per check and a last "FACTORY RESULT: PASS" or "FAIL". Keep the band still on
+        the bench while it runs. Leave this off in a product image: it delays the start of the
+        normal work and, while it runs, nothing consumes the sample queue.
+
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"
     default n
@@ -355,7 +366,8 @@ config SYNAPSE_INA219_I2C_PORT
     default 0
     range 0 1
     help
-        I2C port for the INA219 power monitor (shared with PPG/IMU).
+        I2C port for the INA219 power monitor. It sits on the one bus of the PPG, IMU and TMP117,
+        so it must equal SYNAPSE_PPG_I2C_PORT (a different value stops the build).
 
 config SYNAPSE_INA219_I2C_ADDR
     hex "INA219 I2C Address"

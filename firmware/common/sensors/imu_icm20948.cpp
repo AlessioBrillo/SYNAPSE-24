@@ -1,6 +1,8 @@
 #include "imu_icm20948.h"
 #include "imu_odr.h"
+#include "synapse_selftest.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -277,9 +279,71 @@ esp_err_t imu_icm20948_deinit(void* user_ctx) {
     return ESP_OK;
 }
 
-esp_err_t imu_icm20948_self_test(void* user_ctx) {
-    (void)user_ctx;
-    if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
-    ESP_LOGI(TAG, "IMU self-test not implemented");
+esp_err_t imu_icm20948_self_test(char* detail, size_t len) {
+    if (!s_ctx.initialized) {
+        snprintf(detail, len, "not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t who = 0;
+    esp_err_t e = i2c_read_reg(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_WHO_AM_I, &who);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "WHO_AM_I: %s", esp_err_to_name(e));
+        return e;
+    }
+    if (who != 0xEA) {
+        snprintf(detail, len, "WHO_AM_I 0x%02X, expected 0xEA", who);
+        return ESP_FAIL;
+    }
+
+    // The same registers and scales as the stream, but read into LOCAL variables: the sensor task polls
+    // this driver while the factory test runs, and the stream's own read path updates the shared
+    // magnetometer cache and consumes the AK09916 data-ready flag, which a second reader would race on.
+    // Only the scales (set once in init) are read from the context.
+    uint8_t d[12];
+    e = i2c_read_multi(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_ACCEL_XOUT_H, d, 12);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "accel/gyro read: %s", esp_err_to_name(e));
+        return e;
+    }
+    const float ax = (int16_t)((d[0] << 8) | d[1]) * s_ctx.accel_scale;
+    const float ay = (int16_t)((d[2] << 8) | d[3]) * s_ctx.accel_scale;
+    const float az = (int16_t)((d[4] << 8) | d[5]) * s_ctx.accel_scale;
+    const float rad = (float)(M_PI / 180.0);
+    const float gx = (int16_t)((d[6] << 8) | d[7]) * s_ctx.gyro_scale * rad;
+    const float gy = (int16_t)((d[8] << 8) | d[9]) * s_ctx.gyro_scale * rad;
+    const float gz = (int16_t)((d[10] << 8) | d[11]) * s_ctx.gyro_scale * rad;
+
+    // The magnetometer runs at 100 Hz and the sensor task takes some of its samples: try a few times
+    // for one that is ready (ST1 bit 0) and not overflowed (ST2 bit 3).
+    float mx = 0.0f, my = 0.0f, mz = 0.0f;
+    bool mag_seen = false;
+    for (int attempt = 0; attempt < 10 && !mag_seen; attempt++) {
+        uint8_t m[9];
+        if (i2c_read_multi(s_ctx.config.i2c_port, ICM20948_AK09916_ADDR, AK09916_REG_ST1, m, 9) == ESP_OK &&
+            (m[0] & 0x01) && !(m[8] & 0x08)) {
+            mx = (int16_t)((m[2] << 8) | m[1]) * s_ctx.mag_scale;
+            my = (int16_t)((m[4] << 8) | m[3]) * s_ctx.mag_scale;
+            mz = (int16_t)((m[6] << 8) | m[5]) * s_ctx.mag_scale;
+            mag_seen = true;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+    }
+    if (!st_imu_rest_ok(ax, ay, az, gx, gy, gz)) {
+        snprintf(detail, len, "not at rest or scaled wrong: a=(%.2f %.2f %.2f) g, w=(%.2f %.2f %.2f) rad/s",
+                 (double)ax, (double)ay, (double)az, (double)gx, (double)gy, (double)gz);
+        return ESP_FAIL;
+    }
+    if (!mag_seen) {
+        snprintf(detail, len, "no magnetometer sample in 50 ms: AK09916 missing or not running");
+        return ESP_FAIL;
+    }
+    if (!st_mag_ok(mx, my, mz)) {
+        snprintf(detail, len, "magnetometer reads (%.0f %.0f %.0f) uT: not an Earth-sized field",
+                 (double)mx, (double)my, (double)mz);
+        return ESP_FAIL;
+    }
+    snprintf(detail, len, "id 0xEA, |a|=%.2f g at rest, mag %.0f uT",
+             (double)sqrtf(ax * ax + ay * ay + az * az), (double)sqrtf(mx * mx + my * my + mz * mz));
     return ESP_OK;
 }
