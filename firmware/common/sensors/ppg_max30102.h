@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
@@ -30,6 +31,15 @@ typedef struct {
 esp_err_t ppg_max30102_init(const ppg_max30102_config_t* config);
 esp_err_t ppg_max30102_read(sensor_sample_t* sample, void* user_ctx);
 esp_err_t ppg_max30102_deinit(void* user_ctx);
+/**
+ * Does this look like a working MAX30102 that is sampling? Checks, in order: PART_ID 0x15, the die
+ * temperature is plausible (a conversion is triggered), the LED current registers hold what init
+ * wrote, and the FIFO write pointer moves over 100 ms. ESP_OK = pass, ESP_FAIL = a check failed,
+ * other = bus error; `detail` always says what was measured (see synapse_selftest.h).
+ * Call after init; blocks about 150 ms.
+ */
+esp_err_t ppg_max30102_self_test(char* detail, size_t detail_len);
+
 esp_err_t ppg_max30102_enable_fifo(void* user_ctx);
 esp_err_t ppg_max30102_disable_fifo(void* user_ctx);
 

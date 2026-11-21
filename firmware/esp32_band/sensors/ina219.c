@@ -14,8 +14,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include "ina219.h"
 #include "synapse_i2c.h"
+#include "synapse_selftest.h"
 
 static const char *TAG = "INA219";
 
@@ -69,6 +71,7 @@ static esp_err_t ina_calibrate(void)
         ESP_LOGW(TAG, "calibration %lu out of range; clamp to 0xFFFF", (unsigned long)cal);
         cal = 0xFFFFu;
     }
+    g_ina.cal_programmed = (uint16_t)cal;
     return ina_write_reg(INA219_REG_CALIBRATION, (uint16_t)cal);
 }
 
@@ -110,6 +113,7 @@ esp_err_t ina219_init(const ina219_config_t *config)
     uint16_t cfg = (uint16_t)(INA219_CFG_BUS_RANGE_32V | INA219_CFG_PGA_DIV8 |
                               INA219_CFG_ADC_12BIT_1S | INA219_CFG_SADC_12BIT_8S |
                               INA219_CFG_MODE_CONT_ALL);
+    g_ina.cfg_programmed = cfg;
     ret = ina_write_reg(INA219_REG_CONFIG, cfg);
     if (ret == ESP_OK) {
         ret = ina_calibrate();
@@ -196,6 +200,39 @@ esp_err_t ina219_read_once(ina219_data_t *data)
 
     xSemaphoreGive(g_ina.mutex);
     return ret;
+}
+
+esp_err_t ina219_self_test(char *detail, size_t len)
+{
+    if (!g_ina.initialized) {
+        snprintf(detail, len, "not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint16_t cfg = 0, cal = 0, bus = 0;
+    esp_err_t e = ina_read_reg(INA219_REG_CONFIG, &cfg);
+    if (e == ESP_OK) e = ina_read_reg(INA219_REG_CALIBRATION, &cal);
+    if (e == ESP_OK) e = ina_read_reg(INA219_REG_BUS_V, &bus);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "register read: %s", esp_err_to_name(e));
+        return e;
+    }
+    // The registers hold what init wrote (a reset or a brown-out would have put the defaults back).
+    // CONFIG bit 15 is the reset command and bit 14 is unused; CALIBRATION bit 0 always reads 0.
+    if ((cfg & 0x3FFFu) != (g_ina.cfg_programmed & 0x3FFFu)) {
+        snprintf(detail, len, "CONFIG reads 0x%04X, programmed 0x%04X", cfg, g_ina.cfg_programmed);
+        return ESP_FAIL;
+    }
+    if ((cal & 0xFFFEu) != (g_ina.cal_programmed & 0xFFFEu)) {
+        snprintf(detail, len, "CALIBRATION reads 0x%04X, programmed 0x%04X", cal, g_ina.cal_programmed);
+        return ESP_FAIL;
+    }
+    const float volts = ((float)(bus >> 3) * 4.0f) / 1000.0f;
+    if (!st_bus_voltage_plausible(volts)) {
+        snprintf(detail, len, "bus voltage %.2f V is not plausible: INA219 not on the supply rail?", (double)volts);
+        return ESP_FAIL;
+    }
+    snprintf(detail, len, "CONFIG 0x%04X, CAL 0x%04X, bus %.2f V", cfg, cal, (double)volts);
+    return ESP_OK;
 }
 
 bool ina219_is_healthy(void)

@@ -1,6 +1,8 @@
 #include "imu_icm20948.h"
 #include "imu_odr.h"
+#include "synapse_selftest.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -277,9 +279,43 @@ esp_err_t imu_icm20948_deinit(void* user_ctx) {
     return ESP_OK;
 }
 
-esp_err_t imu_icm20948_self_test(void* user_ctx) {
-    (void)user_ctx;
-    if (!s_ctx.initialized) return ESP_ERR_INVALID_STATE;
-    ESP_LOGI(TAG, "IMU self-test not implemented");
+esp_err_t imu_icm20948_self_test(char* detail, size_t len) {
+    if (!s_ctx.initialized) {
+        snprintf(detail, len, "not initialised");
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t who = 0;
+    esp_err_t e = i2c_read_reg(s_ctx.config.i2c_port, s_ctx.config.i2c_addr, ICM20948_REG_WHO_AM_I, &who);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "WHO_AM_I: %s", esp_err_to_name(e));
+        return e;
+    }
+    if (who != 0xEA) {
+        snprintf(detail, len, "WHO_AM_I 0x%02X, expected 0xEA", who);
+        return ESP_FAIL;
+    }
+
+    // A real conversion through the same path the stream uses (scaled: g, rad/s, uT).
+    sensor_sample_t s = {};
+    e = imu_icm20948_read(&s, NULL);
+    if (e != ESP_OK) {
+        snprintf(detail, len, "read: %s", esp_err_to_name(e));
+        return e;
+    }
+    const float ax = s.data.imu.ax, ay = s.data.imu.ay, az = s.data.imu.az;
+    const float gx = s.data.imu.gx, gy = s.data.imu.gy, gz = s.data.imu.gz;
+    const float mx = s.data.imu.mx, my = s.data.imu.my, mz = s.data.imu.mz;
+    if (!st_imu_rest_ok(ax, ay, az, gx, gy, gz)) {
+        snprintf(detail, len, "not at rest or scaled wrong: a=(%.2f %.2f %.2f) g, w=(%.2f %.2f %.2f) rad/s",
+                 (double)ax, (double)ay, (double)az, (double)gx, (double)gy, (double)gz);
+        return ESP_FAIL;
+    }
+    if (!st_mag_ok(mx, my, mz)) {
+        snprintf(detail, len, "magnetometer reads (%.0f %.0f %.0f) uT: AK09916 missing or not running",
+                 (double)mx, (double)my, (double)mz);
+        return ESP_FAIL;
+    }
+    snprintf(detail, len, "id 0xEA, |a|=%.2f g at rest, mag %.0f uT",
+             (double)sqrtf(ax * ax + ay * ay + az * az), (double)sqrtf(mx * mx + my * my + mz * mz));
     return ESP_OK;
 }

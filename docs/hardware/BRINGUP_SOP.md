@@ -135,6 +135,50 @@ answering at 0x40; without it the rig still boots and reports the current
 figure as a tier-model estimate rather than a measurement — the SOP's power
 row then says so instead of inventing a number.
 
+### 1a. When a sensor does not come up, and the factory test
+
+If the PPG or the IMU fails to initialise, the boot log also lists who *does* answer on the I²C
+bus (`I2C scan: 0x57 answers (MAX30102)` …). That separates the causes that used to look alike:
+`nobody answers` is power, wiring or pull-ups; a part answering at another address is an address
+setting (`CONFIG_SYNAPSE_PPG_I2C_ADDR`, the ICM-20948 AD0 pin: 0x68 or 0x69); the right address
+answering with a failed init is the part itself.
+
+The **factory test** is the whole check of an assembled band in one run. Enable it in
+`idf.py menuconfig` (*Synapse Band Hardware Configuration → Run the factory self-test at every
+boot*, `CONFIG_SYNAPSE_FACTORY_MODE`, off by default and never on in a shipped image), flash, and
+leave the band **still on the bench with no electrodes on it** (USB is fine then; the safety rule
+at the top is about electrodes on a body). It takes about 13 s and prints (the values are illustrative: no band has run it yet):
+
+```
+I (xxx) FACTORY: bus 0: 0x0C AK09916
+I (xxx) FACTORY:       registers: 00=48 01=09 31=00
+I (xxx) FACTORY: bus 0: 0x40 INA219
+I (xxx) FACTORY: bus 0: 0x57 MAX30102
+I (xxx) FACTORY:       registers: 02=00 03=00 04=.. ... FE=.. FF=15
+I (xxx) FACTORY: bus 0: 0x68 ICM-20948
+I (xxx) FACTORY: [PASS] init_ppg: PPG initialised
+I (xxx) FACTORY: [PASS] i2c_ppg: 0x57 answers
+I (xxx) FACTORY: [PASS] selftest_ppg: id 0x15, die 27.5 C, LED 1F/1F, FIFO running
+I (xxx) FACTORY: [PASS] selftest_imu: id 0xEA, |a|=1.00 g at rest, mag 41 uT
+I (xxx) FACTORY: [PASS] stream_ppg: 500 samples in 10 s (50 Hz), mean IR 61234
+I (xxx) FACTORY: FACTORY RESULT: PASS (14 checks)
+```
+
+Every line is `[PASS]` or `[FAIL]` with the number that decided it, and the last line is the
+verdict. What a `[FAIL]` means: `init_*` the sensor did not initialise (read the lines above it);
+`i2c_*` nothing answers at that address; `selftest_*` the part answers but is not healthy (the
+detail says which check: identity, a die temperature out of range, LED registers that lost their
+value, a FIFO that does not move, a band that is not at rest, a magnetometer that reads zero, an
+INA219 that is not on the rail); `stream_*` a stream delivered less than 80 % of its rate in 10 s.
+
+What it does **not** prove: accuracy (that is §4a), the ECG signal (a station has no electrodes;
+the ECG stream is checked for delivery only, and `lead-off` / `stuck` are shown for information),
+or the IMU against the datasheet self-test (not implemented; the check is a static sanity test at
+rest). The registers printed are only those that are safe to read while the band runs: the
+MAX30102 FIFO and interrupt-status registers and the AK09916 ST2 register are never read by the
+dump, because reading them changes the part's state. The BLE report and a switch that needs no
+reflash come with the BLE configuration (contract 2.4).
+
 ## 2. Confirm the pod is discoverable
 
 Point `nRF Connect` (or the host client) at the research service
@@ -359,7 +403,8 @@ from the generated contract header
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups |
+| `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups. The boot log's `I2C scan` lines say whether anything answers and at which address (§1a) |
+| `[FAIL]` in the factory test | See §1a for what each line means | Fix the line named; the number in it is the measurement that failed |
 | `[band-core]` missing from the boot log | Wrong build variant | Rebuild with `--variant band-core` |
 | ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_lead_off: -1` |
 | ECG flat or stuck at a rail (about +1.3 / −1.5 mV) from the start | The band started with the electrodes off or still settling, so the resting level was measured from nothing | Apply the electrodes and restart the band; with LO+ wired, a long lead-off followed by steady contact re-measures it by itself |

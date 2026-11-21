@@ -62,6 +62,17 @@ esp_err_t i2c_master_bus_rm_device(i2c_master_dev_handle_t dev)
     return ESP_OK;
 }
 
+static uint8_t s_present[128]; /* which 7-bit addresses acknowledge a probe */
+static int s_probes;
+
+esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address, int timeout_ms)
+{
+    (void)bus;
+    (void)timeout_ms;
+    s_probes++;
+    return (address < 128 && s_present[address]) ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *w, size_t n, int timeout_ms)
 {
     (void)dev;
@@ -103,7 +114,14 @@ void h_reset(void)
     s_fail_next_bus = 0;
     s_dev_next = 0;
     s_last_write_len = 0;
+    memset(s_present, 0, sizeof(s_present));
+    s_probes = 0;
 }
+
+void h_set_present(int addr, int present) { s_present[addr & 0x7F] = present ? 1 : 0; }
+int h_probe(int port, int addr) { return synapse_i2c_probe(port, (uint8_t)addr); }
+int h_probes(void) { return s_probes; }
+int h_err_not_found(void) { return ESP_ERR_NOT_FOUND; }
 
 int h_acquire(int port, int sda, int scl, unsigned freq) { return synapse_i2c_acquire(port, sda, scl, freq); }
 void h_release(int port) { synapse_i2c_release(port); }

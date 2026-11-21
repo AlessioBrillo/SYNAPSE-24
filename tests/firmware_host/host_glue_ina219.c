@@ -39,6 +39,11 @@ void ina_host_set_register(uint8_t reg, uint16_t value)
     }
 }
 
+uint16_t ina_host_get_register(uint8_t reg)
+{
+    return reg < 16 ? s_regs[reg] : 0;
+}
+
 void ina_host_set_read_error(esp_err_t err)
 {
     s_next_read_error = err;
@@ -233,6 +238,14 @@ void ina_host_deinit(void)
 {
     ina219_deinit();
 }
+
+/* The driver's self-test; the verdict is the esp_err_t, the text goes into `detail`. */
+int ina_host_self_test(char *detail, int len)
+{
+    return (int)ina219_self_test(detail, (size_t)len);
+}
+
+int ina_host_esp_fail(void) { return ESP_FAIL; }
 
 int ina_host_err_invalid_state(void) { return ESP_ERR_INVALID_STATE; }
 int ina_host_err_timeout(void) { return ESP_ERR_TIMEOUT; }

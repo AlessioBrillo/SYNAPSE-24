@@ -81,6 +81,17 @@ config SYNAPSE_RR_ENABLE
         reading with a good signal quality and little motion; otherwise it stays 'not
         available'. The standard Heart Rate characteristic keeps carrying no RR.
 
+config SYNAPSE_FACTORY_MODE
+    bool "Run the factory self-test at every boot"
+    default n
+    help
+        After the sensors start, run the factory test once (about 13 s): every sensor of this
+        build initialised, an I2C scan finds each part at its address, each part passes its
+        self-test, and every stream delivers its rate over 10 s. The report is on the console,
+        one line per check and a last "FACTORY RESULT: PASS" or "FAIL". Keep the band still on
+        the bench while it runs. Leave this off in a product image: it delays the start of the
+        normal work and, while it runs, nothing consumes the sample queue.
+
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"
     default n

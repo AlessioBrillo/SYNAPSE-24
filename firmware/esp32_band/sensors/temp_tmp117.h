@@ -9,6 +9,7 @@
 #ifndef TEMP_TMP117_H
 #define TEMP_TMP117_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
@@ -84,6 +85,12 @@ esp_err_t temp_tmp117_init(const temp_tmp117_config_t *config);
  * @return ESP_OK on success
  */
 esp_err_t temp_tmp117_start(void);
+
+/**
+ * DEVICE_ID is 0x0117 and the temperature reads a plausible value. ESP_OK = pass, ESP_FAIL = a
+ * check failed, other = bus error; `detail` says what was measured (see synapse_selftest.h).
+ */
+esp_err_t temp_tmp117_self_test(char *detail, size_t detail_len);
 
 /**
  * @brief Stop temperature readings

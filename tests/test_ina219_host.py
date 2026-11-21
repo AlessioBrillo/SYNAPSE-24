@@ -183,6 +183,78 @@ class TestIna219BusOwnership:
         assert lib.ina_host_bus_refs() == 1
 
 
+class TestIna219SelfTest:
+    """The self-test reads back what init programmed and checks the rail voltage."""
+
+    ESP_FAIL = -1
+    ESP_ERR_INVALID_STATE = 0x103
+    ESP_ERR_TIMEOUT = 0x107
+    CONFIG, CAL, BUS_V = 0x00, 0x05, 0x02
+
+    @staticmethod
+    def _run(lib) -> tuple[int, str]:
+        buf = ctypes.create_string_buffer(96)
+        rc = lib.ina_host_self_test(buf, 96)
+        return rc, buf.value.decode()
+
+    def test_a_freshly_initialised_monitor_passes(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        rc, detail = self._run(lib)
+        assert rc == 0, detail
+        assert "bus 3.70 V" in detail
+
+    def test_a_config_register_that_lost_its_value_fails(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_register(self.CONFIG, 0x399F)  # the power-on default, not what init wrote
+        rc, detail = self._run(lib)
+        assert rc == self.ESP_FAIL
+        assert "CONFIG reads" in detail
+
+    def test_a_calibration_register_that_lost_its_value_fails(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_register(self.CAL, 0)
+        rc, detail = self._run(lib)
+        assert rc == self.ESP_FAIL
+        assert "CALIBRATION reads" in detail
+
+    def test_the_bits_that_do_not_hold_a_value_are_ignored(self, lib) -> None:
+        """CONFIG bit 15 is the reset command, bit 14 is unused, CALIBRATION bit 0 reads 0."""
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_get_register.restype = ctypes.c_uint16
+        lib.ina_host_set_register(self.CONFIG, lib.ina_host_get_register(self.CONFIG) ^ 0xC000)
+        lib.ina_host_set_register(self.CAL, lib.ina_host_get_register(self.CAL) ^ 0x0001)
+        rc, detail = self._run(lib)
+        assert rc == 0, detail
+
+    def test_a_rail_that_reads_zero_volts_fails(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_register(self.BUS_V, 0)
+        rc, detail = self._run(lib)
+        assert rc == self.ESP_FAIL
+        assert "bus voltage" in detail
+
+    def test_a_bus_error_is_the_verdict_not_a_pass(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_set_read_error(self.ESP_ERR_TIMEOUT)
+        rc, detail = self._run(lib)
+        assert rc == self.ESP_ERR_TIMEOUT
+        assert "register read" in detail
+
+    def test_an_uninitialised_monitor_is_not_tested(self, lib) -> None:
+        if lib is None:
+            pytest.skip("no C compiler available")
+        lib.ina_host_deinit()
+        rc, detail = self._run(lib)
+        assert rc == self.ESP_ERR_INVALID_STATE
+        assert detail == "not initialised"
+
+
 def _read_once(lib) -> int:
     """One driver read through the glue shim; 0 on success."""
     lib.ina_host_read_once.restype = ctypes.c_int

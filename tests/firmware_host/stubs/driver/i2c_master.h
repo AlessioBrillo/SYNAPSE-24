@@ -46,6 +46,7 @@ esp_err_t i2c_del_master_bus(i2c_master_bus_handle_t bus_handle);
 esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus_handle, const i2c_device_config_t *dev_config,
                                     i2c_master_dev_handle_t *ret_handle);
 esp_err_t i2c_master_bus_rm_device(i2c_master_dev_handle_t handle);
+esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus_handle, uint16_t address, int xfer_timeout_ms);
 esp_err_t i2c_master_transmit(i2c_master_dev_handle_t i2c_dev, const uint8_t *write_buffer, size_t write_size,
                               int xfer_timeout_ms);
 esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t i2c_dev, const uint8_t *write_buffer,
