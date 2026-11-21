@@ -11,8 +11,16 @@
  * are tested on the host against a fake bus (tests/firmware_host/host_glue_diag.c).
  *
  * The dump reads only registers that are safe to read while the band runs. Reading the MAX30102
- * FIFO data register pops a sample, its interrupt status registers clear on read, and the
- * AK09916 ST2 register releases the data protection: none of those are in the table.
+ * FIFO data register pops a sample, its interrupt status registers clear on read, the AK09916
+ * ST2 register releases the data protection, and the TMP117 configuration / result registers
+ * clear its Data_Ready flag: none of those are in the table.
+ *
+ * The table knows each part at its usual address (MAX30102 0x57, ICM-20948 0x68/0x69, AK09916
+ * 0x0C, TMP117 0x48, INA219 0x40). A part strapped to another address is listed by the scan but
+ * not dumped (it shows as "unknown device").
+ *
+ * Errors are negative counts: the negated esp_err_t, with ESP_FAIL (-1, which cannot be negated
+ * into a negative number) reported as ESP_ERR_INVALID_RESPONSE.
  */
 
 #include <stddef.h>

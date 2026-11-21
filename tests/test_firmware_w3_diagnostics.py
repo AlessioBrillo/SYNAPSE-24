@@ -300,8 +300,25 @@ def test_the_console_line_of_a_dump(diag: ctypes.CDLL) -> None:
     diag.h_set_reg(0x48, 0x10, 0x17)
     buf = ctypes.create_string_buffer(96)
     n = diag.h_dump_text(0x48, buf, 96)
-    assert buf.value == b"01=0000 0F=0117"
+    assert buf.value == b"0F=0117 02=0000 03=0000"
     assert n == len(buf.value)
+
+
+def test_the_temperature_sensor_dump_does_not_clear_its_data_ready_flag(diag: ctypes.CDLL) -> None:
+    """Reading CONFIGURATION (0x01) or the result (0x00) of a TMP117 clears Data_Ready."""
+    diag.h_set_present(0x48, 1)
+    _dump(diag, 0x48)
+    read = _regs_read(diag, 0x48)
+    assert not read & {0x00, 0x01}
+    assert read == {0x0F, 0x10, 0x02, 0x03, 0x04}
+
+
+def test_esp_fail_is_not_mistaken_for_a_device_count(diag: ctypes.CDLL) -> None:
+    """ESP_FAIL is -1: negated it would be +1, 'one device found' with an empty list."""
+    diag.h_set_bus_error(-1)
+    n, _ = _scan(diag)
+    assert n < 0
+    assert n == -0x108, "reported as ESP_ERR_INVALID_RESPONSE"
 
 
 def test_a_short_buffer_cuts_the_line_cleanly(diag: ctypes.CDLL) -> None:
@@ -382,6 +399,24 @@ def test_the_imu_self_test_is_no_longer_a_stub_that_always_passes() -> None:
     assert "st_imu_rest_ok(" in body
     assert "st_mag_ok(" in body
     assert body.count("return ESP_FAIL;") >= 3, "and it can fail"
+    # the sensor task polls the same driver: the test must not run the stream's read path, which
+    # updates the shared magnetometer cache and consumes the AK09916 data-ready flag
+    assert "imu_icm20948_read(" not in body
+    assert "s_ctx.mag_raw" not in body
+
+
+def test_the_factory_test_starts_its_window_on_an_empty_queue() -> None:
+    code = _text(BAND / "sensors" / "synapse_factory.c")
+    body = code[code.index("static void step_acquisition(") :]
+    drain = body.index("synapse_sensors_get_sample(&s) == ESP_OK")
+    window = body.index("const int64_t end_us")
+    assert drain < window, "the backlog is dropped before the 10 s are measured"
+
+
+def test_the_power_monitor_cannot_be_built_on_another_port_than_the_bus() -> None:
+    code = _text(BAND / "power" / "synapse_power.c")
+    assert "CONFIG_SYNAPSE_INA219_I2C_PORT != CONFIG_SYNAPSE_PPG_I2C_PORT" in code
+    assert "#error" in code
 
 
 def test_the_ppg_self_test_checks_identity_temperature_leds_and_fifo() -> None:

@@ -27,11 +27,19 @@ static const device_t k_devices[] = {
     {0x69, "ICM-20948 (AD0=1)", 1, 5, {0x00, 0x03, 0x06, 0x07, 0x0F}},
     /* AK09916 (the ICM's magnetometer, bypass mode): WIA1, WIA2, CNTL2. NOT ST2 (0x18). */
     {0x0C, "AK09916", 1, 3, {0x00, 0x01, 0x31}},
-    /* TMP117: CONFIGURATION, DEVICE_ID. 16-bit. */
-    {0x48, "TMP117", 2, 2, {0x01, 0x0F}},
+    /* TMP117: DEVICE_ID and the two limit registers. 16-bit. NOT CONFIGURATION (0x01) and NOT the
+     * temperature result (0x00): reading either clears the Data_Ready flag. */
+    {0x48, "TMP117", 2, 3, {0x0F, 0x02, 0x03}},
     /* INA219: CONFIGURATION, CALIBRATION. 16-bit. */
     {0x40, "INA219", 2, 2, {0x00, 0x05}},
 };
+
+/* A failure is reported as a NEGATIVE count. esp_err_t codes are positive except ESP_FAIL (-1), whose
+ * plain negation would be +1, i.e. "one device found": such a code is reported as INVALID_RESPONSE. */
+static int fail_code(esp_err_t err)
+{
+    return -(err > 0 ? (int)err : (int)ESP_ERR_INVALID_RESPONSE);
+}
 
 static const device_t *find_device(uint8_t addr)
 {
@@ -63,7 +71,7 @@ int synapse_diag_i2c_scan(int port, uint8_t *found, int max)
             }
             n++; /* keep counting past `max`: the caller learns the list was cut */
         } else if (err != ESP_ERR_NOT_FOUND) {
-            return -(int)err; /* the bus failed: this is not "nobody answered" */
+            return fail_code(err); /* the bus failed: this is not "nobody answered" */
         }
     }
     return n;
@@ -86,7 +94,7 @@ int synapse_diag_dump_device(int port, uint8_t addr, synapse_diag_reg_t *out, in
         if (r->err == ESP_OK) {
             r->value = (d->width == 2) ? (uint16_t)((buf[0] << 8) | buf[1]) : buf[0];
         } else if (n == 1) {
-            return -(int)r->err; /* the very first read failed: the part is not answering */
+            return fail_code(r->err); /* the very first read failed: the part is not answering */
         }
     }
     return n;

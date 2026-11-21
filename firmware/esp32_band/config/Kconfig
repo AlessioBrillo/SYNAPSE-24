@@ -366,7 +366,8 @@ config SYNAPSE_INA219_I2C_PORT
     default 0
     range 0 1
     help
-        I2C port for the INA219 power monitor (shared with PPG/IMU).
+        I2C port for the INA219 power monitor. It sits on the one bus of the PPG, IMU and TMP117,
+        so it must equal SYNAPSE_PPG_I2C_PORT (a different value stops the build).
 
 config SYNAPSE_INA219_I2C_ADDR
     hex "INA219 I2C Address"

@@ -22,6 +22,13 @@
 #include "ina219.h"
 #endif
 
+// One I2C bus, one port: the INA219 sits on the bus of the PPG, IMU and TMP117 (synapse_i2c refuses a
+// second controller on the same SDA/SCL, and synapse_config checks the runtime ports of the others).
+// This one is a Kconfig value outside the runtime configuration, so it is checked at build time.
+#if defined(CONFIG_SYNAPSE_FEATURE_POWER_MONITOR) && (CONFIG_SYNAPSE_INA219_I2C_PORT != CONFIG_SYNAPSE_PPG_I2C_PORT)
+#error "CONFIG_SYNAPSE_INA219_I2C_PORT must equal CONFIG_SYNAPSE_PPG_I2C_PORT: all sensors share one I2C bus"
+#endif
+
 static const char *TAG = "SYNAPSE_POWER";
 
 static synapse_power_status_t g_status = {0};

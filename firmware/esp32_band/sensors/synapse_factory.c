@@ -46,6 +46,8 @@ static bool in_list(const uint8_t *list, int n, uint8_t addr)
     return false;
 }
 
+/* All the sensors share one bus on one port: synapse_config requires the PPG, IMU and TMP117 ports to be
+ * equal and the build requires the INA219's to match, so scanning cfg->ppg_i2c_port covers every part. */
 static void step_bus(st_report_t *r, const synapse_hw_config_t *cfg)
 {
     uint8_t found[SYNAPSE_DIAG_MAX_FOUND];
@@ -139,8 +141,13 @@ static void step_acquisition(st_report_t *r, const synapse_hw_config_t *cfg)
 {
     uint32_t n_ecg = 0, n_ppg = 0, n_imu = 0;
     double ppg_ir_sum = 0.0;
-    const int64_t end_us = esp_timer_get_time() + (int64_t)FACTORY_ACQ_SECONDS * 1000000;
     synapse_sensor_sample_t s;
+    /* The sensors have been producing since synapse_sensors_start(), before the power, BLE and
+     * acquisition init: what is queued was not produced in the window below. Drop it, or a backlog
+     * could top a slow stream up to the 80 % threshold. (Bounded: the producers keep adding.) */
+    for (int i = 0; i < 20000 && synapse_sensors_get_sample(&s) == ESP_OK; i++) {
+    }
+    const int64_t end_us = esp_timer_get_time() + (int64_t)FACTORY_ACQ_SECONDS * 1000000;
     while (esp_timer_get_time() < end_us) {
         if (synapse_sensors_get_sample(&s) != ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
