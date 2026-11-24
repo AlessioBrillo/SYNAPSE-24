@@ -57,7 +57,8 @@
     }
   ],
   "flag_bits": {
-    "ts_epoch_wrapped": 0
+    "ts_epoch_wrapped": 0,
+    "power_is_model": 1
   },
   "dropped_max": 255,
   "stream_ids": {

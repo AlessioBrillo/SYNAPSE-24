@@ -156,7 +156,12 @@ esp_err_t synapse_power_init(void) {
     uint16_t mv = battery_mv_unchecked();
     g_status.voltage_v = mv / 1000.0f;
     g_status.battery_level_pct = voltage_to_percentage(g_status.voltage_v);
-    g_status.estimated_remaining_h = g_status.battery_remaining_mah / (hw_cfg.t0_avg_mw / 3.7f);
+    {
+        const float t0_mw = hw_cfg.power_profile ? hw_cfg.t0_kit_avg_mw : hw_cfg.t0_avg_mw;
+        if (t0_mw > 0.0f) {
+            g_status.estimated_remaining_h = g_status.battery_remaining_mah / (t0_mw / 3.7f);
+        }
+    }
     
     g_last_tick_us = 0;
     g_last_notified_pct = 0xFF;
@@ -231,7 +236,10 @@ void synapse_power_tick(void) {
     synapse_hw_config_t hw_cfg;
     synapse_config_get(&hw_cfg);
     
-    float current_mw = hw_cfg.t0_avg_mw;  // Default Tier 0
+    // Default Tier 0. A kit build must never present the 5 mW system target as
+    // its own consumption: that number belongs to the compressed, duty-cycled
+    // product (Architecture.md §55-62, gate G3), not to this rig.
+    float current_mw = hw_cfg.power_profile ? hw_cfg.t0_kit_avg_mw : hw_cfg.t0_avg_mw;
     // In a full implementation, would get current tier from acquisition FSM
     
     if (!current_measured) {
@@ -268,8 +276,10 @@ void synapse_power_tick(void) {
     float available_mah = g_status.battery_remaining_mah - hw_cfg.reserve_mah;
     if (available_mah < 0) available_mah = 0;
     
-    g_status.can_afford_tier1 = (available_mah >= (hw_cfg.t1_avg_mw / 3.7f) * 1.0f);  // 1h Tier 1
-    g_status.can_afford_tier2 = (available_mah >= (hw_cfg.t2_avg_mw / 3.7f) * 0.5f);  // 30min Tier 2
+    const float t1_mw = hw_cfg.power_profile ? hw_cfg.t1_kit_avg_mw : hw_cfg.t1_avg_mw;
+    const float t2_mw = hw_cfg.power_profile ? hw_cfg.t2_kit_avg_mw : hw_cfg.t2_avg_mw;
+    g_status.can_afford_tier1 = (available_mah >= (t1_mw / 3.7f) * 1.0f);  // 1h Tier 1
+    g_status.can_afford_tier2 = (available_mah >= (t2_mw / 3.7f) * 0.5f);  // 30min Tier 2
 }
 
 esp_err_t synapse_power_get_status(synapse_power_status_t *status) {
@@ -305,6 +315,10 @@ bool synapse_power_has_measured_current(void) {
 #else
     return false;
 #endif
+}
+
+bool synapse_power_is_model(void) {
+    return !synapse_power_has_measured_current();
 }
 
 bool synapse_power_can_afford_tier1(float duration_h) {

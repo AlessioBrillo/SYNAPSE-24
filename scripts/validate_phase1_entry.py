@@ -67,6 +67,11 @@ try:
 except ImportError:
     pylsl = None
 
+# Device Information Service, serial number (2A25). Read after connect so the
+# XDF and the gate report name the unit that actually produced the samples.
+DIS_SERIAL_UUID = "00002a25-0000-1000-8000-00805f9b34fb"
+ROOT = Path(__file__).resolve().parents[1]
+
 # Sync-exchange failures that are EXPECTED noise (malformed reply, radio
 # hiccup). Everything else inside an exchange must surface: a blanket except
 # could hide a firmware regression for a whole multi-hour session.
@@ -184,7 +189,7 @@ class LSLStreamManager:
         """Samples pushed per stream."""
         return dict(self._sample_counts)
 
-    def create_outlets(self, stream_configs: list[dict]) -> None:
+    def create_outlets(self, stream_configs: list[dict], serial_hint: str = "") -> None:
         if pylsl is None:
             raise RuntimeError("pylsl not available")
 
@@ -194,13 +199,20 @@ class LSLStreamManager:
         self._sample_counts.clear()
 
         for cfg in stream_configs:
+            # A fixed `_001` source id would make two bands' recordings
+            # indistinguishable in XDF. When the expected serial is known,
+            # bind the LSL identity to it at outlet creation (source_id is
+            # immutable once the outlet exists).
+            source_id = cfg["source_id"]
+            if serial_hint and source_id.endswith("_001"):
+                source_id = f"{source_id[:-4]}_{serial_hint}"
             info = pylsl.StreamInfo(
                 name=cfg["name"],
                 type=cfg["type"],
                 channel_count=cfg["channel_count"],
                 nominal_srate=cfg["sampling_rate"],
                 channel_format=cfg["channel_format"],
-                source_id=cfg["source_id"],
+                source_id=source_id,
             )
             info.desc().append_child_value("tier", str(cfg.get("tier", 0)))
 
@@ -267,6 +279,7 @@ class Phase1Validator:
         self.controller: AcquisitionController | None = None
         self.client: Any = None
         self.device: BLEDevice | None = None
+        self.device_serial: str | None = None
         self.running = False
         self.start_time = 0.0
         self.sample_counts = {"ecg": 0, "ppg": 0, "imu": 0, "eeg": 0}
@@ -346,7 +359,8 @@ class Phase1Validator:
 
     def _create_lsl_outlets(self) -> None:
         streams = self.config["bringup"]["lsl"]["streams"]
-        self.lsl_manager.create_outlets(streams)
+        serial_hint = str(self.config["bringup"]["ble"].get("serial") or "").strip()
+        self.lsl_manager.create_outlets(streams, serial_hint=serial_hint)
         self.logger.info(f"Created {len(streams)} LSL outlets")
 
     def _setup_clock_sync(self) -> None:
@@ -1052,6 +1066,30 @@ class Phase1Validator:
             )
         )
 
+        # Gate: the G1 power row must rest on a measurement. A tier model on
+        # the POWER stream is a target (5 mW system, 425 mW kit envelope), not
+        # evidence for the 24 h claim, so it fails here instead of being
+        # averaged into a plausible-looking current.
+        model_frames = (
+            int(self.raw_ingestor.decoder.power_model_frames)
+            if self.raw_ingestor is not None
+            else 0
+        )
+        gates.append(
+            ValidationGateResult(
+                name="power_telemetry_measured",
+                passed=model_frames == 0,
+                value=model_frames,
+                threshold=0,
+                details=(
+                    f"{model_frames} POWER frame(s) flagged as tier-model: the "
+                    "24 h claim cannot rest on a model"
+                    if model_frames
+                    else "POWER frames carry measured INA219 current (or no POWER stream)"
+                ),
+            )
+        )
+
         return gates
 
     def _dry_run_report(
@@ -1123,6 +1161,7 @@ class Phase1Validator:
         self.client = BleakClient(self.device, timeout=bringup_cfg["ble"]["connect_timeout_s"])
         await self.client.connect()
         self.logger.info("Connected!")
+        await self._read_device_serial()
 
         # Step 4: Subscribe to sensor notifications
         await self._subscribe_characteristics()
@@ -1276,6 +1315,10 @@ class Phase1Validator:
         return {
             "run_id": report.run_id,
             "timestamp": report.timestamp,
+            "device_serial": self.device_serial
+            or str(self.config["bringup"]["ble"].get("serial") or "").strip()
+            or None,
+            "calibration_source": self._calibration_source(),
             "duration_s": duration,
             # v2 truth rows (Q3/Q5): who wrote the artifact the report reads
             # from, what the MTU actually negotiated to, and every drop broken
@@ -1343,6 +1386,15 @@ class Phase1Validator:
                     "source": "POWER stream (INA219), decoded from this recording"
                     if power_stats
                     else "POWER stream absent from this recording",
+                },
+                "power_source": {
+                    "value": (
+                        "model_kit"
+                        if power_stats and power_stats.get("model_frames")
+                        else "measured"
+                    ),
+                    "model_frames": int(power_stats.get("model_frames", 0)),
+                    "source": "POWER frame flag bit1 (power_is_model)",
                 },
                 # 3: BLE throughput of the raw research service.
                 "ble_throughput_bytes_per_s": {
@@ -1422,6 +1474,16 @@ class Phase1Validator:
             arr = arr.reshape(-1, 1)
         return arr if channel is None else arr[:, channel]
 
+    def _calibration_source(self) -> str | None:
+        """The per-unit calibration file used for this session, if any."""
+        serial = (
+            self.device_serial or str(self.config["bringup"]["ble"].get("serial") or "").strip()
+        )
+        if not serial:
+            return None
+        path = ROOT / "data" / "calibration" / f"{serial}.json"
+        return str(path.relative_to(ROOT)) if path.is_file() else None
+
     def _power_stream_stats(self) -> dict[str, Any]:
         """Aggregate the decoded INA219 POWER stream of this recording.
 
@@ -1448,6 +1510,7 @@ class Phase1Validator:
                 "max": float(np.max(column)),
             }
         stats["n_samples"] = int(block.shape[0])
+        stats["model_frames"] = int(self.raw_ingestor.decoder.power_model_frames)
         return stats
 
     @staticmethod
@@ -1685,10 +1748,15 @@ class Phase1Validator:
             return False
 
     async def _discover_device(self) -> BLEDevice | None:
+        """Bind to ONE band.
+
+        Taking the first 'SYNAPSE' name is a data bug: two pods on the bench
+        would produce an XDF attributed to the wrong unit.
+        """
         ble_cfg = self.config["bringup"]["ble"]
         address = ble_cfg["address"]
 
-        if address != "auto":
+        if address not in ("", "auto"):
             self.logger.info(f"Connecting to known address: {address}")
             return await BleakScanner.find_device_by_address(
                 address, timeout=ble_cfg["scan_timeout_s"]
@@ -1696,13 +1764,57 @@ class Phase1Validator:
 
         self.logger.info("Scanning for SYNAPSE device...")
         devices = await BleakScanner.discover(timeout=ble_cfg["scan_timeout_s"])
-        for d in devices:
-            if d.name and "SYNAPSE" in d.name.upper():
-                self.logger.info(f"Found SYNAPSE device: {d.name} ({d.address})")
-                return d
+        candidates = [d for d in devices if d.name and "SYNAPSE" in d.name.upper()]
+        for d in candidates:
+            self.logger.info(f"Candidate SYNAPSE device: {d.name} ({d.address})")
 
-        self.logger.warning("No SYNAPSE device found in scan")
-        return None
+        expected = str(ble_cfg.get("serial") or "").strip()
+        if expected and candidates:
+            matched: list[BLEDevice] = []
+            for d in candidates:
+                try:
+                    async with BleakClient(d, timeout=ble_cfg["connect_timeout_s"]) as client:
+                        raw = await client.read_gatt_char(DIS_SERIAL_UUID)
+                        serial = bytes(raw).decode("ascii", errors="replace").strip("\x00 ")
+                    self.logger.info(f"  {d.address}: serial {serial}")
+                    if serial == expected:
+                        matched.append(d)
+                        self.device_serial = serial
+                except BleakError as exc:
+                    self.logger.warning(f"  {d.address}: cannot read serial: {exc}")
+            candidates = matched
+
+        if not candidates:
+            self.logger.warning("No SYNAPSE device found in scan (or no serial match)")
+            return None
+        if len(candidates) > 1:
+            details = ", ".join(f"{d.name} ({d.address})" for d in candidates)
+            self.logger.error(
+                f"Ambiguous BLE scan: {len(candidates)} SYNAPSE devices: {details}. "
+                "Set bringup.ble.serial or SYNAPSE_FOREARM_BLE."
+            )
+            return None
+        chosen = candidates[0]
+        self.logger.info(f"Bound to {chosen.name} ({chosen.address})")
+        return chosen
+
+    async def _read_device_serial(self) -> None:
+        """Read DIS 2A25 after connect; the record travels into the XDF metadata."""
+        if self.client is None or self.transport is not None:
+            return
+        serial = ""
+        try:
+            raw = await self.client.read_gatt_char(DIS_SERIAL_UUID)
+            serial = bytes(raw).decode("ascii", errors="replace").strip("\x00 ")
+        except Exception as exc:  # noqa: BLE001 - a missing DIS must not kill the session
+            self.logger.warning(f"DIS serial number unavailable: {exc}")
+        if not serial:
+            return
+        expected = str(self.config["bringup"]["ble"].get("serial") or "").strip()
+        if expected and serial != expected:
+            raise RuntimeError(f"connected to serial {serial}, expected {expected}")
+        self.device_serial = serial
+        self.logger.info(f"Device serial: {serial}")
 
     def _feed_downstream_from_raw(self, timestamp: float) -> None:
         """Feed clock sync and the acquisition controller from raw frames.

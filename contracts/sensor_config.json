@@ -1,0 +1,248 @@
+{
+  "pods": [
+    {
+      "ble_address": "${SYNAPSE_FOREARM_BLE}",
+      "board_type": "ESP32_BAND",
+      "build_variant": "band-core",
+      "channels": {
+        "ecg": 1,
+        "imu": 9,
+        "ppg": 2
+      },
+      "electrode_type": "AgAgCl_snap",
+      "is_hub": true,
+      "metadata": {
+        "battery_config": {
+          "adc_channel": 3,
+          "adc_gpio": 4,
+          "voltage_divider": 2.0
+        },
+        "ecg_config": {
+          "adc_channel": 0,
+          "adc_gpio": 1,
+          "format": "s16",
+          "gain": 1100.0,
+          "gain_measured": null,
+          "gpio_lead_off": 15,
+          "lead_off_minus": null,
+          "lead_off_plus": 15,
+          "lsl_stream": "SYNAPSE_ECG_T0",
+          "midrail_source": "auto"
+        },
+        "gps_config": {
+          "baudrate": 115200,
+          "rx_gpio": 18,
+          "tx_gpio": 17,
+          "uart_port": 1,
+          "use_ubx": true
+        },
+        "i2c": {
+          "port": 0,
+          "scl_gpio": 9,
+          "sda_gpio": 8
+        },
+        "imu_config": {
+          "accel_dlpf_reg": 32,
+          "accel_poll_hz": 50,
+          "accel_range_g": 8,
+          "accel_sensor_odr_hz": 102,
+          "format": "s16",
+          "gpio_int": 6,
+          "gyro_dlpf_reg": 40,
+          "gyro_poll_hz": 50,
+          "gyro_range_dps": 500,
+          "gyro_sensor_odr_hz": 100,
+          "i2c_addr": 104,
+          "lsl_streams": {
+            "accel": "SYNAPSE_ACC_T0",
+            "gyro": "SYNAPSE_GYRO_T0",
+            "mag": "SYNAPSE_MAG_T0"
+          },
+          "sensor_oversample": 2
+        },
+        "ina219_config": {
+          "i2c_addr": 64,
+          "max_current_ma": 2000,
+          "shunt_mohm": 100
+        },
+        "ppg_config": {
+          "adc_range_reg": 3,
+          "effective_rate_hz": 50,
+          "fifo_average": 1,
+          "format": "s32",
+          "gpio_int": 5,
+          "i2c_addr": 87,
+          "led_current_ir": 31,
+          "led_current_red": 31,
+          "lsl_stream": "SYNAPSE_PPG_T0",
+          "pulse_width_reg": 3,
+          "sample_rate_reg": 0
+        },
+        "research_characteristics": {
+          "acc": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C73",
+          "ecg": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C71",
+          "gyro": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C74",
+          "mag": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C75",
+          "power": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C79",
+          "ppg": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C72",
+          "sync": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C78"
+        },
+        "research_service_uuid": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C70",
+        "sensors": {
+          "ecg": "AD8232",
+          "imu": "ICM-20948",
+          "ppg": "MAX30102"
+        },
+        "sync_config": {
+          "wired_gpio": 10
+        },
+        "temp_config": {
+          "conversion_cycle_ms": 1000,
+          "gpio_alert": 7,
+          "i2c_addr": 72
+        }
+      },
+      "modalities": [
+        "ecg",
+        "ppg",
+        "imu"
+      ],
+      "name": "Forearm Hub (Tier 0 Continuous)",
+      "placement": "forearm",
+      "pod_id": "forearm_hub",
+      "sampling_rate": {
+        "ecg": 500,
+        "imu": 50,
+        "ppg": 50
+      },
+      "serial_port": "${SYNAPSE_FOREARM_SERIAL}",
+      "status": "active",
+      "tier": 0
+    },
+    {
+      "ble_address": "${SYNAPSE_HEAD_BLE}",
+      "blocked_on": "head_hardware_decision",
+      "board_type": "CERELOG_ESP_EEG",
+      "channels": {
+        "ecg_rest": 1,
+        "eeg": 8,
+        "fnirs": 8
+      },
+      "electrode_type": "dry_gold_pin",
+      "is_hub": false,
+      "metadata": {
+        "eeg_config": {
+          "montage": "10-20_subset",
+          "n_channels": 8,
+          "reference": "linked_ears"
+        },
+        "fnirs_config": {
+          "short_channels": 2,
+          "source_detector_pairs": 8,
+          "wavelengths": [
+            760,
+            850
+          ]
+        },
+        "sensors": {
+          "ecg": "ADS1299_shared",
+          "eeg": "ADS1299",
+          "fnirs": "MAX86141"
+        }
+      },
+      "modalities": [
+        "eeg",
+        "fnirs",
+        "ecg_rest"
+      ],
+      "name": "Head Pod (Tier 1 High-Density Rest/Sleep)",
+      "placement": "fronto-temporal",
+      "pod_id": "head_pod",
+      "sampling_rate": {
+        "ecg_rest": 500,
+        "eeg": 500,
+        "fnirs": 10
+      },
+      "serial_port": "${SYNAPSE_HEAD_SERIAL}",
+      "status": "planned",
+      "tier": 1
+    },
+    {
+      "ble_address": "${SYNAPSE_EAR_BLE}",
+      "blocked_on": "in_ear_hardware_spec",
+      "board_type": "EAR_EEG_EARBUD",
+      "channels": {
+        "eeg_ear": 2
+      },
+      "electrode_type": "dry_silver",
+      "is_hub": false,
+      "metadata": {
+        "eeg_config": {
+          "montage": "bipolar_ear",
+          "n_channels": 2,
+          "reference": "ipsilateral_ear"
+        },
+        "sensors": {
+          "eeg": "custom_earbud_afe"
+        }
+      },
+      "modalities": [
+        "eeg_ear"
+      ],
+      "name": "In-Ear Satellite (Tier 0 Continuous EEG)",
+      "placement": "in_ear_bilateral",
+      "pod_id": "in_ear_satellite",
+      "sampling_rate": {
+        "eeg_ear": 250
+      },
+      "serial_port": "",
+      "status": "planned",
+      "tier": 0
+    }
+  ],
+  "power_budget": {
+    "hub_battery_mah": 3000,
+    "kit_tier_profiles": {
+      "T0": {
+        "avg_mw": 425.0,
+        "max_duration_h": null,
+        "peak_mw": 600.0,
+        "source": "model_kit"
+      },
+      "T1": {
+        "avg_mw": 425.0,
+        "max_duration_h": 10.0,
+        "peak_mw": 600.0,
+        "source": "model_kit_until_measured"
+      },
+      "T2": {
+        "avg_mw": 425.0,
+        "max_duration_h": 0.5,
+        "peak_mw": 600.0,
+        "source": "model_kit_until_measured"
+      }
+    },
+    "profile": "system",
+    "reserve_mah": 300,
+    "target_lifetime_h": 24,
+    "tier_profiles": {
+      "T0": {
+        "avg_mw": 5.0,
+        "max_duration_h": null,
+        "peak_mw": 10.0,
+        "source": "target_system_G3"
+      },
+      "T1": {
+        "avg_mw": 50.0,
+        "max_duration_h": 10.0,
+        "peak_mw": 100.0
+      },
+      "T2": {
+        "avg_mw": 100.0,
+        "max_duration_h": 0.5,
+        "peak_mw": 200.0
+      }
+    }
+  },
+  "schema_version": 2
+}

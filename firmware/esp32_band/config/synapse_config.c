@@ -18,6 +18,14 @@
 
 static const char *TAG = "SYNAPSE_CONFIG";
 
+// The Kconfig choice is compile-time: band-core selects the conservative kit
+// envelope, band-full the system target. Keep one integer in the config blob.
+#if defined(CONFIG_SYNAPSE_POWER_PROFILE_KIT)
+#define SYNAPSE_POWER_PROFILE_KIT 1
+#else
+#define SYNAPSE_POWER_PROFILE_KIT 0
+#endif
+
 static synapse_hw_config_t g_config = {0};
 static bool g_config_loaded = false;
 static bool g_config_dirty = false;
@@ -79,6 +87,10 @@ static const synapse_hw_config_t g_default_config = {
     .t0_avg_mw = (float)CONFIG_SYNAPSE_T0_AVG_MW,
     .t1_avg_mw = (float)CONFIG_SYNAPSE_T1_AVG_MW,
     .t2_avg_mw = (float)CONFIG_SYNAPSE_T2_AVG_MW,
+    .power_profile = SYNAPSE_POWER_PROFILE_KIT,
+    .t0_kit_avg_mw = (float)CONFIG_SYNAPSE_T0_KIT_AVG_MW,
+    .t1_kit_avg_mw = (float)CONFIG_SYNAPSE_T1_KIT_AVG_MW,
+    .t2_kit_avg_mw = (float)CONFIG_SYNAPSE_T2_KIT_AVG_MW,
 
     // Motion Gate
     .sqi_min = (float)CONFIG_SYNAPSE_SQI_MIN / 1000.0f,
@@ -209,6 +221,12 @@ static esp_err_t validate_config(const synapse_hw_config_t *cfg) {
     if (cfg->t0_avg_mw < 0 || cfg->t1_avg_mw < 0 || cfg->t2_avg_mw < 0) {
         ESP_LOGE(TAG, "Invalid tier power: t0=%.1f t1=%.1f t2=%.1f",
                  cfg->t0_avg_mw, cfg->t1_avg_mw, cfg->t2_avg_mw);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cfg->power_profile < 0 || cfg->power_profile > 1 ||
+        cfg->t0_kit_avg_mw < 0 || cfg->t1_kit_avg_mw < 0 || cfg->t2_kit_avg_mw < 0) {
+        ESP_LOGE(TAG, "Invalid kit power profile: profile=%d kit=%.1f/%.1f/%.1f",
+                 cfg->power_profile, cfg->t0_kit_avg_mw, cfg->t1_kit_avg_mw, cfg->t2_kit_avg_mw);
         return ESP_ERR_INVALID_ARG;
     }
 

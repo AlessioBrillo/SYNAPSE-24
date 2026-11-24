@@ -25,7 +25,8 @@ extern "C" {
 
 // 2: ecg_vref_mv and ppg_led_current_green removed (neither was ever used), the shared I2C bus
 // (pins, clock) added. A blob stored by version 1 has another size and is dropped for the defaults.
-#define SYNAPSE_CONFIG_VERSION 2
+// 3: the power budget now carries two profiles (system target and conservative kit envelope).
+#define SYNAPSE_CONFIG_VERSION 3
 
 // Firmware/Hardware version strings (from Kconfig.projbuild)
 #define SYNAPSE_FW_VERSION CONFIG_SYNAPSE_FIRMWARE_VERSION
@@ -104,9 +105,13 @@ typedef struct {
     float hub_battery_mah;        // Battery capacity in mAh
     float target_lifetime_h;      // Target lifetime in hours
     float reserve_mah;            // Reserve capacity in mAh
-    float t0_avg_mw;              // Tier 0 average power (mW)
-    float t1_avg_mw;              // Tier 1 average power (mW)
-    float t2_avg_mw;              // Tier 2 average power (mW)
+    float t0_avg_mw;              // Tier 0 average power (mW), system target
+    float t1_avg_mw;              // Tier 1 average power (mW), system target
+    float t2_avg_mw;              // Tier 2 average power (mW), system target
+    int power_profile;            // 0 = system target, 1 = conservative kit model
+    float t0_kit_avg_mw;          // Tier 0 kit envelope (mW)
+    float t1_kit_avg_mw;          // Tier 1 kit model (mW)
+    float t2_kit_avg_mw;          // Tier 2 kit model (mW)
 
     // ========================================================================
     // Motion Gate Thresholds (from hardware.yaml motion_gate section)

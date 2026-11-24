@@ -27,6 +27,7 @@
 #include "ble_research_service.h"
 #include "synapse_contract_generated.h"
 #include "synapse_raw_frame.h"
+#include "synapse_power.h"
 #include "host/ble_hs_mbuf.h"
 
 static const char *TAG = "SYNAPSE_RESEARCH";
@@ -476,6 +477,11 @@ static void flush_stream(synapse_research_t *r, synapse_research_stream_t *strea
         // keeps the witness aligned with the sequence every host can see.
         if (stream->has_flushed && ts_low < stream->last_flushed_ts_low) {
             flags |= SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED;
+        }
+        // A model must not travel as a measurement: the host refuses a G1
+        // power row whose POWER frame has this bit set.
+        if (stream->stream_id == SYNAPSE_RAW_STREAM_POWER && synapse_power_is_model()) {
+            flags |= SYNAPSE_RAW_FLAG_POWER_IS_MODEL;
         }
 
         /* Loss since the previous transmitted frame travels in this frame's

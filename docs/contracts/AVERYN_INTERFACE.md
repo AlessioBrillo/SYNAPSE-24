@@ -30,7 +30,7 @@ Il **Data Plane HTTP** descritto sotto è uno strumento di ricerca **locale**: s
 
 SYNAPSE-24 non tocca Averyn. Quando Averyn riallinea i suoi file, questo è l'elenco completo (le modifiche sono tutte compatibili con un client 2.2: nessun layout cambia):
 
-1. **Nuovi sha256** (LF): `gatt_v2.json` `ede7b591…1b00`, `vectors/consumer_v2.json` `d9db318e…8e73`, `raw_frame_v1.json` `1f1db14d…3553`, `vectors/raw_frame_v1.json` `fc3b66f2…c73a`. Il vettore `consumer_v2.json` ha sezioni nuove (`stream_metadata`, `control`, `heart_rate_measurement`, `feature_sequence_wrap`) e `contract_version` dice la versione.
+1. **Nuovi sha256** (LF): `gatt_v2.json` `ede7b591…1b00`, `vectors/consumer_v2.json` `d9db318e…8e73`, `raw_frame_v1.json` `eabc1503…e7e6`, `vectors/raw_frame_v1.json` `fc3b66f2…c73a`. Il vettore `consumer_v2.json` ha sezioni nuove (`stream_metadata`, `control`, `heart_rate_measurement`, `feature_sequence_wrap`) e `contract_version` dice la versione.
 2. **Le UUID del servizio research sono ora in `gatt_v2.json`** (`research_service`: servizio + una characteristic per stream + `sync`): non servono più copie scritte a mano da `gatt_v1.json`.
 3. **La characteristic di feature v1 non esiste più** sulla band. Chi la sottoscriveva usa il feature v2.
 4. **Flag attivi nel feature v2 e nello status**: `lead_off` (bit 1) è alto quando l'ingresso LO+ dell'AD8232 segnala un elettrodo staccato. **0 significa "non segnalato", non "contatto verificato"**: con il pin non cablato resta 0. `clock_wrapped` (bit 3) è alto dopo che `t_dev_ms` (uptime in ms, u32) ha fatto il giro (49,7 giorni).

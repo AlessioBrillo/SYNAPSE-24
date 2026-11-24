@@ -436,3 +436,68 @@ class TestStaleUuidScan:
         report = cc.Report()
         cc.check_stale_uuid_gone_from_sources(tmp_path, report)
         assert not report.failures, "; ".join(report.failures)
+
+
+class TestSensorMatrix:
+    """Every active pod field must be checked against its Kconfig default."""
+
+    def test_current_tree_is_clean(self, hw: dict) -> None:
+        report = cc.Report()
+        cc.check_sensor_config(hw, report)
+        assert not report.failures, "; ".join(report.failures)
+
+    def test_gain_drift_is_detected(self, hw: dict) -> None:
+        broken = _edit_forearm(
+            hw,
+            lambda pod: {
+                **pod,
+                "metadata": {
+                    **pod["metadata"],
+                    "ecg_config": {**pod["metadata"]["ecg_config"], "gain": 600.0},
+                },
+            },
+        )
+        report = cc.Report()
+        cc.check_sensor_config(broken, report)
+        assert any("SYNAPSE_ECG_GAIN" in f for f in report.failures)
+
+    def test_adc_channel_gpio_mismatch_is_detected(self, hw: dict) -> None:
+        broken = _edit_forearm(
+            hw,
+            lambda pod: {
+                **pod,
+                "metadata": {
+                    **pod["metadata"],
+                    "ecg_config": {**pod["metadata"]["ecg_config"], "adc_gpio": 2},
+                },
+            },
+        )
+        report = cc.Report()
+        cc.check_sensor_config(broken, report)
+        assert any("ADC1_CH0 is GPIO1" in f for f in report.failures)
+
+    def test_planned_pods_need_a_blocker(self, hw: dict) -> None:
+        broken = {
+            **hw,
+            "pods": [
+                {**p, "blocked_on": None} if p.get("status") == "planned" else p for p in hw["pods"]
+            ],
+        }
+        report = cc.Report()
+        cc.check_sensor_config(broken, report)
+        assert any("declares no blocked_on" in f for f in report.failures)
+
+    def test_power_profiles_are_two_distinct_numbers(self, hw: dict) -> None:
+        broken = {
+            **hw,
+            "power_budget": {
+                **hw["power_budget"],
+                "kit_tier_profiles": {
+                    **hw["power_budget"]["kit_tier_profiles"],
+                    "T0": {"avg_mw": 5.0, "peak_mw": 10.0},
+                },
+            },
+        }
+        report = cc.Report()
+        cc.check_sensor_config(broken, report)
+        assert any("separate numbers" in f for f in report.failures)

@@ -59,6 +59,7 @@ REQUIRED_STUB_HEADERS = [
     "host/ble_hs_mbuf.h",
     "services/gap/ble_svc_gap.h",
     "services/gatt/ble_svc_gatt.h",
+    "synapse_power.h",
 ]
 
 # Header set the research service includes directly. A stub that is not in this
@@ -76,6 +77,7 @@ SERVICE_INCLUDES = {
     "services/gatt/ble_svc_gatt.h",
     "ble_research_service.h",
     "synapse_raw_frame.h",
+    "synapse_power.h",
 }
 
 

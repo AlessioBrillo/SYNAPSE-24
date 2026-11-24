@@ -210,7 +210,8 @@ def test_the_hardware_yaml_agrees_with_the_firmware_pins() -> None:
     yaml_text = _src(HW_YAML)
     pins = _band_gpio_map()
     assert re.search(rf"wired_sync_gpio:\s*{pins['wired_sync']}\b", yaml_text)
-    assert re.search(rf"adc_pin:\s*{pins['ecg_adc']}\b", yaml_text)
+    assert re.search(rf"adc_channel:\s*{pins['ecg_adc'] - 1}\b", yaml_text)
+    assert re.search(rf"adc_gpio:\s*{pins['ecg_adc']}\b", yaml_text)
     assert re.search(rf"gpio_lead_off:\s*{pins['ecg_leadoff']}\b", yaml_text)
 
 

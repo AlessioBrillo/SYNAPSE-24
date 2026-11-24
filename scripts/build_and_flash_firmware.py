@@ -18,6 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -205,11 +209,26 @@ class FirmwareBuilder:
         return True
 
     def _generate_metadata(self, bin_size: int, build_time: float) -> None:
-        """Generate firmware metadata JSON."""
+        """Generate firmware metadata JSON from the hardware contract.
+
+        Rates and pins used to be hardcoded here while hardware.yaml claimed
+        to be the single source of truth: a build could advertise 500/50/50 Hz
+        with SDA 8 while the manifest said something else. Read the manifest.
+        """
         import hashlib
 
         with open(self.bin_path, "rb") as f:
             sha256 = hashlib.sha256(f.read()).hexdigest()
+
+        hw = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+        pod = next(
+            p
+            for p in hw.get("pods", [])
+            if p.get("status", "active") == "active" and p.get("is_hub")
+        )
+        rates = pod.get("sampling_rate", {})
+        i2c = pod.get("metadata", {}).get("i2c", {})
+        full = self.build_variant == "band-full"
 
         metadata = {
             "firmware": "synapse_band",
@@ -228,21 +247,23 @@ class FirmwareBuilder:
                 "imu_icm20948": True,
                 "research_service_raw": True,
                 "feature_stream_consumer": True,
-                "triage_int8": True,
+                # The TFLM interpreter/arena bug is open in both variants
+                # (sdkconfig.defaults.core; see the Kconfig help).
+                "triage_int8": False,
                 "power_monitor": True,
-                "gps_max_m10s": self.build_variant == "band-full",
-                "temperature_tmp117": self.build_variant == "band-full",
-                "fit_storage": self.build_variant == "band-full",
-                "provisioning": self.build_variant == "band-full",
-                "ota": self.build_variant == "band-full",
+                "gps_max_m10s": full,
+                "temperature_tmp117": full,
+                "fit_storage": full,
+                "provisioning": full,
+                "ota": full,
             },
-            # Must match config/hardware.yaml sampling_rate.* (tools/check_contract.py)
             "sampling_rates": {
-                "ecg_hz": 500,
-                "ppg_hz": 50,
-                "imu_hz": 50,
+                "ecg_hz": rates["ecg"],
+                "ppg_hz": rates["ppg"],
+                "imu_hz": rates["imu"],
             },
-            "i2c": {"sda_gpio": 8, "scl_gpio": 9},
+            "i2c": {"sda_gpio": i2c["sda_gpio"], "scl_gpio": i2c["scl_gpio"]},
+            "power_profile": hw.get("power_budget", {}).get("profile", "system") if full else "kit",
         }
 
         with open(self.metadata_path, "w") as f:

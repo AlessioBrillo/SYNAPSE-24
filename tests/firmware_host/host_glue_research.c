@@ -21,6 +21,7 @@
 
 #include "ble_research_service.h"
 #include "synapse_raw_frame.h"
+#include "synapse_power.h"
 
 /* The bench walks the GATT tables to assign characteristic handles the way
  * the real registration path does, so it needs the complete stub types. */
@@ -178,6 +179,10 @@ void ble_svc_gap_init(void) {}
 void ble_svc_gatt_init(void) {}
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "stub"; }
 int64_t esp_timer_get_time_monotonic(void) { return esp_timer_get_time(); }
+
+/* The host bench always supplies a measured current; the model flag's wire
+ * encoding is checked against the codec in tests/test_power_model_flag.py. */
+bool synapse_power_is_model(void) { return false; }
 
 int synapse_host_smoke_main(void);
 

@@ -30,6 +30,9 @@ bringup:
   # They are deliberately distinct from the consumer feature-stream service.
   ble:
     address: "${SYNAPSE_FOREARM_BLE:-auto}"  # "auto" = scan for SYNAPSE device
+    # Expected DIS serial (SYN- + 12 hex). When set, auto-discovery binds only
+    # to that band and the LSL source_id carries it.
+    serial: "${SYNAPSE_FOREARM_SERIAL_ID:-}"
     scan_timeout_s: 10
     connect_timeout_s: 15
     mtu: 247  # Negotiated MTU for higher throughput
@@ -156,6 +159,10 @@ bringup:
     output_classes: ["clean", "artifact"]  # Binary: artifact gate for T0→T1 promotion
     inference_interval_s: 0.2  # 5Hz inference
 
+  # The smoke rig is not the 5 mW system target: use the conservative kit
+  # envelope until the INA219 reports a measured current.
+  power_budget:
+    profile: kit
   # Power budget tracking (live)
   power_monitor:
     enabled: true

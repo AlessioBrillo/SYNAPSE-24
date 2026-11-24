@@ -254,6 +254,9 @@ class ResearchStreamDecoder:
     # counter says *how much*: a hole of one frame and a hole of a hundred
     # samples are different failures.
     dropped_samples: dict[RawStream, int] = field(default_factory=dict)
+    # POWER frames carrying the `power_is_model` flag. A G1 power measurement
+    # must come from the INA219; a tier model is a target, not evidence.
+    power_model_frames: int = 0
     # Per-stream count of detected firmware restarts (the pod reboots, or the
     # link breaks and re-forms without the caller masking it with reset()):
     # the sequence and the pod clock both count from zero again. That is
@@ -292,6 +295,8 @@ class ResearchStreamDecoder:
             if not self._check_sequence(header):
                 return header  # a repeat or a late frame: counted apart, adds no samples
             self._buffer(header, samples)
+            if header.stream is RawStream.POWER and header.power_is_model:
+                self.power_model_frames += 1
             self.frames_seen += 1
             # Wire truth: header + count values of the declared format.
             self.bytes_seen += HEADER_SIZE + int(header.sample_count) * format_size(

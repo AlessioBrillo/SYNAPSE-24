@@ -26,6 +26,7 @@
 
 pods:
   - pod_id: "forearm_hub"
+    status: active                    # check_contract validates every active pod
     name: "Forearm Hub (Tier 0 Continuous)"
     board_type: "ESP32_BAND"          # firmware/esp32_band
     build_variant: "band-core"        # smoke kit: no GPS/TMP117/FIT/provisioning/OTA
@@ -70,7 +71,11 @@ pods:
         ppg: "MAX30102"
         imu: "ICM-20948"
       ecg_config:
-        adc_pin: 1                     # ADC1_CH0 = GPIO1 on the S3 (GPIO36 is octal PSRAM)
+        # ADC1_CH0 is the driver field. adc_gpio is documentation only: on the
+        # S3 channel 0 is GPIO1, and GPIO36 is octal PSRAM. Naming this `adc_pin`
+        # invited writing the GPIO number where the driver expects a channel.
+        adc_channel: 0
+        adc_gpio: 1
         gpio_lead_off: 15              # lead-off sense: breakout LO+, or LO+/LO- OR-ed by two diodes; -1 = not wired
         lead_off_plus: 15
         lead_off_minus: null           # no separate LO- sense (build the two-diode OR into gpio_lead_off to cover both); GPIO34 is octal PSRAM
@@ -79,6 +84,7 @@ pods:
         gain_measured: null            # bench-calibrated gain (BRINGUP_SOP §4a). Empty
                                        # until the kit is on the desk: the µV scale of
                                        # every ECG SNR claim hangs on this per-rig number.
+        midrail_source: "auto"         # the driver re-measures the DC bias at boot and after lead-off
         format: "s16"                  # see src/synapse24/hardware/raw_codec.py
         lsl_stream: "SYNAPSE_ECG_T0"
       ppg_config:
@@ -87,6 +93,8 @@ pods:
         led_current_red: 0x1F
         led_current_ir: 0x1F           # LEDx_PA: 8 bits, 0.2 mA per step (the MAX30102 has only red and IR)
         sample_rate_reg: 0x00          # SPO2_SR code: 0x00=50Hz 0x01=100Hz 0x02=200Hz 0x03=400Hz
+        effective_rate_hz: 50          # no FIFO averaging (SMP_AVE=000): one ADC sample per sample
+        fifo_average: 1                # MAX30102 FIFO_CONFIG SMP_AVE code 0 = one sample
         pulse_width_reg: 0x03          # 411 us
         adc_range_reg: 0x03            # 16384 nA
         format: "s32"                  # 18-bit ADC, needs 32-bit codes
@@ -96,8 +104,16 @@ pods:
         gpio_int: 6
         accel_range_g: 8
         gyro_range_dps: 500
-        accel_odr_hz: 50
-        gyro_odr_hz: 50
+        # `*_poll_hz` is what the scheduler polls and what the LSL outlets
+        # declare. The sensor runs at 2x so every poll finds a fresh sample:
+        # accel 1125/(1+div) ~= 102 Hz, gyro 1100/(1+div) = 100 Hz.
+        accel_poll_hz: 50
+        gyro_poll_hz: 50
+        sensor_oversample: 2
+        accel_sensor_odr_hz: 102
+        gyro_sensor_odr_hz: 100
+        accel_dlpf_reg: 0x20           # ACCEL_CONFIG DLPFCFG=4, FCHOICE=1
+        gyro_dlpf_reg: 0x28            # GYRO_CONFIG_1 DLPFCFG=5, FCHOICE=1
         format: "s16"
         lsl_streams:
           accel: "SYNAPSE_ACC_T0"
@@ -110,8 +126,32 @@ pods:
         port: 0
         sda_gpio: 8
         scl_gpio: 9
+      # Optional band-full parts. The smoke kit does not fit them; the values
+      # are still part of the contract and must match the firmware Kconfig.
+      temp_config:
+        i2c_addr: 0x48
+        gpio_alert: 7
+        conversion_cycle_ms: 1000
+      ina219_config:
+        i2c_addr: 0x40
+        shunt_mohm: 100
+        max_current_ma: 2000
+      gps_config:
+        uart_port: 1
+        tx_gpio: 17
+        rx_gpio: 18
+        baudrate: 115200
+        use_ubx: true
+      battery_config:
+        adc_channel: 3
+        adc_gpio: 4
+        voltage_divider: 2.0
+      sync_config:
+        wired_gpio: 10
 
   - pod_id: "head_pod"
+    status: planned                   # no in-tree firmware and no confirmed fNIRS module yet
+    blocked_on: "head_hardware_decision"
     name: "Head Pod (Tier 1 High-Density Rest/Sleep)"
     board_type: "CERELOG_ESP_EEG"
     modalities: ["eeg", "fnirs", "ecg_rest"]
@@ -144,6 +184,8 @@ pods:
         short_channels: 2
 
   - pod_id: "in_ear_satellite"
+    status: planned                   # concept: no AFE part number, no firmware, no stream id
+    blocked_on: "in_ear_hardware_spec"
     name: "In-Ear Satellite (Tier 0 Continuous EEG)"
     board_type: "EAR_EEG_EARBUD"
     modalities: ["eeg_ear"]
@@ -343,7 +385,7 @@ raw_frame:
   dropped_max: 255
   # bit0: THIS frame's low-32 timestamp is lower than the previous transmitted frame of the same
   # stream, i.e. the 32-bit microsecond counter wrapped in between (every 71.58 min)
-  flag_bits: {ts_epoch_wrapped: 0}
+  flag_bits: {ts_epoch_wrapped: 0, power_is_model: 1}
   stream_ids:
     ecg: 0x01
     ppg: 0x02
@@ -397,11 +439,33 @@ power_budget:
   hub_battery_mah: 3000
   target_lifetime_h: 24
   reserve_mah: 300
+  # The measurement rig and the target product are two different budgets.
+  # `tier_profiles` is the SYSTEM target (5 mW T0, Architecture.md §55-62,
+  # gate G3); `kit_tier_profiles` is the conservative model used until the
+  # INA219 reports a real current. A POWER frame carries which one was used.
+  profile: system
+  kit_tier_profiles:
+    T0:
+      avg_mw: 425.0
+      peak_mw: 600.0
+      max_duration_h: null
+      source: "model_kit"
+    T1:
+      avg_mw: 425.0
+      peak_mw: 600.0
+      max_duration_h: 10.0
+      source: "model_kit_until_measured"
+    T2:
+      avg_mw: 425.0
+      peak_mw: 600.0
+      max_duration_h: 0.5
+      source: "model_kit_until_measured"
   tier_profiles:
     T0:
       avg_mw: 5.0
       peak_mw: 10.0
       max_duration_h: null
+      source: "target_system_G3"
     T1:
       avg_mw: 50.0
       peak_mw: 100.0

@@ -132,9 +132,15 @@ def check_sampling_rates(hw: dict, bringup: dict, report: Report) -> None:
     )
 
     report.check(
-        meta.get("imu_config", {}).get("accel_odr_hz") == rates.get("imu"),
+        meta.get("imu_config", {}).get("accel_poll_hz") == rates.get("imu"),
         f"IMU rate mismatch: sampling_rate.imu={rates.get('imu')} but "
-        f"imu_config.accel_odr_hz={meta.get('imu_config', {}).get('accel_odr_hz')}",
+        f"imu_config.accel_poll_hz={meta.get('imu_config', {}).get('accel_poll_hz')}",
+    )
+    report.check(
+        meta.get("ppg_config", {}).get("effective_rate_hz") == implied_ppg,
+        "ppg_config.effective_rate_hz must equal the rate implied by sample_rate_reg "
+        f"(no FIFO averaging): {meta.get('ppg_config', {}).get('effective_rate_hz')} "
+        f"vs {implied_ppg}",
     )
 
     outlets = {
@@ -172,6 +178,32 @@ def _kconfig_default(symbol: str) -> int | None:
     return _as_int(default.group(1)) if default else None
 
 
+def _kconfig_text(symbol: str) -> str | None:
+    """The raw ``default`` expression of ``config <symbol>``, or None."""
+    text = CONFIG_KCONFIG.read_text(encoding="utf-8") if CONFIG_KCONFIG.is_file() else ""
+    block = re.search(
+        rf"^config {symbol}\b(.*?)(?=^config |^choice |^endchoice|^endmenu|\Z)", text, re.S | re.M
+    )
+    if block is None:
+        return None
+    default = re.search(r"^\s*default\s+(.+?)\s*$", block.group(1), re.M)
+    return default.group(1) if default else None
+
+
+def _kconfig_bool(symbol: str) -> bool | None:
+    """The boolean ``default`` of ``config <symbol>``, or None."""
+    value = _kconfig_text(symbol)
+    if value is None:
+        return None
+    head = value.strip().split()[0]
+    return head in ("y", "1", "true")
+
+
+def _active_pods(hw: dict) -> list[dict]:
+    """Pods with firmware today; `planned` pods are manifest-only and skipped."""
+    return [pod for pod in hw.get("pods", []) if pod.get("status", "active") == "active"]
+
+
 def check_i2c_pins(hw: dict, report: Report) -> None:
     """The shared I2C bus pins must match the firmware and the bringup doc.
 
@@ -207,6 +239,157 @@ def check_i2c_pins(hw: dict, report: Report) -> None:
     report.check(
         f"GPIO {sda} (SDA)" in doc and f"{scl} (SCL)" in doc,
         f"docs/hardware/BRINGUP_SOP.md does not document I2C SDA on GPIO {sda} and SCL on GPIO {scl}",
+    )
+
+
+def _imu_divider(base_hz: int, poll_hz: int, oversample: int) -> int:
+    """Mirror of firmware/common/sensors/imu_odr.h: floor, never below 2x poll."""
+    if poll_hz <= 0:
+        poll_hz = 50
+    n = base_hz // (poll_hz * oversample)
+    return n - 1 if n > 0 else 0
+
+
+def check_sensor_config(hw: dict, report: Report) -> None:  # noqa: PLR0915 - one check per field
+    """Every field of an active pod must match the Kconfig default it feeds.
+
+    The old checker verified two rates and two pins, yet hardware.yaml called
+    itself the single source of truth. A drift in gain, LED current, address or
+    FSR was invisible until the bench. Each pair below is one of those fields.
+    A `planned` pod has no firmware and is checked only for internal honesty.
+    """
+    active = _active_pods(hw)
+    report.check(bool(active), "at least one pod must have status: active")
+    for pod in active:
+        meta = pod.get("metadata", {})
+        ecg = meta.get("ecg_config", {})
+        ppg = meta.get("ppg_config", {})
+        imu = meta.get("imu_config", {})
+        temp = meta.get("temp_config", {})
+        gps = meta.get("gps_config", {})
+        bat = meta.get("battery_config", {})
+        ina = meta.get("ina219_config", {})
+        sync = meta.get("sync_config", {})
+        pid = pod.get("pod_id", "?")
+
+        def eq(yaml_value: object, symbol: str, label: str) -> None:
+            default = _kconfig_default(symbol)
+            report.check(
+                default is not None and yaml_value == default,
+                f"{pid}: {label}={yaml_value!r} but Kconfig {symbol} defaults to {default!r}",
+            )
+
+        eq(ecg.get("adc_channel"), "SYNAPSE_ECG_ADC_CHANNEL", "ecg_config.adc_channel")
+        eq(ecg.get("gpio_lead_off"), "SYNAPSE_ECG_GPIO_LEAD_OFF", "ecg_config.gpio_lead_off")
+        eq(
+            round(float(ecg.get("gain", -1)) * 100) if ecg.get("gain") else None,
+            "SYNAPSE_ECG_GAIN",
+            "ecg_config.gain (x100)",
+        )
+        # On the S3 ADC1_CHn is GPIO n+1. The GPIO field is documentation, so
+        # it must agree with the channel or the bench wiring table lies.
+        channel, gpio = ecg.get("adc_channel"), ecg.get("adc_gpio")
+        report.check(
+            isinstance(channel, int) and isinstance(gpio, int) and gpio == channel + 1,
+            f"{pid}: ADC1_CH{channel} is GPIO{channel + 1} on the S3, manifest says GPIO{gpio}",
+        )
+
+        eq(ppg.get("i2c_addr"), "SYNAPSE_PPG_I2C_ADDR", "ppg_config.i2c_addr")
+        eq(ppg.get("gpio_int"), "SYNAPSE_PPG_GPIO_INT", "ppg_config.gpio_int")
+        eq(ppg.get("led_current_red"), "SYNAPSE_PPG_LED_CURRENT_RED", "ppg_config.led_current_red")
+        eq(ppg.get("led_current_ir"), "SYNAPSE_PPG_LED_CURRENT_IR", "ppg_config.led_current_ir")
+        eq(ppg.get("sample_rate_reg"), "SYNAPSE_PPG_SAMPLE_RATE", "ppg_config.sample_rate_reg")
+        eq(ppg.get("pulse_width_reg"), "SYNAPSE_PPG_PULSE_WIDTH", "ppg_config.pulse_width_reg")
+        eq(ppg.get("adc_range_reg"), "SYNAPSE_PPG_ADC_RANGE", "ppg_config.adc_range_reg")
+        report.check(
+            ppg.get("fifo_average") == 1, f"{pid}: FIFO averaging changes the effective rate"
+        )
+
+        eq(imu.get("i2c_addr"), "SYNAPSE_IMU_I2C_ADDR", "imu_config.i2c_addr")
+        eq(imu.get("gpio_int"), "SYNAPSE_IMU_GPIO_INT", "imu_config.gpio_int")
+        eq(imu.get("accel_range_g"), "SYNAPSE_IMU_ACCEL_FSR_G", "imu_config.accel_range_g")
+        eq(imu.get("gyro_range_dps"), "SYNAPSE_IMU_GYRO_FSR_DPS", "imu_config.gyro_range_dps")
+        eq(imu.get("accel_poll_hz"), "SYNAPSE_IMU_ACCEL_ODR_HZ", "imu_config.accel_poll_hz")
+        eq(imu.get("gyro_poll_hz"), "SYNAPSE_IMU_GYRO_ODR_HZ", "imu_config.gyro_poll_hz")
+        oversample = imu.get("sensor_oversample")
+        report.check(oversample == 2, f"{pid}: imu_config.sensor_oversample must be 2")
+        if isinstance(oversample, int) and isinstance(imu.get("accel_poll_hz"), int):
+            accel_div = _imu_divider(1125, imu["accel_poll_hz"], oversample)
+            gyro_div = _imu_divider(1100, imu["gyro_poll_hz"], oversample)
+            report.check(
+                imu.get("accel_sensor_odr_hz") == 1125 // (accel_div + 1),
+                f"{pid}: accel_sensor_odr_hz must match divider {accel_div} "
+                f"(1125/(1+div)), declared {imu.get('accel_sensor_odr_hz')}",
+            )
+            report.check(
+                imu.get("gyro_sensor_odr_hz") == 1100 // (gyro_div + 1),
+                f"{pid}: gyro_sensor_odr_hz must match divider {gyro_div} "
+                f"(1100/(1+div)), declared {imu.get('gyro_sensor_odr_hz')}",
+            )
+
+        eq(temp.get("i2c_addr"), "SYNAPSE_TEMP_I2C_ADDR", "temp_config.i2c_addr")
+        eq(temp.get("gpio_alert"), "SYNAPSE_TEMP_GPIO_ALERT", "temp_config.gpio_alert")
+        eq(gps.get("uart_port"), "SYNAPSE_GPS_UART_PORT", "gps_config.uart_port")
+        eq(gps.get("tx_gpio"), "SYNAPSE_GPS_UART_TX_GPIO", "gps_config.tx_gpio")
+        eq(gps.get("rx_gpio"), "SYNAPSE_GPS_UART_RX_GPIO", "gps_config.rx_gpio")
+        eq(gps.get("baudrate"), "SYNAPSE_GPS_BAUDRATE", "gps_config.baudrate")
+        report.check(
+            gps.get("use_ubx") is _kconfig_bool("SYNAPSE_GPS_USE_UBX"),
+            f"{pid}: gps_config.use_ubx differs from Kconfig SYNAPSE_GPS_USE_UBX",
+        )
+        eq(bat.get("adc_channel"), "SYNAPSE_BAT_ADC_CHANNEL", "battery_config.adc_channel")
+        eq(
+            round(float(bat.get("voltage_divider", -1)) * 100)
+            if bat.get("voltage_divider")
+            else None,
+            "SYNAPSE_BAT_VOLTAGE_DIVIDER",
+            "battery_config.voltage_divider (x100)",
+        )
+        eq(ina.get("i2c_addr"), "SYNAPSE_INA219_I2C_ADDR", "ina219_config.i2c_addr")
+        eq(ina.get("shunt_mohm"), "SYNAPSE_INA219_SHUNT_MOHM", "ina219_config.shunt_mohm")
+        eq(
+            ina.get("max_current_ma"),
+            "SYNAPSE_INA219_MAX_CURRENT_MA",
+            "ina219_config.max_current_ma",
+        )
+        bringup_sync = _load(BRINGUP_YAML).get("bringup", {}).get("sync", {}).get("wired_sync_gpio")
+        report.check(
+            sync.get("wired_gpio") == bringup_sync,
+            f"{pid}: sync_config.wired_gpio={sync.get('wired_gpio')} differs from "
+            f"hardware_bringup.yaml ({bringup_sync})",
+        )
+
+        i2c_default_port = _kconfig_default("SYNAPSE_PPG_I2C_PORT")
+        for name, value in (
+            ("imu", imu.get("i2c_port")),
+            ("temp", temp.get("i2c_port")),
+            ("ina219", None),
+        ):
+            if value is None:
+                continue
+            report.check(
+                value == i2c_default_port,
+                f"{pid}: {name} must sit on the one I2C port (manifest {value}, PPG {i2c_default_port})",
+            )
+        report.check(bat.get("adc_gpio") == 4, f"{pid}: battery divider is GPIO4 on the S3")
+
+    for pod in hw.get("pods", []):
+        if pod.get("status") == "planned":
+            report.check(
+                bool(pod.get("blocked_on")),
+                f"pod '{pod.get('pod_id')}' is planned but declares no blocked_on reason",
+            )
+
+    pb = hw.get("power_budget", {})
+    for tier in ("T0", "T1", "T2"):
+        system = pb.get("tier_profiles", {}).get(tier, {}).get("avg_mw")
+        kit = pb.get("kit_tier_profiles", {}).get(tier, {}).get("avg_mw")
+        eq(system, f"SYNAPSE_{tier}_AVG_MW", f"power_budget.tier_profiles.{tier}.avg_mw")
+        eq(kit, f"SYNAPSE_{tier}_KIT_AVG_MW", f"power_budget.kit_tier_profiles.{tier}.avg_mw")
+    report.check(
+        pb.get("tier_profiles", {}).get("T0", {}).get("avg_mw") == 5.0
+        and pb.get("kit_tier_profiles", {}).get("T0", {}).get("avg_mw") == 425.0,
+        "the system target and the kit envelope must stay two separate numbers",
     )
 
 
@@ -302,6 +485,14 @@ def check_raw_frame_contract(hw: dict, report: Report) -> None:
         report.check(
             expected in codec.upper(),
             f"the canonical codec does not define RawFormat.{name.upper()} = 0x{int(value):02X}",
+        )
+
+    for name, value in raw.get("flag_bits", {}).items():
+        flag_mask = 1 << int(value)  # the manifest declares a bit index, the codec a mask
+        expected = f"FLAG_{name.upper()} = 0X{flag_mask:02X}"
+        report.check(
+            expected in codec.upper(),
+            f"the canonical codec does not define FLAG_{name.upper()} = 0x{int(value):02X}",
         )
 
 
@@ -541,6 +732,16 @@ def check_canonical_firmware_paths(report: Report) -> None:
         "firmware/esp32_tier0" not in script,
         "scripts/build_and_flash_firmware.py still targets the archived esp32_tier0",
     )
+    # The build metadata must be derived from the manifest, not a second copy
+    # that can drift while check_contract stays green.
+    report.check(
+        "hardware.yaml" in script and "yaml.safe_load" in script,
+        "build metadata must be generated from config/hardware.yaml",
+    )
+    report.check(
+        '"ecg_hz": 500' not in script and '"sda_gpio": 8' not in script,
+        "scripts/build_and_flash_firmware.py hardcodes rates or I2C pins: derive them from hardware.yaml",
+    )
 
 
 # Files that previously carried stale 64/100 Hz literals. Each is checked for
@@ -714,6 +915,7 @@ def main() -> int:
     report = Report()
 
     check_sampling_rates(hw, bringup, report)
+    check_sensor_config(hw, report)
     check_i2c_pins(hw, report)
     check_research_service_uuids(hw, report)
     check_consumer_service_contract(hw, report)

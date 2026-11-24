@@ -39,6 +39,7 @@ from enum import IntEnum
 import numpy as np
 
 __all__ = [
+    "FLAG_POWER_IS_MODEL",
     "FLAG_TS_EPOCH_WRAPPED",
     "FRAME_VERSION",
     "HEADER_SIZE",
@@ -61,6 +62,7 @@ HEADER_SIZE = 12
 MAX_DROPPED = 255  # saturation limit of the header loss counter
 
 FLAG_TS_EPOCH_WRAPPED = 0x01
+FLAG_POWER_IS_MODEL = 0x02
 
 
 class RawCodecError(ValueError):
@@ -134,6 +136,11 @@ class RawHeader:
     def ts_epoch_wrapped(self) -> bool:
         """True when the 32-bit device microsecond counter wrapped."""
         return bool(self.flags & FLAG_TS_EPOCH_WRAPPED)
+
+    @property
+    def power_is_model(self) -> bool:
+        """True when a POWER frame carries a tier-model current, not a measurement."""
+        return bool(self.flags & FLAG_POWER_IS_MODEL)
 
     @property
     def reserved(self) -> int:

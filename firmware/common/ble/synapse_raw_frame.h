@@ -22,7 +22,7 @@
  *     1     1  stream_id        (synapse_raw_stream_t)
  *     2     2  sequence         uint16, wraps at 65535
  *     4     4  timestamp_us_lo  uint32, low 32 bits of device microseconds
- *     8     1  flags            bit0 = ts_epoch_wrapped
+ *     8     1  flags            bit0 = ts_epoch_wrapped, bit1 = power_is_model
  *     9     1  sample_count     number of samples in this frame
  *    10     1  sample_format    (synapse_raw_stream_t format)
  *    11     1  dropped          samples lost for this stream since the previous
@@ -60,6 +60,9 @@ extern "C" {
 
 /** Flag: the 32-bit device microsecond counter wrapped between frames. */
 #define SYNAPSE_RAW_FLAG_TS_EPOCH_WRAPPED 0x01u
+
+/** Flag: a POWER frame carries a tier-model current, not an INA219 measurement. */
+#define SYNAPSE_RAW_FLAG_POWER_IS_MODEL 0x02u
 
 /** Largest loss magnitude the `dropped` header byte can carry. */
 #define SYNAPSE_RAW_DROPPED_MAX 255u
