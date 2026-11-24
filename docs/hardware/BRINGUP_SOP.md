@@ -100,6 +100,41 @@ alcohol; a wet electrode is the difference between a clean QRS and noise.
 > in the first second). Or set `gpio_lead_off: -1`.
 > It used to be GPIO 4, which is also the battery-divider input: do not share them.
 
+## 0b. Device identity and calibration
+
+The band advertises a stable serial built from the **full six MAC bytes**
+(`SYN-` + 12 hex) at first boot and kept in NVS. The log line `SYNAPSE_ID`
+prints it; copy it into `SYNAPSE_FOREARM_SERIAL_ID` before recording. The
+validator binds to that serial (and derives the LSL `source_id`) instead of
+taking the first device whose name contains `SYNAPSE`; with two bands on the
+bench an ambiguous scan is an error, not a guess.
+
+With `CONFIG_SYNAPSE_FACTORY_MODE=y` the USB serial console offers a
+calibration shell (`help` lists it). The host driver is:
+
+```bash
+uv run python scripts/factory_calibrate.py --port COM3 --dump
+uv run python scripts/factory_calibrate.py --port COM3 --gain-json <gain.json> \
+    --led 1F,1F --operator "<name>"
+```
+
+Commands write a versioned, CRC-checked NVS record that the sensor layer
+applies before configuring the drivers: ECG gain, PPG LED currents and IMU
+zero offsets. `cal erase` returns the band to Kconfig defaults. The resulting
+`data/calibration/<serial>.json` is manufacturing data and is not committed.
+The ECG mid-rail is **not** forced at boot: the driver re-measures it after
+lead-off, and a stale stored DC offset would be worse than none.
+
+Keep the nominal configuration frozen for G1 (ECG 1100x, PPG 50 Hz / 6.2 mA,
+IMU 8 g / 500 dps). Record the bench sweep of LED current vs perfusion index
+and the T2 IMU clipping check in the calibration JSON; change a nominal value
+only with a new deliberate contract update, never mid-session.
+
+The POWER stream's frame flag bit 1 (`power_is_model`) says whether a current
+came from the INA219 or from the conservative kit model (425 mW). The G1 power
+gate fails when any POWER frame carries the model bit: a target is not a
+measurement.
+
 ## 1. Build and flash
 
 ```bash

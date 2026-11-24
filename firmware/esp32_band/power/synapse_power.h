@@ -125,6 +125,14 @@ void synapse_power_set_battery_sink(synapse_power_battery_sink_t sink);
 bool synapse_power_has_measured_current(void);
 
 /**
+ * @brief True when the reported current comes from a model, not the INA219.
+ *
+ * The research service sets `power_is_model` on POWER frames from this, so a
+ * recording can never silently mix a measured envelope with a target model.
+ */
+bool synapse_power_is_model(void);
+
+/**
  * @brief Read raw battery voltage (mV)
  * @return Battery voltage in mV
  */

@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Write and verify the per-unit calibration record over the USB serial CLI.
+
+The band must be flashed with CONFIG_SYNAPSE_FACTORY_MODE=y. This script is the
+host half of the firmware shell in firmware/esp32_band/main/synapse_factory_cli.c:
+
+    uv run python scripts/factory_calibrate.py --port COM3 --dump
+    uv run python scripts/factory_calibrate.py --port COM3 \
+        --gain-json data/live_validation/gain.json --led 1F,1F --operator "A. Brillo"
+
+A calibration is manufacturing data: the JSON record is written under
+data/calibration/<serial>.json (gitignored), never into config/hardware.yaml.
+Kconfig remains the default for an uncalibrated band.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Protocol
+
+ROOT = Path(__file__).resolve().parents[1]
+CAL_DIR = ROOT / "data" / "calibration"
+SERIAL_RE = re.compile(r"^SYN-[0-9A-F]{12}$")
+
+
+class Transport(Protocol):
+    def send(self, line: str) -> str:
+        """Send one line and return the device's reply."""
+
+
+@dataclass
+class FakeTransport:
+    """In-memory transport for offline tests and the dry-run mode."""
+
+    record: dict[str, object] | None = None
+    replies: list[str] | None = None
+
+    def send(self, line: str) -> str:  # noqa: PLR0911 - a command shell is a dispatch table
+        if self.record is None:
+            self.record = {
+                "serial": "SYN-000000000000",
+                "source": "defaults",
+                "ecg_gain_x100": 110000,
+                "ecg_midrail_mv": 0,
+                "ppg_led_red": 31,
+                "ppg_led_ir": 31,
+                "accel_bias_mg": [0, 0, 0],
+                "gyro_bias_mdps": [0, 0, 0],
+                "date": "",
+                "operator": "",
+            }
+        parts = line.strip().split()
+        if not parts:
+            return "ERR empty"
+        if parts == ["help"]:
+            return "SYNAPSE factory calibration"
+        if parts[:2] != ["cal", "dump"] and parts[0] != "cal":
+            return f"ERR unknown command: {parts[0]}"
+        if parts[1] == "dump":
+            return json.dumps(self.record)
+        if parts[1] == "erase":
+            return "OK erased"
+        if parts[1] == "save":
+            return "OK saved"
+        key = parts[1]
+        values = parts[2:]
+        if key == "gain":
+            self.record["ecg_gain_x100"] = int(values[0])
+        elif key == "midrail":
+            self.record["ecg_midrail_mv"] = int(values[0])
+        elif key == "led":
+            self.record["ppg_led_red"] = int(values[0], 16)
+            self.record["ppg_led_ir"] = int(values[1], 16)
+        elif key == "accel_bias":
+            self.record["accel_bias_mg"] = [int(v) for v in values]
+        elif key == "gyro_bias":
+            self.record["gyro_bias_mdps"] = [int(v) for v in values]
+        elif key == "serial":
+            self.record["serial"] = values[0]
+        elif key == "date":
+            self.record["date"] = values[0]
+        elif key == "operator":
+            self.record["operator"] = " ".join(values)
+        else:
+            return f"ERR bad command: {key}"
+        return f"OK {key}"
+
+
+class SerialTransport:
+    """Real USB serial transport; imported lazily so --dry-run needs no port."""
+
+    def __init__(self, port: str, baud: int = 115200, timeout: float = 2.0) -> None:
+        import serial  # noqa: PLC0415 - optional until a real port is used
+
+        self._conn = serial.Serial(port, baudrate=baud, timeout=timeout)
+
+    def send(self, line: str) -> str:
+        self._conn.write((line.strip() + "\r\n").encode("ascii"))
+        chunks: list[str] = []
+        while True:
+            raw = self._conn.readline()
+            if not raw:
+                break
+            text = raw.decode("utf-8", errors="replace").strip()
+            if text.startswith(("OK", "ERR", "{")):
+                chunks.append(text)
+                break
+            if chunks or len(chunks) > 50:
+                break
+        return "\n".join(chunks)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def build_commands(args: argparse.Namespace) -> list[str]:
+    """Translate CLI options into firmware shell lines (pure, testable)."""
+    commands: list[str] = []
+    if args.gain is not None:
+        commands.append(f"cal gain {args.gain}")
+    elif args.gain_json:
+        payload = json.loads(Path(args.gain_json).read_text(encoding="utf-8"))
+        x100 = payload.get("sdkconfig_ecg_gain")
+        if x100 is None:
+            raise ValueError(f"{args.gain_json} has no sdkconfig_ecg_gain")
+        commands.append(f"cal gain {int(x100)}")
+    if args.midrail is not None:
+        commands.append(f"cal midrail {args.midrail}")
+    if args.led:
+        red, ir = (part.strip() for part in args.led.split(","))
+        commands.append(f"cal led {red} {ir}")
+    if args.accel_bias:
+        commands.append("cal accel_bias " + " ".join(args.accel_bias))
+    if args.gyro_bias:
+        commands.append("cal gyro_bias " + " ".join(args.gyro_bias))
+    if args.serial:
+        if not SERIAL_RE.match(args.serial):
+            raise ValueError(
+                f"serial must be SYN- followed by 12 uppercase hex digits: {args.serial}"
+            )
+        commands.append(f"cal serial {args.serial}")
+    if args.date:
+        commands.append(f"cal date {args.date}")
+    elif not args.dry_run:
+        commands.append(f"cal date {datetime.now(UTC).date().isoformat()}")
+    if args.operator:
+        commands.append(f"cal operator {args.operator}")
+    if commands:
+        commands.append("cal save")
+    commands.append("cal dump")
+    return commands
+
+
+def parse_dump(reply: str) -> dict[str, object]:
+    for raw_line in reversed(reply.splitlines()):
+        stripped = raw_line.strip()
+        if stripped.startswith("{"):
+            record = json.loads(stripped)
+            if not SERIAL_RE.match(str(record.get("serial", ""))):
+                raise ValueError(f"device returned an invalid serial: {record.get('serial')!r}")
+            return record
+    raise ValueError(f"no calibration JSON in device reply: {reply!r}")
+
+
+def write_record(record: dict[str, object]) -> Path:
+    CAL_DIR.mkdir(parents=True, exist_ok=True)
+    path = CAL_DIR / f"{record['serial']}.json"
+    serial_port = path.open("w", encoding="utf-8")
+    with serial_port as handle:
+        json.dump(record, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", default="COM3", help="USB serial port of the band")
+    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--dry-run", action="store_true", help="offline fake transport")
+    parser.add_argument("--gain", type=int, help="measured gain as x100 (e.g. 110000)")
+    parser.add_argument("--gain-json", help="output of scripts/g1_measure.py gain")
+    parser.add_argument("--midrail", type=int, help="measured mid-rail in mV (metadata only)")
+    parser.add_argument("--led", help="red,IR LED codes in hex, e.g. 1F,1F")
+    parser.add_argument("--accel-bias", nargs=3, metavar=("X", "Y", "Z"))
+    parser.add_argument("--gyro-bias", nargs=3, metavar=("X", "Y", "Z"))
+    parser.add_argument("--serial", help="SYN- followed by 12 uppercase hex digits")
+    parser.add_argument("--date", help="YYYY-MM-DD")
+    parser.add_argument("--operator", help="who performed the calibration")
+    parser.add_argument("--dump", action="store_true", help="only print the current record")
+    parser.add_argument("--erase", action="store_true", help="drop the NVS record")
+    args = parser.parse_args(argv)
+
+    transport: Transport
+    if args.dry_run:
+        transport = FakeTransport()
+    else:
+        serial_transport = SerialTransport(args.port, args.baud)
+        transport = serial_transport
+
+    try:
+        commands = (
+            ["cal dump"] if args.dump else ["cal erase"] if args.erase else build_commands(args)
+        )
+        reply = ""
+        for command in commands:
+            reply = transport.send(command)
+            if reply.startswith("ERR"):
+                print(f"factory command failed: {command}: {reply}", file=sys.stderr)
+                return 1
+        record = parse_dump(reply) if not args.erase else {"serial": "erased"}
+        if args.erase:
+            print("calibration record erased: the band uses Kconfig defaults")
+            return 0
+        if args.dry_run:
+            print(json.dumps(record, indent=2, sort_keys=True))
+        else:
+            path = write_record(record)
+            print(f"calibration written to {path.relative_to(ROOT)}")
+        return 0
+    except (ValueError, OSError) as exc:
+        print(f"factory calibration failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if isinstance(transport, SerialTransport):
+            transport.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

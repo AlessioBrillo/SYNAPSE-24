@@ -24,6 +24,9 @@ typedef struct {
     int gyro_fsr_dps;       // Gyroscope full-scale range: 250, 500, 1000, 2000 dps
     int accel_odr_hz;       // Accelerometer output data rate (Hz)
     int gyro_odr_hz;        // Gyroscope output data rate (Hz)
+    /* Per-unit biases from the calibration record. Zero means no correction. */
+    int16_t accel_bias_mg[3];
+    int16_t gyro_bias_mdps[3];
 } imu_icm20948_config_t;
 
 esp_err_t imu_icm20948_init(const imu_icm20948_config_t* config);

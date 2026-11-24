@@ -435,6 +435,40 @@ config SYNAPSE_T2_AVG_MW
     help
         Tier 2 (voluntary) average power consumption in mW.
 
+choice SYNAPSE_POWER_PROFILE
+    prompt "Power budget profile"
+    default SYNAPSE_POWER_PROFILE_SYSTEM
+    help
+        SYSTEM is the Architecture.md §55-62 target (compressed, duty-cycled,
+        gate G3). KIT is the conservative model for the smoke rig until the
+        INA219 reports a measured current. The chosen profile feeds the tier
+        affordability model and the estimated remaining charge.
+
+config SYNAPSE_POWER_PROFILE_KIT
+    bool "Kit (measured envelope, conservative)"
+
+config SYNAPSE_POWER_PROFILE_SYSTEM
+    bool "System target (G3)"
+endchoice
+
+config SYNAPSE_T0_KIT_AVG_MW
+    int "Kit Tier 0 model power (mW)"
+    default 425
+    help
+        Conservative upper end of the measured kit envelope (250-425 mW).
+
+config SYNAPSE_T1_KIT_AVG_MW
+    int "Kit Tier 1 model power (mW)"
+    default 425
+    help
+        Kit Tier 1 model until it is measured on the bench.
+
+config SYNAPSE_T2_KIT_AVG_MW
+    int "Kit Tier 2 model power (mW)"
+    default 425
+    help
+        Kit Tier 2 model until it is measured on the bench.
+
 config SYNAPSE_SQI_MIN
     int "Minimum PPG SQI (x1000)"
     default 500

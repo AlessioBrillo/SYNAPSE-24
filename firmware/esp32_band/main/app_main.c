@@ -43,6 +43,9 @@
 #include "synapse_edge_ai.h"
 #include "synapse_signal_quality.h"
 #include "synapse_config.h"
+#include "synapse_identity.h"
+#include "synapse_calibration.h"
+#include "synapse_factory_cli.h"
 #include "synapse_power.h"
 #include "synapse_feature_map.h"
 #include "synapse_rr.h"
@@ -168,6 +171,13 @@ void app_main(void)
         ESP_LOGW(TAG, "Config load failed, using defaults: %s", esp_err_to_name(ret));
     }
 
+    // 3b. Factory calibration shell on the USB serial console. Compiled only
+    //     with CONFIG_SYNAPSE_FACTORY_MODE: a production image has no command
+    //     that can overwrite the per-unit gain.
+#if defined(CONFIG_SYNAPSE_FACTORY_MODE)
+    synapse_factory_cli_start();
+#endif
+
     // 4. Initialize sensors (ECG, PPG, IMU, GPS, Temp)
     //    band-core build: ECG + PPG + IMU only.
     ret = synapse_sensors_init();
@@ -218,14 +228,21 @@ void app_main(void)
     synapse_ble_gatt_set_transmit_handler(on_transmit_request);
     synapse_ble_gatt_set_time_handler(on_set_time);
 
-    // 8a. Device Information: serial derived from the public MAC so Averyn can
-    //     bind device -> owner (serial printed on box/QR). HW rev from Kconfig.
+    // 8a. Device Information: a stable serial derived from the full MAC on
+    //     first boot and then kept in NVS. Three MAC bytes used to collide in
+    //     a batch; the QR on the box carries this same 12-hex-digit value.
     {
+        esp_err_t id_err = ESP_OK;
         uint8_t mac[6] = {0};
         esp_efuse_mac_get_default(mac);
-        char serial[16];
-        snprintf(serial, sizeof(serial), "SYN-%02X%02X%02X", mac[3], mac[4], mac[5]);
-        synapse_ble_gatt_set_device_info("Synapse", "Band v1", serial,
+        char serial[SYNAPSE_IDENTITY_SERIAL_MAX];
+        snprintf(serial, sizeof(serial), "SYN-%02X%02X%02X%02X%02X%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        id_err = synapse_identity_init(serial);
+        if (id_err != ESP_OK) {
+            ESP_LOGE(TAG, "identity init failed: %s", esp_err_to_name(id_err));
+        }
+        synapse_ble_gatt_set_device_info("Synapse", "Band v1", synapse_identity_serial(),
                                          CONFIG_SYNAPSE_FIRMWARE_VERSION,
                                          CONFIG_SYNAPSE_HARDWARE_VERSION);
     }

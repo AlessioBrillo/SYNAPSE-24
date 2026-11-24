@@ -254,12 +254,17 @@ esp_err_t imu_icm20948_read(sensor_sample_t* sample, void* user_ctx) {
     int16_t my_raw = s_ctx.mag_raw[1];
     int16_t mz_raw = s_ctx.mag_raw[2];
 
-    sample->data.imu.ax = ax_raw * s_ctx.accel_scale;
-    sample->data.imu.ay = ay_raw * s_ctx.accel_scale;
-    sample->data.imu.az = az_raw * s_ctx.accel_scale;
-    sample->data.imu.gx = gx_raw * s_ctx.gyro_scale * (M_PI / 180.0f);
-    sample->data.imu.gy = gy_raw * s_ctx.gyro_scale * (M_PI / 180.0f);
-    sample->data.imu.gz = gz_raw * s_ctx.gyro_scale * (M_PI / 180.0f);
+    // Per-unit bias correction from the calibration record. The sample stays
+    // in the driver's units (g and rad/s); only the zero point changes.
+    const float dps_to_rad = (float)(M_PI / 180.0);
+    const float accel_bias_g = 0.001f;
+    const float gyro_bias_rad = 0.001f * dps_to_rad;
+    sample->data.imu.ax = ax_raw * s_ctx.accel_scale - (float)s_ctx.config.accel_bias_mg[0] * accel_bias_g;
+    sample->data.imu.ay = ay_raw * s_ctx.accel_scale - (float)s_ctx.config.accel_bias_mg[1] * accel_bias_g;
+    sample->data.imu.az = az_raw * s_ctx.accel_scale - (float)s_ctx.config.accel_bias_mg[2] * accel_bias_g;
+    sample->data.imu.gx = gx_raw * s_ctx.gyro_scale * dps_to_rad - (float)s_ctx.config.gyro_bias_mdps[0] * gyro_bias_rad;
+    sample->data.imu.gy = gy_raw * s_ctx.gyro_scale * dps_to_rad - (float)s_ctx.config.gyro_bias_mdps[1] * gyro_bias_rad;
+    sample->data.imu.gz = gz_raw * s_ctx.gyro_scale * dps_to_rad - (float)s_ctx.config.gyro_bias_mdps[2] * gyro_bias_rad;
     sample->data.imu.mx = mx_raw * s_ctx.mag_scale;
     sample->data.imu.my = my_raw * s_ctx.mag_scale;
     sample->data.imu.mz = mz_raw * s_ctx.mag_scale;

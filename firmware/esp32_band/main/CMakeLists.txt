@@ -23,7 +23,7 @@ elseif(EXISTS "${IDF_PATH}/components/esp_efuse")
     list(APPEND SYNAPSE_MAIN_REQUIRES esp_efuse)
 endif()
 
-idf_component_register(SRCS "app_main.c"
+idf_component_register(SRCS "app_main.c" "synapse_factory_cli.c"
                     INCLUDE_DIRS "."
                     REQUIRES ${SYNAPSE_MAIN_REQUIRES}
                     PRIV_REQUIRES ${SYNAPSE_MAIN_PRIV_REQUIRES})

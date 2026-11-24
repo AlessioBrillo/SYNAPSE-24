@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "synapse_sensors.h"
 #include "synapse_config.h"
+#include "synapse_calibration.h"
 #include "sensor_scheduler.h"
 #include "ecg_ad8232.h"
 #include "ppg_max30102.h"
@@ -32,6 +33,8 @@
 static const char *TAG = "SYNAPSE_SENSORS";
 
 static synapse_sensors_t g_sensors = {0};
+static synapse_calibration_t s_calibration;
+static bool s_has_calibration = false;
 
 // The sensor tasks read their sensor_config_t for as long as they live, so the
 // configs (and handles) must have static storage duration.
@@ -80,6 +83,12 @@ static void populate_sensor_configs(const synapse_hw_config_t *hw_cfg) {
     g_sensors.imu_config.gyro_fsr_dps = hw_cfg->imu_gyro_fsr_dps;
     g_sensors.imu_config.accel_odr_hz = hw_cfg->imu_accel_odr_hz;
     g_sensors.imu_config.gyro_odr_hz = hw_cfg->imu_gyro_odr_hz;
+    if (s_has_calibration) {
+        memcpy(g_sensors.imu_config.accel_bias_mg, s_calibration.accel_bias_mg,
+               sizeof(g_sensors.imu_config.accel_bias_mg));
+        memcpy(g_sensors.imu_config.gyro_bias_mdps, s_calibration.gyro_bias_mdps,
+               sizeof(g_sensors.imu_config.gyro_bias_mdps));
+    }
 
     // GPS
     g_sensors.gps_config.uart_port = hw_cfg->gps_uart_port;
@@ -261,12 +270,33 @@ esp_err_t synapse_sensors_init(void) {
         return ESP_OK;
     }
 
-    // Load hardware configuration
+    // Load hardware configuration, then overlay the per-unit calibration.
+    // Kconfig stays the default for an uncalibrated band; the NVS record is
+    // the measured truth for this serial. A corrupt record is reported and
+    // ignored, never applied as an unknown scale factor.
     synapse_hw_config_t hw_cfg;
     esp_err_t cfg_err = synapse_config_get(&hw_cfg);
     if (cfg_err != ESP_OK) {
         ESP_LOGE(TAG, "Hardware configuration unavailable: %s", esp_err_to_name(cfg_err));
         return cfg_err;
+    }
+    s_has_calibration = false;
+    esp_err_t cal_err = synapse_calibration_load(&s_calibration);
+    if (cal_err != ESP_OK) {
+        ESP_LOGW(TAG, "Calibration unavailable (%s): using Kconfig defaults", esp_err_to_name(cal_err));
+    } else if (synapse_calibration_valid(&s_calibration)) {
+        s_has_calibration = true;
+        if (s_calibration.ecg_gain_x100 > 0u) {
+            hw_cfg.ecg_gain = (float)s_calibration.ecg_gain_x100 / 100.0f;
+        }
+        if (s_calibration.ppg_led_red > 0u) {
+            hw_cfg.ppg_led_current_red = s_calibration.ppg_led_red;
+        }
+        if (s_calibration.ppg_led_ir > 0u) {
+            hw_cfg.ppg_led_current_ir = s_calibration.ppg_led_ir;
+        }
+        ESP_LOGI(TAG, "Applied calibration for %s (source=%s)",
+                 s_calibration.serial, synapse_calibration_state());
     }
     populate_sensor_configs(&hw_cfg);
 
@@ -505,6 +535,7 @@ esp_err_t synapse_sensors_get_gps(gps_data_t *gps) {
 #ifdef CONFIG_SYNAPSE_FEATURE_TEMPERATURE
 esp_err_t synapse_sensors_get_temp(temp_data_t *temp) {
     if (!temp) return ESP_ERR_INVALID_ARG;
+    if (!s_temp_ok) return ESP_ERR_INVALID_STATE;  // init failed: never read an unstarted driver
     return temp_tmp117_get_latest(temp);
 }
 #endif

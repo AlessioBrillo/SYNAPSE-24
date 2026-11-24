@@ -34,6 +34,10 @@ CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE=y
 # SYNAPSE_HUB_BATTERY_MAH): 500 for the spare cell, 2000 for a 2000 mAh one.
 CONFIG_SYNAPSE_HUB_BATTERY_MAH=1000
 
+# The smoke rig must not borrow the 5 mW system target's credibility: the
+# tier model uses the conservative kit envelope until the INA219 measures it.
+CONFIG_SYNAPSE_POWER_PROFILE_KIT=y
+
 # Debug logging for bringup: the smoke-kit rig needs the I2C/BLE diagnostics.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_INFO=y

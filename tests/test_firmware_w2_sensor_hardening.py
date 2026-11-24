@@ -462,7 +462,8 @@ def test_the_sensors_cannot_be_split_over_two_i2c_ports() -> None:
 
 def test_the_stored_configuration_layout_changed_so_its_version_did() -> None:
     header = _text(BAND / "config" / "synapse_config.h")
-    assert re.search(r"#define SYNAPSE_CONFIG_VERSION\s+2\b", header)
+    # 3 adds the kit/system power profile to the stored blob (MVP-2.1).
+    assert re.search(r"#define SYNAPSE_CONFIG_VERSION\s+3\b", header)
     assert "i2c_sda_gpio" in header
     assert "i2c_freq_hz" in header
 
