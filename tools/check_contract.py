@@ -352,11 +352,10 @@ def check_sensor_config(hw: dict, report: Report) -> None:  # noqa: PLR0915 - on
             "SYNAPSE_INA219_MAX_CURRENT_MA",
             "ina219_config.max_current_ma",
         )
-        bringup_sync = _load(BRINGUP_YAML).get("bringup", {}).get("sync", {}).get("wired_sync_gpio")
         report.check(
-            sync.get("wired_gpio") == bringup_sync,
+            sync.get("wired_gpio") == hw.get("sync", {}).get("wired_sync_gpio"),
             f"{pid}: sync_config.wired_gpio={sync.get('wired_gpio')} differs from "
-            f"hardware_bringup.yaml ({bringup_sync})",
+            f"hardware.yaml sync.wired_sync_gpio ({hw.get('sync', {}).get('wired_sync_gpio')})",
         )
 
         i2c_default_port = _kconfig_default("SYNAPSE_PPG_I2C_PORT")
@@ -744,6 +743,138 @@ def check_canonical_firmware_paths(report: Report) -> None:
     )
 
 
+def _defaults_value(path: Path, symbol: str) -> int | None:
+    """The integer value of ``symbol`` in an sdkconfig.defaults file."""
+    if not path.is_file():
+        return None
+    match = re.search(rf"^{symbol}=(\d+)\s*$", path.read_text(encoding="utf-8"), re.M)
+    return int(match.group(1)) if match else None
+
+
+def check_generated_hardware_values(hw: dict, report: Report) -> None:
+    """The generated C constants must be the ones the firmware actually uses.
+
+    Wired sync GPIO and the INA219 front-end used to be typed a second time in
+    a firmware header and in the bringup YAML. They are now generated from the
+    manifest; this check makes sure no stale copy creeps back and that the
+    generated macros really are consumed by the drivers.
+    """
+    gpio = hw.get("sync", {}).get("wired_sync_gpio")
+    header = CONTRACT_H.read_text(encoding="utf-8") if CONTRACT_H.is_file() else ""
+    report.check(
+        gpio is not None and f"#define SYNAPSE_CONTRACT_WIRED_SYNC_GPIO {gpio}" in header,
+        f"the generated contract header does not carry sync.wired_sync_gpio={gpio}",
+    )
+    sync_h = ROOT / "firmware" / "common" / "sync" / "wired_sync_handler.h"
+    sync_src = sync_h.read_text(encoding="utf-8") if sync_h.is_file() else ""
+    report.check(
+        "#define SYNAPSE_WIRED_SYNC_GPIO           SYNAPSE_CONTRACT_WIRED_SYNC_GPIO" in sync_src
+        and not re.search(r"#define SYNAPSE_WIRED_SYNC_GPIO\s+\d+", sync_src),
+        "wired_sync_handler.h must use SYNAPSE_CONTRACT_WIRED_SYNC_GPIO, not a literal pin",
+    )
+
+    ina = _pod(hw, "forearm_hub").get("metadata", {}).get("ina219_config", {})
+    for key, macro in (
+        ("i2c_addr", "SYNAPSE_CONTRACT_INA219_I2C_ADDR"),
+        ("shunt_mohm", "SYNAPSE_CONTRACT_INA219_SHUNT_MOHM"),
+        ("max_current_ma", "SYNAPSE_CONTRACT_INA219_MAX_CURRENT_MA"),
+    ):
+        value = ina.get(key)
+        rendered = f"0x{int(value):02X}" if key == "i2c_addr" else str(value)
+        report.check(
+            f"#define {macro} {rendered}" in header,
+            f"the generated contract header does not carry ina219_config.{key}={rendered}",
+        )
+    power_c = FIRMWARE_DIR / "power" / "synapse_power.c"
+    power_src = power_c.read_text(encoding="utf-8") if power_c.is_file() else ""
+    report.check(
+        all(
+            f"SYNAPSE_CONTRACT_{name}" in power_src
+            for name in (
+                "INA219_I2C_ADDR",
+                "INA219_SHUNT_MOHM",
+                "INA219_MAX_CURRENT_MA",
+            )
+        ),
+        "synapse_power.c must initialise the INA219 from the generated contract macros",
+    )
+
+
+def check_config_readback(report: Report) -> None:
+    """The flashed-configuration proof must exist on both sides of the link."""
+    server = FIRMWARE_DIR / "ble" / "ble_gatt_server.c"
+    src = server.read_text(encoding="utf-8") if server.is_file() else ""
+    keys = (
+        "ecg_hz",
+        "ppg_hz",
+        "imu_hz",
+        "ecg_gain_x100",
+        "ppg_led_red",
+        "ppg_led_ir",
+        "battery_mah",
+    )
+    report.check(
+        "build_config_readback" in src and all(f'\\"{key}\\"' in src for key in keys),
+        "the device-config characteristic must publish the live rates, gain, LEDs "
+        "and battery capacity as JSON",
+    )
+    report.check(
+        "synapse_calibration_load" in src,
+        "the config readback must include the NVS calibration record, not only Kconfig",
+    )
+    validator = ROOT / "scripts" / "validate_phase1_entry.py"
+    host = validator.read_text(encoding="utf-8") if validator.is_file() else ""
+    report.check(
+        'DEVICE_CONFIG_UUID = CONTRACT_UUIDS["CONSUMER_DEVICE_CONFIG"]' in host,
+        "the host validator must read the device-config UUID from the generated contract",
+    )
+
+
+def check_bringup_truth(hw: dict, bringup: dict, report: Report) -> None:
+    """The live-run knobs must agree with the firmware and carry no dead copies."""
+    bring = bringup.get("bringup", {})
+    power = hw.get("power_budget", {})
+    report.check(
+        power.get("hub_battery_mah") == _kconfig_default("SYNAPSE_HUB_BATTERY_MAH"),
+        "hardware.yaml power_budget.hub_battery_mah disagrees with the firmware Kconfig default "
+        f"({power.get('hub_battery_mah')} vs {_kconfig_default('SYNAPSE_HUB_BATTERY_MAH')})",
+    )
+    core_capacity = _defaults_value(
+        FIRMWARE_DIR / "sdkconfig.defaults.core", "CONFIG_SYNAPSE_HUB_BATTERY_MAH"
+    )
+    live_capacity = bring.get("power_budget", {}).get("hub_battery_mah")
+    report.check(
+        live_capacity is not None and live_capacity == core_capacity,
+        f"the G1 bringup battery capacity ({live_capacity}) must match the band-core firmware "
+        f"({core_capacity}) and the fitted soak cell",
+    )
+    report.check(
+        "power_monitor" not in bring,
+        "hardware_bringup.yaml still carries a dead power_monitor block; "
+        "power_budget.hub_battery_mah is the live value",
+    )
+
+    streams = bring.get("lsl", {}).get("streams", [])
+    report.check(
+        bool(streams) and all("{serial}" in s.get("source_id", "") for s in streams),
+        "every bringup LSL source_id must carry a {serial} template: two bands must not "
+        "produce indistinguishable recordings",
+    )
+    validation = bring.get("validation", {})
+    required = validation.get("required_gates", {})
+    live_required = set(required.get("live") or [])
+    report.check(
+        {
+            "hr_accuracy",
+            "rmssd_accuracy",
+            "ppg_sqi",
+            "ppg_map",
+            "power_telemetry_measured",
+        }.issubset(live_required),
+        "the G1 live gate set must require the cardiac measurements and a measured POWER stream",
+    )
+
+
 # Files that previously carried stale 64/100 Hz literals. Each is checked for
 # both the literal and for the presence of the manifest-derived replacement,
 # so the drift cannot silently return.
@@ -921,6 +1052,9 @@ def main() -> int:
     check_consumer_service_contract(hw, report)
     check_raw_frame_contract(hw, report)
     check_canonical_firmware_paths(report)
+    check_generated_hardware_values(hw, report)
+    check_config_readback(report)
+    check_bringup_truth(hw, bringup, report)
     check_no_legacy_rate_literals(report)
     check_stale_uuid_gone_from_sources(args.stale_scan_root or ROOT, report)
     check_fit_developer_names(

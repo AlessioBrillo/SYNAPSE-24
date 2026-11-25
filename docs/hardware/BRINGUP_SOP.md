@@ -75,9 +75,10 @@ only the I²C wires attached the POWER stream will happily report `0 mA`, and a
 zero reading is indistinguishable from a working measurement. Before the first
 session, verify the reading against a **known load** (a resistor drawing a
 known current from the same rail); the ratio measured/expected must be ~1
-(§4a). The 0.1 Ω shunt and address 0x40 are in the firmware Kconfig
-(`SYNAPSE_INA219_SHUNT_MOHM`, `SYNAPSE_INA219_I2C_ADDR`), not in `hardware.yaml`; a shunt of a
-different value is a Kconfig fix.
+(§4a). The 0.1 Ω shunt and address 0x40 are declared once in
+`config/hardware.yaml` (`metadata.ina219_config`); `tools/generate_contracts.py`
+generates the C macros the driver uses, and `tools/check_contract.py` fails on
+drift. Do not edit Kconfig to change a shunt: change the contract.
 
 Add 4.7 kΩ pull-ups on SDA/SCL if your breakouts do not include them — a
 missing pull-up presents as `ESP_ERR_NOT_FOUND` on the PPG PART_ID.
@@ -237,12 +238,24 @@ uv run python scripts/validate_phase1_entry.py --live-hardware \
 
 The validator must report, in this order:
 1. streams resolved with the expected rates (500 / 50 / 50 / 50 / 50),
-2. HR within tolerance of a manual pulse count,
-3. RMSSD within tolerance of a NeuroKit2 reference on the same recording,
-4. PPG SQI ≥ 0.3 and MAP ≤ 0.5 sustained,
+2. HR within MAE ≤ 2 bpm of a manual pulse count — set
+   `validation.manual_hr_bpm` in `hardware_bringup.yaml` before the run;
+   without it the gate is N/A and a live run FAILS,
+3. RMSSD within MAE < 5 ms of a NeuroKit2 reference on the same recording —
+   `validation.ground_truth_ecg_path` points to an `.npz` with key `r_peaks`;
+   without it a live run FAILS,
+4. PPG SQI ≥ 0.3 and MAP ≤ 0.5 sustained > 30 s,
 5. **zero dropped frames**,
-6. XDF round-trip valid and timestamps monotonic.
+6. XDF round-trip valid and timestamps monotonic — on a soak this is the
+   LabRecorder file itself, not a second XDF rebuilt from the spool,
+7. measured INA219 POWER frames (a tier model does not count),
+8. the pod's boot-time configuration matching `config/hardware.yaml`, read
+   from its device-config characteristic.
 
+Every gate has a status: PASS, FAIL or N/A. **N/A is not a pass** — the live
+profile requires rows 2–8, so a missing reference, a silent POWER stream or a
+pod that cannot report its configuration fails the run. Tier-1 sync and EEG
+quality are N/A until a second pod and the Cerelog are actually connected.
 Step 5 is the one people skip. A recording with a hole is worse than a
 recording that stopped, because the hole is silent. `ResearchStreamDecoder`
 counts it; do not override it.
@@ -321,8 +334,13 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    nominal value. Feed a known signal into the electrode inputs (a function
    generator through a divider, or a 1 mVpp 10 Hz sine), read the ECG stream,
    and compute `gain_measured = (mV measured at the output) / (mV applied)`.
-   Write it into `config/hardware.yaml` (`ecg_config.gain_measured`) and into
-   `SYNAPSE_ECG_GAIN` (menuconfig, gain x 100: this is the knob the firmware reads); the µV
+   **Write the measured value into the band's NVS**, never into `hardware.yaml`
+   or `SYNAPSE_ECG_GAIN`: `scripts/g1_measure.py gain` emits the JSON that
+   `scripts/factory_calibrate.py --gain-json` writes to
+   `data/calibration/<serial>.json` and to the device. The firmware applies
+   that record at boot, so no reflash is needed per unit. `CONFIG_SYNAPSE_ECG_GAIN`
+   and `ecg_config.gain` are only the factory default; `ecg_config.gain_measured`
+   in the manifest is documentation of the nominal value. The µV
    scale of every ECG SNR claim hangs on this number, so it is per-rig and
    recalibrated whenever a breakout is replaced. The generator is connected
    **off the body only** (see *Safety*).
@@ -330,6 +348,9 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    generator amplitude set the floor); a `gain_measured` more than ±15 % away from
    the nominal 1100 is accepted but must be written down as "clone differs from
    nominal", and one more than 2× away means a wrong Kconfig value or breakout.
+   **Proof:** the validator reads the device-config characteristic before the
+   recording and fails `flashed_config_matches_contract` if the pod's live gain,
+   rates, LED currents or battery capacity differ from the contract.
 3. **I²C sanity**: if the PPG or IMU is absent from the boot log, add 4,7 kΩ
    pull-ups on SDA/SCL before replacing sensors — see the troubleshooting
    table. (The kit assumes your breakouts include them; if not, add them

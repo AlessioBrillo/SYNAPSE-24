@@ -43,24 +43,31 @@ disqualifier for the kit — they are simply not what this rig demonstrates.
 
 ## Battery arithmetic for the SOP (the honest constraint)
 
-`PROCUREMENT.md` buys a 500 mAh LiPo for the soak. At the kit envelope:
+`PROCUREMENT.md` buys **two 500 mAh cells** (untethered bench measurement and
+the second pod) and **one 1000+ mAh cell for the G1 soak**. The 500 mAh cells
+are deliberately *not* the soak battery: at the kit envelope the centre of
+the range would kill a 6-hour run.
 
-| Draw | 500 mAh runtime | 6 h SOP soak? |
-|---|---|---|
-| 150 mW (envelope floor) | ~12.3 h | yes |
-| 250 mW | ~7.4 h | yes |
-| 425 mW | ~4.3 h | **no — the soak would die mid-run** |
-| 600 mW (envelope ceiling) | ~3.1 h | **no** |
+| Draw | 500 mAh (bench cell) | 1000 mAh (soak cell) | 6 h SOP soak? |
+|---|---|---|---|
+| 150 mW (envelope floor) | ~12.3 h | ~24.6 h | yes |
+| 250 mW | ~7.4 h | ~14.8 h | yes |
+| 425 mW (kit model) | ~4.3 h | ~8.7 h | **only on the 1000 mAh cell** |
+| 600 mW (envelope ceiling) | ~3.1 h | ~6.2 h | marginal — measure first |
 
-(500 mAh × 3.7 V = 1.85 Wh; runtime = 1.85 Wh / draw.) These are **upper bounds**: they
-ignore the regulator's efficiency and the cell's cutoff voltage, so only about 80 % of
-the nominal energy is usable. At 250 mW that is closer to 5.9 h than 7.4 h, which is one
-more reason the soak uses the 1000+ mAh cell.
+(1 Ah × 3.7 V = 3.7 Wh; runtime = Wh / draw.) These are **upper bounds**: they
+ignore the regulator's efficiency and the cell's cutoff voltage, so only about
+80 % of the nominal energy is usable. At 425 mW the 1000 mAh cell is closer to
+7 h than 8.7 h, which is why the soak states the expected runtime before it
+starts.
 
-So the SOP now states the runtime explicitly before the soak starts, and the
-kit carries **one 1000–2000 mAh LiPo** (≈€8–12) for the 6-hour session. A
-soak that dies from battery is not a failed gate; it is a gate that never
-ran — both wasted, one of them silently.
+The 1000 mAh figure is the one used by both the host gate report and the
+band-core firmware (`power_budget.hub_battery_mah` in
+`config/hardware_bringup.yaml` and `CONFIG_SYNAPSE_HUB_BATTERY_MAH` in
+`sdkconfig.defaults.core`); `tools/check_contract.py` asserts they agree. Fit
+a different cell, change both values, and write the measured capacity into the
+gate report. A soak that dies from battery is not a failed gate; it is a gate
+that never ran — both wasted, one of them silently.
 
 ## What the measurement feeds
 

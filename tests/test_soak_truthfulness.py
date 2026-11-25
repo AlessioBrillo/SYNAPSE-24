@@ -252,3 +252,11 @@ class TestRecorderTruth:
         path = Path(gate["artifact"]["path"])
         assert path.exists()
         assert gate["artifact_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+        # The file that is fingerprinted is the file that is gated. The old
+        # soak hashed the recorder's file but ran validate_xdf on a second XDF
+        # rebuilt from the spool, so the green gate described a different file.
+        assert report.xdf_path == str(path)
+        integrity = gate["measurements"]["xdf_integrity"]
+        assert integrity["path"] == str(path)
+        assert "LabRecorderCLI" in integrity["source"]

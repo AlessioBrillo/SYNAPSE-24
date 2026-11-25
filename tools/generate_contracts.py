@@ -291,6 +291,20 @@ def _contract_values() -> dict[str, Any]:
 
     rates = pod.get("sampling_rate") or {}
 
+    # Bringup-relevant hardware values that used to be spelled out a second
+    # time in firmware headers and in the validator config. They are generated
+    # exactly like the UUIDs: changing the manifest changes every consumer.
+    wired_gpio = (manifest.get("sync") or {}).get("wired_sync_gpio")
+    if not isinstance(wired_gpio, int) or not 0 <= wired_gpio <= 48:
+        raise SystemExit(f"{MANIFEST}: sync.wired_sync_gpio must be a GPIO number in 0..48")
+    ina = pod_meta.get("ina219_config") or {}
+    ina219: dict[str, int] = {}
+    for key in ("i2c_addr", "shunt_mohm", "max_current_ma"):
+        value = ina.get(key)
+        if not isinstance(value, int) or value <= 0:
+            raise SystemExit(f"{MANIFEST}: metadata.ina219_config.{key} must be a positive int")
+        ina219[key] = value
+
     uuids: dict[str, str] = {
         "RESEARCH_SERVICE": str(pod_meta.get("research_service_uuid", "")).lower(),
         "CONSUMER_SERVICE": str(feature.get("service_uuid", "")).lower(),
@@ -321,6 +335,8 @@ def _contract_values() -> dict[str, Any]:
         "uuids": uuids,
         "stream_ids": {str(k): int(v) for k, v in stream_ids.items()},
         "rates": {str(k): int(v) for k, v in rates.items()},
+        "wired_sync_gpio": wired_gpio,
+        "ina219": ina219,
         "fit_fields": [(str(f["name"]), int(f["id"])) for f in fit_fields],
     }
 
@@ -361,6 +377,14 @@ def _render_c(values: dict[str, Any]) -> str:
     lines += ["", "/* Normative sample rates (Hz). */"]
     for name, value in sorted(values["rates"].items()):
         lines.append(f"#define SYNAPSE_CONTRACT_RATE_{name.upper()}_HZ {value}")
+    lines += [
+        "",
+        "/* Wired sync GPIO and INA219 front-end, generated from hardware.yaml. */",
+        f"#define SYNAPSE_CONTRACT_WIRED_SYNC_GPIO {values['wired_sync_gpio']}",
+        f"#define SYNAPSE_CONTRACT_INA219_I2C_ADDR 0x{values['ina219']['i2c_addr']:02X}",
+        f"#define SYNAPSE_CONTRACT_INA219_SHUNT_MOHM {values['ina219']['shunt_mohm']}",
+        f"#define SYNAPSE_CONTRACT_INA219_MAX_CURRENT_MA {values['ina219']['max_current_ma']}",
+    ]
     lines += _render_c_v2(values["v2"])
     lines += ["", ""]
     return "\n".join(lines)
@@ -426,9 +450,11 @@ def _render_python(values: dict[str, Any]) -> str:
         "__all__ = [",
         '    "CONSUMER_CONTRACT_VERSION",',
         '    "FIT_DEV_FIELDS",',
+        '    "INA219_CONFIG",',
         '    "STREAM_IDS",',
         '    "STREAM_RATES_HZ",',
         '    "UUIDS",',
+        '    "WIRED_SYNC_GPIO",',
         "]",
         "",
         "#: Version of the consumer contract (config/hardware.yaml ble.consumer_v2.version).",
@@ -454,6 +480,17 @@ def _render_python(values: dict[str, Any]) -> str:
         "STREAM_RATES_HZ: dict[str, int] = {",
     ]
     for name, value in sorted(values["rates"].items()):
+        lines.append(f'    "{name}": {value},')
+    lines += [
+        "}",
+        "",
+        "#: GPIO of the hardwired Tier 1 sync marker (config/hardware.yaml sync).",
+        f"WIRED_SYNC_GPIO: int = {values['wired_sync_gpio']}",
+        "",
+        "#: INA219 current monitor front-end (config/hardware.yaml metadata.ina219_config).",
+        "INA219_CONFIG: dict[str, int] = {",
+    ]
+    for name, value in sorted(values["ina219"].items()):
         lines.append(f'    "{name}": {value},')
     lines += [
         "}",

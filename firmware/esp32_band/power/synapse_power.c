@@ -18,6 +18,10 @@
 #include "synapse_power.h"
 #include "synapse_config.h"
 #include "synapse_adc1.h"
+// INA219 front-end values are generated from config/hardware.yaml. Kconfig
+// still gates the feature and the bus port, but the electrical values have
+// exactly one owner; a stale Kconfig value fails the build here.
+#include "synapse_contract_generated.h"
 #ifdef CONFIG_SYNAPSE_FEATURE_POWER_MONITOR
 #include "ina219.h"
 #endif
@@ -27,6 +31,14 @@
 // This one is a Kconfig value outside the runtime configuration, so it is checked at build time.
 #if defined(CONFIG_SYNAPSE_FEATURE_POWER_MONITOR) && (CONFIG_SYNAPSE_INA219_I2C_PORT != CONFIG_SYNAPSE_PPG_I2C_PORT)
 #error "CONFIG_SYNAPSE_INA219_I2C_PORT must equal CONFIG_SYNAPSE_PPG_I2C_PORT: all sensors share one I2C bus"
+#endif
+#if defined(CONFIG_SYNAPSE_FEATURE_POWER_MONITOR)
+_Static_assert(CONFIG_SYNAPSE_INA219_I2C_ADDR == SYNAPSE_CONTRACT_INA219_I2C_ADDR,
+               "Kconfig INA219 address disagrees with config/hardware.yaml");
+_Static_assert(CONFIG_SYNAPSE_INA219_SHUNT_MOHM == SYNAPSE_CONTRACT_INA219_SHUNT_MOHM,
+               "Kconfig INA219 shunt disagrees with config/hardware.yaml");
+_Static_assert(CONFIG_SYNAPSE_INA219_MAX_CURRENT_MA == SYNAPSE_CONTRACT_INA219_MAX_CURRENT_MA,
+               "Kconfig INA219 range disagrees with config/hardware.yaml");
 #endif
 
 static const char *TAG = "SYNAPSE_POWER";
@@ -124,12 +136,12 @@ esp_err_t synapse_power_init(void) {
     // the current figure is a model rather than a measurement.
     ina219_config_t ina_cfg = {
         .i2c_port = CONFIG_SYNAPSE_INA219_I2C_PORT,
-        .i2c_addr = CONFIG_SYNAPSE_INA219_I2C_ADDR,
+        .i2c_addr = SYNAPSE_CONTRACT_INA219_I2C_ADDR,
         .sda_gpio = hw_cfg.i2c_sda_gpio,
         .scl_gpio = hw_cfg.i2c_scl_gpio,
         .i2c_freq_hz = hw_cfg.i2c_freq_hz,
-        .shunt_ohm = CONFIG_SYNAPSE_INA219_SHUNT_MOHM / 1000.0f,
-        .max_expected_a = CONFIG_SYNAPSE_INA219_MAX_CURRENT_MA / 1000.0f,
+        .shunt_ohm = SYNAPSE_CONTRACT_INA219_SHUNT_MOHM / 1000.0f,
+        .max_expected_a = SYNAPSE_CONTRACT_INA219_MAX_CURRENT_MA / 1000.0f,
     };
     esp_err_t ina_ret = ina219_init(&ina_cfg);
     if (ina_ret == ESP_OK) {

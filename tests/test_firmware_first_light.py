@@ -186,8 +186,21 @@ def _band_gpio_map() -> dict[str, int]:
         "gps_rx": _kconfig_int("SYNAPSE_GPS_UART_RX_GPIO"),
         "i2c_sda": 8,
         "i2c_scl": 9,
-        "wired_sync": int(re.search(r"SYNAPSE_WIRED_SYNC_GPIO\s+(\d+)", _src(WIRED_H)).group(1)),  # type: ignore[union-attr]
+        "wired_sync": _wired_sync_gpio(),
     }
+
+
+def _wired_sync_gpio() -> int:
+    """The pin is generated from hardware.yaml, not typed in the header."""
+    header = _src(WIRED_H)
+    literal = re.search(r"#define SYNAPSE_WIRED_SYNC_GPIO\s+(\d+)", header)
+    if literal:
+        return int(literal.group(1))
+    generated = _src(BAND / "ble" / "synapse_contract_generated.h")
+    value = re.search(r"#define SYNAPSE_CONTRACT_WIRED_SYNC_GPIO\s+(\d+)", generated)
+    assert value is not None, "the contract must declare the wired sync GPIO"
+    assert "SYNAPSE_CONTRACT_WIRED_SYNC_GPIO" in header, "the driver must use the generated pin"
+    return int(value.group(1))
 
 
 def test_no_default_pin_is_shared_between_two_functions() -> None:
