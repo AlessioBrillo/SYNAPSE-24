@@ -8,6 +8,7 @@
  */
 
 #include <string.h>
+#include <stdio.h>
 #include <assert.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -28,6 +29,7 @@
 #include "synapse_provisioning.h"
 #endif
 #include "synapse_config.h"
+#include "synapse_calibration.h"
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_connected = false;
@@ -211,9 +213,48 @@ static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+/**
+ * Build the read-only device-config snapshot.
+ *
+ * The host validator reads this before the recording starts and compares it
+ * with config/hardware.yaml. It is the proof that the flashed unit really
+ * runs the rates, gain, LED currents and battery capacity the manifest says —
+ * a stale sdkconfig used to produce a plausible but wrongly scaled dataset
+ * (the gain trap in docs/hardware/FIRST_HARDWARE_DAY.md).
+ */
+static void build_config_readback(uint8_t *buf, size_t cap) {
+    synapse_hw_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    if (synapse_config_get(&cfg) != ESP_OK) {
+        snprintf((char *)buf, cap, "{\"v\":1,\"error\":\"config_unavailable\"}");
+        return;
+    }
+    uint32_t gain_x100 = (uint32_t)CONFIG_SYNAPSE_ECG_GAIN;
+    uint8_t led_red = cfg.ppg_led_current_red;
+    uint8_t led_ir = cfg.ppg_led_current_ir;
+    synapse_calibration_t cal;
+    if (synapse_calibration_load(&cal) == ESP_OK && synapse_calibration_valid(&cal)) {
+        if (cal.ecg_gain_x100 != 0) gain_x100 = cal.ecg_gain_x100;
+        if (cal.ppg_led_red != 0) led_red = cal.ppg_led_red;
+        if (cal.ppg_led_ir != 0) led_ir = cal.ppg_led_ir;
+    }
+    snprintf((char *)buf, cap,
+             "{\"v\":1,\"fw\":\"%s\",\"ecg_hz\":%u,\"ppg_hz\":%u,\"imu_hz\":%u,"
+             "\"ecg_gain_x100\":%lu,\"ppg_led_red\":%u,\"ppg_led_ir\":%u,"
+             "\"battery_mah\":%u}",
+             synapse_config_get_fw_version(),
+             (unsigned)SYNAPSE_CONTRACT_RATE_ECG_HZ,
+             (unsigned)synapse_ppg_rate_hz(cfg.ppg_sample_rate),
+             (unsigned)cfg.imu_accel_odr_hz,
+             (unsigned long)gain_x100, (unsigned)led_red, (unsigned)led_ir,
+             (unsigned)cfg.hub_battery_mah);
+}
+
 static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        build_config_readback(s_cfg_buf, sizeof(s_cfg_buf));
+        s_cfg_len = (uint16_t)strlen((const char *)s_cfg_buf);
         int rc = os_mbuf_append(ctxt->om, s_cfg_buf, s_cfg_len);
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }

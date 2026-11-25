@@ -10,9 +10,11 @@ from __future__ import annotations
 __all__ = [
     "CONSUMER_CONTRACT_VERSION",
     "FIT_DEV_FIELDS",
+    "INA219_CONFIG",
     "STREAM_IDS",
     "STREAM_RATES_HZ",
     "UUIDS",
+    "WIRED_SYNC_GPIO",
 ]
 
 #: Version of the consumer contract (config/hardware.yaml ble.consumer_v2.version).
@@ -55,6 +57,16 @@ STREAM_RATES_HZ: dict[str, int] = {
     "ecg": 500,
     "imu": 50,
     "ppg": 50,
+}
+
+#: GPIO of the hardwired Tier 1 sync marker (config/hardware.yaml sync).
+WIRED_SYNC_GPIO: int = 10
+
+#: INA219 current monitor front-end (config/hardware.yaml metadata.ina219_config).
+INA219_CONFIG: dict[str, int] = {
+    "i2c_addr": 64,
+    "max_current_ma": 2000,
+    "shunt_mohm": 100,
 }
 
 #: FIT developer fields: (name, contract id).

@@ -5,15 +5,18 @@
 #include "esp_err.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
+// Generated from config/hardware.yaml by tools/generate_contracts.py. The
+// pin used to be spelled out here (and in the bringup YAML) a second time;
+// the contract is now the only place that names it.
+#include "synapse_contract_generated.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Wired GPIO sync configuration (matches Python config/hardware_bringup.yaml)
-// GPIO 10 used for wired sync (I2C: SDA=GPIO 8, SCL=GPIO 9 on ESP32-S3).
-// Not GPIO 27: GPIO26-37 are SPI flash / octal PSRAM on the N8R8 module.
-#define SYNAPSE_WIRED_SYNC_GPIO           10
+// Wired GPIO sync configuration. GPIO 10 (I2C: SDA=GPIO 8, SCL=GPIO 9 on
+// ESP32-S3); not GPIO 27, since GPIO26-37 are SPI flash / octal PSRAM on N8R8.
+#define SYNAPSE_WIRED_SYNC_GPIO           SYNAPSE_CONTRACT_WIRED_SYNC_GPIO
 #define SYNAPSE_WIRED_SYNC_PULSE_WIDTH_US 10
 #define SYNAPSE_WIRED_SYNC_PULL_UP        true
 

@@ -79,35 +79,35 @@ bringup:
         channel_count: 1
         sampling_rate: 500
         channel_format: "float32"
-        source_id: "synapse_ecg_t0_001"
+        source_id: "synapse_ecg_t0_{serial}"
         tier: 0
       - name: "SYNAPSE_PPG_T0"
         type: "PPG"
         channel_count: 2  # Red + IR
         sampling_rate: 50
         channel_format: "float32"
-        source_id: "synapse_ppg_t0_001"
+        source_id: "synapse_ppg_t0_{serial}"
         tier: 0
       - name: "SYNAPSE_ACC_T0"
         type: "ACC"
         channel_count: 3
         sampling_rate: 50
         channel_format: "float32"
-        source_id: "synapse_acc_t0_001"
+        source_id: "synapse_acc_t0_{serial}"
         tier: 0
       - name: "SYNAPSE_GYRO_T0"
         type: "GYRO"
         channel_count: 3
         sampling_rate: 50
         channel_format: "float32"
-        source_id: "synapse_gyro_t0_001"
+        source_id: "synapse_gyro_t0_{serial}"
         tier: 0
       - name: "SYNAPSE_MAG_T0"
         type: "MAG"
         channel_count: 3
         sampling_rate: 50
         channel_format: "float32"
-        source_id: "synapse_mag_t0_001"
+        source_id: "synapse_mag_t0_{serial}"
         tier: 0
       # Power telemetry stream
       - name: "SYNAPSE_Power"
@@ -115,7 +115,7 @@ bringup:
         channel_count: 4  # voltage_mv, current_ma, power_mw, battery_percent
         sampling_rate: 1
         channel_format: "float32"
-        source_id: "synapse_power_001"
+        source_id: "synapse_power_{serial}"
         tier: 0
       # Sync markers (highest tier)
       - name: "SYNAPSE_Markers"
@@ -123,14 +123,14 @@ bringup:
         channel_count: 1
         sampling_rate: 0
         channel_format: "string"
-        source_id: "synapse_markers_001"
+        source_id: "synapse_markers_{serial}"
         tier: 1
 
-  # Clock synchronization - override mode for multi-pod
+  # Clock synchronization - override mode for multi-pod.
+  # The wired GPIO is declared once in config/hardware.yaml (sync.wired_sync_gpio)
+  # and generated into the firmware header: do not restate it here.
   sync:
     mode: "markers_only"  # Phase 1: markers_only (BLE); T1 needs markers_plus_acc + wired
-    # Wired sync GPIO for multi-pod (head_pod <-> forearm_hub) - GPIO 10 (I2C: SDA=GPIO 8, SCL=GPIO 9)
-    wired_sync_gpio: 10
 
   # Motion gate - relaxed for MAX30102 wrist PPG validation
   # Architecture.md §74: "measured-clean signal" - require 5 consecutive clean assessments for wrist
@@ -147,7 +147,35 @@ bringup:
     movement_threshold_g: 1.5
     xdf_output_dir: "data/processed/live_validation"
     xdf_filename_template: "synapse_live_{timestamp}.xdf"
-    ground_truth_ecg_path: null
+    ground_truth_ecg_path: null  # .npz with key `r_peaks` (indices at the ECG rate)
+    manual_hr_bpm: null  # manual pulse count for the G1 HR gate; required on live runs
+    hr_mae_max_bpm: 2.0  # PROCUREMENT.md measurement SOP row 5
+    rmssd_mae_max_ms: 5.0  # PROCUREMENT.md measurement SOP row 6
+    ppg_sustained_s: 30.0  # row 7: SQI/MAP must hold, not pass on one window
+
+    # A gate that cannot be evaluated is N/A, never PASS. The live profile is
+    # the G1 gate; the synthetic profile is the CI rehearsal. `overall_pass` is
+    # computed over the required list only, so an absent T1 pod cannot turn
+    # tier1_sync_1ms into a free pass.
+    required_gates:
+      live:
+        - xdf_zero_drop
+        - research_stream_zero_loss
+        - tier0_sync_10ms
+        - ppg_completeness
+        - sample_rate_accuracy
+        - power_telemetry_measured
+        - flashed_config_matches_contract
+        - hr_accuracy
+        - rmssd_accuracy
+        - ppg_sqi
+        - ppg_map
+      synthetic:
+        - xdf_zero_drop
+        - research_stream_zero_loss
+        - tier0_sync_10ms
+        - ppg_completeness
+        - sample_rate_accuracy
 
   # Triage model (Edge AI) — binary artifact detection only
   # Promotion logic (rest/movement) handled by Python AcquisitionController
@@ -161,15 +189,11 @@ bringup:
 
   # The smoke rig is not the 5 mW system target: use the conservative kit
   # envelope until the INA219 reports a measured current.
+  # Capacity is the 1000+ mAh cell actually fitted for the G1 soak; the
+  # band-core firmware reports battery percentage against this same number.
   power_budget:
     profile: kit
-  # Power budget tracking (live)
-  power_monitor:
-    enabled: true
-    interval_s: 1.0
-    battery_capacity_mah: 3000
-    nominal_voltage_v: 3.7
-    target_lifetime_h: 24.0
+    hub_battery_mah: 1000
 
   # Logging
   logging:

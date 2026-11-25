@@ -213,10 +213,25 @@ class TestSopEndToEnd:
         assert "measurements" in payload
 
     def test_clean_pod_passes_the_assembled_gate(self, validator) -> None:
-        """A conforming pod with a clean link must PASS the whole SOP."""
+        """A conforming pod with a clean link must PASS the whole SOP.
+
+        Gates with no evidence (T1 pod, Cerelog, per-unit config readback,
+        cardiac references) are N/A on a synthetic run. They are reported, but
+        they are not free passes and they are not required for that profile.
+        """
         report = run_sync(validator, duration_s=DURATION_S)
-        failed = [g.name for g in report.gates if not g.passed]
+        failed = [g.name for g in report.gates if g.status == "FAIL"]
         assert failed == [], f"unexpected gate failures: {failed}"
+        not_applicable = {g.name for g in report.gates if g.status == "N/A"}
+        assert {
+            "tier1_sync_1ms",
+            "eeg_quality_tier1",
+            "flashed_config_matches_contract",
+            "hr_accuracy",
+            "rmssd_accuracy",
+            "ppg_sqi",
+            "ppg_map",
+        }.issubset(not_applicable)
         assert report.overall_pass is True
 
     def test_lossy_link_fails_the_assembled_gate(self) -> None:
@@ -243,7 +258,7 @@ class TestSopEndToEnd:
 
         transport.start_notify = lossy_start
         report = run_sync(validator, duration_s=DURATION_S)
-        failed = {g.name for g in report.gates if not g.passed}
+        failed = {g.name for g in report.gates if g.status == "FAIL"}
         assert "research_stream_zero_loss" in failed, failed
         assert report.overall_pass is False
 
