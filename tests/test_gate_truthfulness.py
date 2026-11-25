@@ -13,8 +13,11 @@ stream were counted as passes. This file pins the new contract:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -189,3 +192,90 @@ class TestSerialIdentity:
     def test_synthetic_runs_are_explicitly_tagged(self) -> None:
         cfg = {"source_id": "synapse_ecg_t0_{serial}"}
         assert LSLStreamManager.render_source_id(cfg) == "synapse_ecg_t0_synthetic"
+
+
+class TestEvidenceNeverFabricated:
+    """Regressions for the fail-open paths found in review."""
+
+    def test_rmssd_mae_needs_two_peaks_on_both_sides(self) -> None:
+        assert Phase1Validator._rmssd_mae_safe([], [], 500) is None
+        assert Phase1Validator._rmssd_mae_safe([100], [100], 500) is None
+        value = Phase1Validator._rmssd_mae_safe([100, 200, 300], [100, 210, 300], 500)
+        assert value is not None
+        assert value > 0
+
+    def test_sustained_ppg_with_no_qualifying_window_is_unknown(self, monkeypatch) -> None:
+        validator = _validator()
+        validator._duration_s = 60.0
+
+        class SparseSpool:
+            @staticmethod
+            def read_all(name: str):  # noqa: ANN001, ARG004
+                return np.ones((10, 2)), np.arange(10, dtype=np.float64)
+
+        monkeypatch.setattr(validator.lsl_manager, "spool", SparseSpool())
+        assert validator._ppg_quality_sustained(np.ones(10), 50, 30.0) == (None, None)
+
+    def test_recorded_xdf_zero_drop_compares_with_pushed_counts(self, tmp_path) -> None:
+        from synapse24.utils import verify_xdf_roundtrip
+
+        path = tmp_path / "short.xdf"
+        data = np.arange(100, dtype=np.float32).reshape(-1, 1)
+        stamps = np.arange(100, dtype=np.float64) / 50.0 + 1000.0
+        written = verify_xdf_roundtrip(
+            [
+                {
+                    "name": "SYNAPSE_PPG_T0",
+                    "type": "PPG",
+                    "data": data,
+                    "timestamps": stamps,
+                    "sampling_rate": 50,
+                }
+            ],
+            path,
+        )
+        assert written["total_dropped"] == 0
+
+        validator = _validator()
+        validator.lsl_manager._sample_counts["SYNAPSE_PPG_T0"] = 300
+        proof = validator._verify_recorded_xdf(path)
+        assert proof["all_streams_valid"] is False
+        assert proof["total_expected"] == 300
+        assert proof["total_recovered"] == 100
+        assert proof["total_dropped"] == 200
+
+    def test_gate_report_keeps_na_distinct_from_fail(self) -> None:
+        validator = _validator()
+        validator._quality_cache = {
+            "hr_bpm": None,
+            "rmssd_ms": None,
+            "ppg_sqi": None,
+            "ppg_map": None,
+            "rmssd_mae_ms": None,
+            "detected_peaks": None,
+        }
+        report = validator._collect_results({"sample_counts": {}}, {})
+        gates = validator._build_gate_report(report)["gates"]
+        assert gates
+        assert all({"status", "required"}.issubset(gate) for gate in gates)
+        na = next(gate for gate in gates if gate["name"] == "hr_accuracy")
+        assert na["status"] == "N/A"
+        assert na["passed"] is False
+        assert na["required"] is False
+
+    def test_run_resets_per_session_evidence(self) -> None:
+        validator = _validator()
+        validator._quality_cache = {"stale": True}
+        validator.device_config_readback = {"stale": True}
+        asyncio.run(validator.run(dry_run=True, duration_s=1.0))
+        assert validator._quality_cache is None
+        assert validator.device_config_readback == {}
+
+    def test_rehearsal_documentation_does_not_claim_live_hardware(self) -> None:
+        text = (ROOT / "docs" / "hardware" / "BRINGUP_SOP.md").read_text(encoding="utf-8")
+        command = next(
+            line
+            for line in text.splitlines()
+            if "--soak-rehearsal" in line and "validate_phase1_entry" in line
+        )
+        assert "--live-hardware" not in command

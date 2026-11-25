@@ -1046,6 +1046,7 @@ class Phase1Validator:
         span = float(stamps[-1]) - first
         count = min(12, max(1, int(span // sustained) or 1))
         worst_sqi, worst_map = 1.0, 0.0
+        evaluated = 0
         for index in range(count):
             start = first + index * span / count
             window = (stamps >= start) & (stamps < start + sustained)
@@ -1054,13 +1055,34 @@ class Phase1Validator:
                 segment = segment.reshape(-1, 1)
             if segment.shape[0] < 50:
                 continue
+            evaluated += 1
             quality = compute_ppg_quality(segment[:, 0], ppg_rate)
             sqi = quality.get("ppg_sqi")
             map_value = quality.get("motion_artifact_prob")
             if sqi is not None:
                 worst_sqi = min(worst_sqi, float(sqi))
             worst_map = max(worst_map, float(map_value) if map_value is not None else 1.0)
+        if not evaluated:
+            # Zero qualifying windows is NO EVIDENCE, not perfect quality.
+            return None, None
         return worst_sqi, worst_map
+
+    @staticmethod
+    def _rmssd_mae_safe(detected: Any, reference: Any, rate: int) -> float | None:
+        """RMSSD MAE, or None when either peak list is too short to have one.
+
+        ``signal_quality.ecg.rmssd_mae`` treats a missing HRV value as zero, so
+        two empty peak lists used to produce a perfect 0.0 ms — a required
+        gate passing on no evidence. Two peaks per list is the minimum for a
+        first difference.
+        """
+        peaks_d = np.asarray(detected, dtype=np.int64)
+        peaks_r = np.asarray(reference, dtype=np.int64)
+        if peaks_d.size < 2 or peaks_r.size < 2:
+            return None
+        from synapse24.signal_quality import rmssd_mae
+
+        return float(rmssd_mae(peaks_d, peaks_r, rate))
 
     def _quality_metrics(self) -> dict[str, Any]:
         """The session's HR/RMSSD/PPG metrics, computed once per run."""
@@ -1095,19 +1117,13 @@ class Phase1Validator:
         reference = val_cfg.get("ground_truth_ecg_path")
         if reference and result["detected_peaks"] is not None:
             try:
-                from synapse24.signal_quality import rmssd_mae
-
                 path = Path(str(reference))
                 if not path.is_absolute():
                     path = ROOT / path
                 with np.load(path) as data:
                     peaks = data["r_peaks"] if "r_peaks" in data else data[data.files[0]]
-                result["rmssd_mae_ms"] = float(
-                    rmssd_mae(
-                        np.asarray(result["detected_peaks"], dtype=np.int64),
-                        np.asarray(peaks, dtype=np.int64),
-                        ecg_rate,
-                    )
+                result["rmssd_mae_ms"] = self._rmssd_mae_safe(
+                    result["detected_peaks"], peaks, ecg_rate
                 )
             except Exception:  # noqa: BLE001 - an unusable reference is a gate failure
                 self.logger.warning("Reference ECG could not be read", exc_info=True)
@@ -1852,6 +1868,8 @@ class Phase1Validator:
                 {
                     "name": g.name,
                     "passed": g.passed,
+                    "status": g.status,
+                    "required": g.required,
                     "value": g.value,
                     "threshold": g.threshold,
                     "details": g.details,
@@ -1955,6 +1973,11 @@ class Phase1Validator:
         live_hardware: bool = False,
     ) -> Phase1ValidationReport:
         self.live_hardware = bool(live_hardware) and self.transport is None
+        # Reusing a validator (the suite does) must not attribute one run's
+        # measurements or the previous pod's readback to the next session.
+        self._quality_cache = None
+        self.device_config_readback = {}
+        self.artifact = {"source": "unknown", "path": None, "sha256": None}
         if legacy_format is not None:
             self.legacy_format = legacy_format
         if lsl_clock_fn is not None:
@@ -2042,15 +2065,42 @@ class Phase1Validator:
         """
         try:
             summary = validate_xdf(path)
-            valid = bool(summary["validation"]["all_streams_valid"])
-            recovered = sum(int(stream["n_samples"]) for stream in summary["streams"])
+            recovered_by_name = {
+                str(stream["name"]): int(stream["n_samples"]) for stream in summary["streams"]
+            }
+            # The spool counts are the samples this session actually pushed to
+            # LSL. A LabRecorder file that is structurally readable but misses
+            # most of them is a data loss, not a valid zero-drop recording.
+            expected = {
+                name: int(count)
+                for name, count in self.lsl_manager.sample_counts.items()
+                if count > 0
+            }
+            missing = [name for name in expected if name not in recovered_by_name]
+            short = [
+                (name, count, recovered_by_name.get(name, 0))
+                for name, count in expected.items()
+                if recovered_by_name.get(name, 0) < count
+            ]
+            total_expected = sum(expected.values())
+            total_recovered = sum(
+                min(recovered_by_name.get(name, 0), count) for name, count in expected.items()
+            )
+            valid = bool(
+                summary["validation"]["all_streams_valid"]
+                and summary["streams"]
+                and not missing
+                and not short
+            )
             return {
                 "file": str(path),
                 "n_streams": len(summary["streams"]),
                 "all_streams_valid": valid,
-                "total_expected": recovered,
-                "total_recovered": recovered,
-                "total_dropped": 0 if valid else -1,
+                "total_expected": total_expected,
+                "total_recovered": total_recovered,
+                "total_dropped": total_expected - total_recovered,
+                "missing_streams": missing,
+                "short_streams": short,
                 "per_stream": summary["streams"],
                 "source": "LabRecorderCLI file, validated by synapse24.utils.validate_xdf",
             }

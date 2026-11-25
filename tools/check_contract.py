@@ -765,6 +765,13 @@ def check_generated_hardware_values(hw: dict, report: Report) -> None:
         gpio is not None and f"#define SYNAPSE_CONTRACT_WIRED_SYNC_GPIO {gpio}" in header,
         f"the generated contract header does not carry sync.wired_sync_gpio={gpio}",
     )
+    clock_sync = ROOT / "src" / "synapse24" / "acquisition" / "clock_sync.py"
+    host_source = clock_sync.read_text(encoding="utf-8") if clock_sync.is_file() else ""
+    report.check(
+        "wired_sync_gpio: int = WIRED_SYNC_GPIO" in host_source
+        and "from synapse24.contracts_generated import WIRED_SYNC_GPIO" in host_source,
+        "clock_sync.py must take wired_sync_gpio from the generated contract, not a literal",
+    )
     sync_h = ROOT / "firmware" / "common" / "sync" / "wired_sync_handler.h"
     sync_src = sync_h.read_text(encoding="utf-8") if sync_h.is_file() else ""
     report.check(

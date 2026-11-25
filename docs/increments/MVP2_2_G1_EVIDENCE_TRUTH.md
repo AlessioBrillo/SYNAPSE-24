@@ -49,13 +49,23 @@ Local Woodpecker equivalent (`.woodpecker/ci.yml`): ruff check/format, mypy
 phase-1 dry-run, format conformance, full suite with 83.72 % coverage, SDK
 suite with 89.41 % coverage, host C gate, `gcc_probe.py`.
 
-The host C gate printed skip reasons on this Windows host (6–24 depending on
-the run): Application Control intermittently refused to load freshly built
-DLLs from the temp directory (the compiles succeeded). A skip is not a pass;
-those parity assertions must run in the Linux gate container before the tree
-is called green there. The ESP-IDF
-`firmware-band` step could not run in this environment (no ESP-IDF toolchain),
-so the new C sources are proven only by static guards and the host compiles.
+The command sequence was then replayed in a Linux container from the PR head:
+every step green, including the host C gate (174 tests, **zero skips**) and
+full-suite coverage 83.79 % / SDK 89.32 %. `gcc_probe.py` (a Windows-host-only
+extra that shells out to Docker) passes on the host, not inside that container.
+The ESP-IDF `firmware-band` sequence was also run in the `espressif/idf:v5.5.5`
+container: band-full, band-core and band-full with RR all built and produced
+`synapse-band.bin`. The Windows host itself cannot run `ci-local` (no usable
+bash through WSL) and its Application Control intermittently blocks loading
+freshly built DLLs; the Linux replay is the green evidence.
+
+A review found three fail-open paths, all fixed before merge: the recorded-XDF
+gate now compares recovered samples with the spool's pushed counts (an empty or
+gapped LabRecorder file fails), the sustained PPG gates return N/A when no
+window qualifies, and RMSSD MAE returns None for fewer than two R-peaks.
+Gate-report JSON now carries `status`/`required`, per-run evidence is reset,
+the rehearsal command no longer claims live hardware, and the Python
+`SyncConfig` default takes the generated GPIO.
 
 ## Still open
 
