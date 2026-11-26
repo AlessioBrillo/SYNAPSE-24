@@ -29,7 +29,11 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "led": None,
         "accel_bias": None,
         "gyro_bias": None,
-        "serial": None,
+        "imu_json": None,
+        "instrument": None,
+        "fw": None,
+        "uncertainty": None,
+        "noise_uv": None,
         "date": None,
         "operator": None,
         "dry_run": True,
@@ -47,7 +51,6 @@ def test_build_commands_translates_all_fields() -> None:
             led="1F,20",
             accel_bias=["1", "-2", "3"],
             gyro_bias=["4", "5", "-6"],
-            serial="SYN-AABBCCDDEEFF",
             date="2026-11-24",
             operator="A. Brillo",
         )
@@ -57,12 +60,37 @@ def test_build_commands_translates_all_fields() -> None:
         "cal led 1F 20",
         "cal accel_bias 1 -2 3",
         "cal gyro_bias 4 5 -6",
-        "cal serial SYN-AABBCCDDEEFF",
         "cal date 2026-11-24",
         "cal operator A. Brillo",
         "cal save",
         "cal dump",
     ]
+
+
+def test_calibration_v2_fields_are_written() -> None:
+    commands = fc.build_commands(
+        _args(
+            instrument="GEN-42",
+            fw="1.2.3",
+            uncertainty=5.0,
+            noise_uv=12.5,
+        )
+    )
+    assert commands == [
+        "cal instrument GEN-42",
+        "cal fw 1.2.3",
+        "cal uncertainty 500",
+        "cal noise 125",
+        "cal save",
+        "cal dump",
+    ]
+
+
+def test_imu_json_feeds_the_shell(tmp_path: Path) -> None:
+    path = tmp_path / "imu.json"
+    path.write_text(json.dumps({"accel_bias_mg": [1, -2, 3], "gyro_bias_mdps": [4, 5, -6]}))
+    commands = fc.build_commands(_args(imu_json=str(path)))
+    assert commands[:2] == ["cal accel_bias 1 -2 3", "cal gyro_bias 4 5 -6"]
 
 
 def test_gain_json_is_converted_to_the_kconfig_scale(tmp_path: Path) -> None:
@@ -72,19 +100,24 @@ def test_gain_json_is_converted_to_the_kconfig_scale(tmp_path: Path) -> None:
     assert "cal gain 112300" in commands
 
 
-def test_invalid_serial_is_refused() -> None:
-    with pytest.raises(ValueError, match="serial must be SYN"):
-        fc.build_commands(_args(serial="SYN-short"))
+def test_the_serial_is_never_written_from_the_host() -> None:
+    commands = fc.build_commands(_args(gain=110000, operator="A. Brillo"))
+    assert not any(command.startswith("cal serial") for command in commands)
+
+
+def test_parse_dump_refuses_an_empty_serial() -> None:
+    with pytest.raises(ValueError, match="invalid serial"):
+        fc.parse_dump('{"serial":"","ecg_gain_x100":110000}')
 
 
 def test_fake_transport_round_trip() -> None:
     transport = fc.FakeTransport()
-    for command in fc.build_commands(_args(gain=110000, serial="SYN-AABBCCDDEEFF")):
+    for command in fc.build_commands(_args(gain=110000)):
         reply = transport.send(command)
         assert not reply.startswith("ERR"), reply
     record = fc.parse_dump(reply)
     assert record["ecg_gain_x100"] == 110000
-    assert record["serial"] == "SYN-AABBCCDDEEFF"
+    assert record["serial"] == "SYN-000000000000"  # the device owns its serial
 
 
 def test_parse_dump_rejects_a_missing_record() -> None:

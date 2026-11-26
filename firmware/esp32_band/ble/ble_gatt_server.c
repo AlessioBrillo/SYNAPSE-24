@@ -30,6 +30,7 @@
 #endif
 #include "synapse_config.h"
 #include "synapse_calibration.h"
+#include "synapse_identity.h"
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_connected = false;
@@ -222,6 +223,20 @@ static int hr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
  * a stale sdkconfig used to produce a plausible but wrongly scaled dataset
  * (the gain trap in docs/hardware/FIRST_HARDWARE_DAY.md).
  */
+/** Keep an operator-entered string from breaking the JSON readback. */
+static void json_safe(char *dst, size_t cap, const char *src) {
+    size_t j = 0;
+    if (src == NULL || cap == 0) {
+        if (cap) dst[0] = '\0';
+        return;
+    }
+    for (; *src != '\0' && j + 1 < cap; src++) {
+        char c = *src;
+        dst[j++] = (c == '"' || c == '\\') ? ' ' : c;
+    }
+    dst[j] = '\0';
+}
+
 static void build_config_readback(uint8_t *buf, size_t cap) {
     synapse_hw_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -233,21 +248,54 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     uint8_t led_red = cfg.ppg_led_current_red;
     uint8_t led_ir = cfg.ppg_led_current_ir;
     synapse_calibration_t cal;
+    char cal_serial[SYNAPSE_CAL_SERIAL_MAX] = {0};
+    char cal_date[SYNAPSE_CAL_DATE_MAX] = {0};
+    char cal_operator[SYNAPSE_CAL_OPERATOR_MAX] = {0};
+    const char *cal_state = "none";
     if (synapse_calibration_load(&cal) == ESP_OK && synapse_calibration_valid(&cal)) {
         if (cal.ecg_gain_x100 != 0) gain_x100 = cal.ecg_gain_x100;
         if (cal.ppg_led_red != 0) led_red = cal.ppg_led_red;
         if (cal.ppg_led_ir != 0) led_ir = cal.ppg_led_ir;
+        cal_state = synapse_calibration_state();
+        json_safe(cal_serial, sizeof(cal_serial), cal.serial);
+        json_safe(cal_date, sizeof(cal_date), cal.date);
+        json_safe(cal_operator, sizeof(cal_operator), cal.operator);
     }
+
+    /* Every active hardware.yaml field the host gate checks is reported
+     * here, with short keys so a long BLE read stays compact. A stale
+     * sdkconfig can no longer change an unchecked sensor setting. */
     snprintf((char *)buf, cap,
              "{\"v\":1,\"fw\":\"%s\",\"ecg_hz\":%u,\"ppg_hz\":%u,\"imu_hz\":%u,"
              "\"ecg_gain_x100\":%lu,\"ppg_led_red\":%u,\"ppg_led_ir\":%u,"
-             "\"battery_mah\":%u}",
+             "\"battery_mah\":%u,\"ecg_adc_ch\":%d,\"ecg_lead_off\":%d,"
+             "\"ppg_addr\":%u,\"ppg_sr\":%u,\"ppg_pw\":%u,\"ppg_adc\":%u,"
+             "\"imu_addr\":%u,\"accel_g\":%d,\"gyro_dps\":%d,"
+             "\"accel_hz\":%u,\"gyro_hz\":%u,"
+             "\"i2c_port\":%d,\"i2c_sda\":%d,\"i2c_scl\":%d,\"i2c_hz\":%lu,"
+             "\"sync_gpio\":%u,\"ina_addr\":%u,\"ina_shunt\":%u,"
+             "\"power_profile\":%u,"
+             "\"cal_serial\":\"%s\",\"cal_state\":\"%s\","
+             "\"cal_date\":\"%s\",\"cal_operator\":\"%s\"}",
              synapse_config_get_fw_version(),
              (unsigned)SYNAPSE_CONTRACT_RATE_ECG_HZ,
              (unsigned)synapse_ppg_rate_hz(cfg.ppg_sample_rate),
              (unsigned)cfg.imu_accel_odr_hz,
              (unsigned long)gain_x100, (unsigned)led_red, (unsigned)led_ir,
-             (unsigned)cfg.hub_battery_mah);
+             (unsigned)cfg.hub_battery_mah,
+             (int)cfg.ecg_adc_channel, (int)cfg.ecg_gpio_lead_off,
+             (unsigned)cfg.ppg_i2c_addr, (unsigned)cfg.ppg_sample_rate,
+             (unsigned)cfg.ppg_pulse_width, (unsigned)cfg.ppg_adc_range,
+             (unsigned)cfg.imu_i2c_addr, (int)cfg.imu_accel_fsr_g,
+             (int)cfg.imu_gyro_fsr_dps, (unsigned)cfg.imu_accel_odr_hz,
+             (unsigned)cfg.imu_gyro_odr_hz,
+             (int)cfg.ppg_i2c_port, (int)cfg.i2c_sda_gpio, (int)cfg.i2c_scl_gpio,
+             (unsigned long)cfg.i2c_freq_hz,
+             (unsigned)SYNAPSE_CONTRACT_WIRED_SYNC_GPIO,
+             (unsigned)SYNAPSE_CONTRACT_INA219_I2C_ADDR,
+             (unsigned)SYNAPSE_CONTRACT_INA219_SHUNT_MOHM,
+             (unsigned)cfg.power_profile,
+             cal_serial, cal_state, cal_date, cal_operator);
 }
 
 static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -259,12 +307,59 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
         return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        // The device configuration is not writable over BLE yet: the config handler
-        // only logs a received write. Accepting it would tell the client it worked (and a read would
-        // echo it back), so it is refused, like provisioning in band-core. The settings are
-        // Kconfig / OTA for now.
-        ESP_LOGW(BLE_TAG, "config write refused: not implemented");
+#if !defined(CONFIG_SYNAPSE_FACTORY_MODE)
+        ESP_LOGW(BLE_TAG, "config write refused: factory mode off");
         return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+#else
+        /* Contract 2.4, deliberately narrow: only the per-unit values the
+         * calibration record already owns, plus the consumer feature rate.
+         * Rates, pins and UUIDs stay compile-time contract values. */
+        uint8_t req[96];
+        uint16_t len = 0;
+        if (ble_hs_mbuf_to_flat(ctxt->om, req, sizeof(req), &len) != 0) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        req[len < sizeof(req) ? len : sizeof(req) - 1] = '\0';
+        unsigned red = 0, ir = 0, gain = 0, rate = 0;
+        if (sscanf((const char *)req, "{\"led_red\":%u,\"led_ir\":%u}", &red, &ir) == 2 &&
+            red <= 255 && ir <= 255) {
+            synapse_calibration_t cal;
+            esp_err_t err = synapse_calibration_load(&cal);
+            if (err != ESP_OK) {
+                synapse_calibration_defaults(&cal);
+                const char *serial = synapse_identity_serial();
+                if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
+            }
+            if (red != 0) cal.ppg_led_red = (uint8_t)red;
+            if (ir != 0) cal.ppg_led_ir = (uint8_t)ir;
+            synapse_calibration_seal(&cal);
+            if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
+            ESP_LOGI(BLE_TAG, "config write: LED red=%u ir=%u", red, ir);
+            return 0;
+        }
+        if (sscanf((const char *)req, "{\"gain_x100\":%u}", &gain) == 1 && gain > 0) {
+            synapse_calibration_t cal;
+            esp_err_t err = synapse_calibration_load(&cal);
+            if (err != ESP_OK) {
+                synapse_calibration_defaults(&cal);
+                const char *serial = synapse_identity_serial();
+                if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
+            }
+            cal.ecg_gain_x100 = gain;
+            synapse_calibration_seal(&cal);
+            if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
+            ESP_LOGI(BLE_TAG, "config write: ECG gain=%ux100", gain);
+            return 0;
+        }
+        if (sscanf((const char *)req, "{\"feature_rate_hz\":%u}", &rate) == 1 &&
+            rate >= 1 && rate <= SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ) {
+            ctl_set_feature_rate((uint8_t)rate, NULL);
+            ESP_LOGI(BLE_TAG, "config write: feature rate=%u Hz", rate);
+            return 0;
+        }
+        ESP_LOGW(BLE_TAG, "config write refused: unknown or out-of-range payload");
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+#endif
     }
     return BLE_ATT_ERR_UNLIKELY;
 }
@@ -772,12 +867,16 @@ esp_err_t synapse_ble_gatt_init(void) {
     // starts, and from that moment ble_gatts_add_svcs() fails with
     // BLE_HS_EBUSY. Registering it later (as app_main used to do) either
     // aborts the boot or silently loses the dataset path.
+#if defined(CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE) && !defined(CONFIG_SYNAPSE_PRODUCT_MODE)
     rc = synapse_research_service_init();
     if (rc != ESP_OK) {
         ESP_LOGE(BLE_TAG, "research service registration failed: %s",
                  esp_err_to_name(rc));
         return ESP_FAIL;
     }
+#else
+    ESP_LOGI(BLE_TAG, "product build: raw research service is disabled");
+#endif
 
     nimble_port_freertos_init(host_task_fn);
     return ESP_OK;

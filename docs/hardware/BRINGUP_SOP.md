@@ -232,7 +232,9 @@ which `sdkconfig.defaults.core` sets.
 
 ```bash
 export SYNAPSE_FOREARM_BLE="aa:bb:cc:dd:ee:ff"   # or leave as auto
+# A live session needs consent and a pseudonym (S###) in a manifest.
 uv run python scripts/validate_phase1_entry.py --live-hardware \
+    --manifest data/sessions/2026-11-26/manifest.json \
     --config config/hardware_bringup.yaml --duration 60
 ```
 
@@ -399,7 +401,7 @@ There are exactly two soak modes, and only one of them counts:
 
 | Mode | Command | What it proves |
 |---|---|---|
-| **Real soak (`--soak`)** — the G1 evidence | `uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml --duration 21600 --soak` | six physical hours on the pod: radio, ring, clock wrap, battery. Writes the XDF through LabRecorderCLI (single writer, see the note at the top) and the gate report to `data/live_validation/gate_report.json` (override with `--gate-report`) |
+| **Real soak (`--soak`)** — the G1 evidence | `uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<id>/manifest.json --config config/hardware_bringup.yaml --duration 21600 --soak` | six physical hours on the pod: radio, ring, clock wrap, battery. Writes the XDF through LabRecorderCLI (single writer, see the note at the top) and the gate report to `data/live_validation/gate_report.json` (override with `--gate-report`) |
 | **Rehearsal (`--soak-rehearsal`)** — machinery proof only | `uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --duration 300 --soak-rehearsal` | the same validation loop and gate-report path over a deterministic synthetic spool, runnable in CI and without LabRecorderCLI. Its artifact marks itself (`rehearsal: true`, `source: "spool (synthetic rehearsal)"`) and is **never** G1 evidence |
 
 The two flags are mutually exclusive — the script refuses the combination.

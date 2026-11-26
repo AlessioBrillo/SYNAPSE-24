@@ -17,7 +17,7 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
 - **TensorFlow is the `train` extra** (`uv sync --extra train`): a plain `uv sync --dev --frozen`, the gate and the Docker images do not install it (it was a core dependency, ~10k files and 2+ GB, used only by the triage training and quantisation). Every TensorFlow import is guarded, so the tests that need it skip without it; training and `quantize_and_deploy.py` need the extra.
 - **GitHub Actions** only holds a notice pointing here (`.github/workflows/ci.yml`); there is no second pipeline to keep aligned.
 - **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band, and the radio side of the virtual band (`scripts/virtual_band.py`, `check_phone_capture.py pull`: manual, see `docs/hardware/VIRTUAL_BAND_RUNBOOK.md`; their pure cores `virtual_band_core.py` and `check_phone_capture.py` are tested in the suite).
-- **Increment status:** MVP-1.9 closed on 2026-11-14 (`docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`): the gate below is the one it was verified with (the only addition is the two files `test_consumer_v2_parity.py` and `test_firmware_s3_time_and_loss.py` in the host C step).
+- **Increment status:** the authoritative state is `docs/hardware/STATUS.md` (latest: MVP-2.6, 2026-11-26, `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`). Earlier increments: MVP-1.9 (`docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`), MVP-2.1/2.2 (`docs/increments/MVP2_1_HARDWARE_READY.md`, `MVP2_2_G1_EVIDENCE_TRUTH.md`).
 - **Gate steps (2026-11-14):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
   `generate_contracts --check` (the generated contract files do not drift from `config/hardware.yaml`),
   `check_interfaces` (FIT developer fields, GATT UUIDs, worker payloads), `check_baseline_claim`,
@@ -26,10 +26,10 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
   the full test suite with coverage over `src`, `worker` and `backend` (>= 80 %; the SDK is **not**
   in this figure), the SDK suite with its own >= 80 % over `sdk/python`, the firmware host C gate
   (raw-frame parity, research service, PPG SQI, BLE contract) and the `firmware-band` ESP-IDF
-  step (band-full, band-core, band-full with RR on). The fixture drift checks
+  step (band-full, band-core, band-full with RR on, band-product). The fixture drift checks
   (`make_band_fixtures`, `make_consumer_vectors`, `make_band_sidecars`) run inside the suite
   (`tests/test_band_fixtures.py`, `tests/test_band_sidecars.py`).
-- **Firmware step (2026-11-06):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it (it needs the ESP-IDF image and more memory than this host has); the GitHub `Firmware Build (ESP-IDF)` job builds the same three configurations too, since 2026-11-07 with a clean `sdkconfig` before band-full.
+- **Firmware step (2026-11-26):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it (it needs the ESP-IDF image and more memory than this host has); the GitHub `Firmware Build (ESP-IDF)` job builds the same four configurations too, since 2026-11-07 with a clean `sdkconfig` before band-full.
 - **Status:** first green run recorded on branch `feat/device-loop-v1` (commit `3bf5eef`).
   The Python gate (ruff check/format, mypy, check_contract, check_baseline_claim,
   phase1 dry-run, full test suite 650+ tests, firmware host C gate) is green.

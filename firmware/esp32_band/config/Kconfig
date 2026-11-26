@@ -123,6 +123,15 @@ config SYNAPSE_FEATURE_RESEARCH_SERVICE
         "feature stream" (HR/RR/SQI/stress) used by the Averyn product
         integration, which carries features only.
 
+config SYNAPSE_PRODUCT_MODE
+    bool "Product build (raw research service disabled)"
+    default n
+    help
+        A commercial image must not expose raw physiology over an unpaired
+        BLE link. When set, the research-service GATT registration is skipped
+        even if SYNAPSE_FEATURE_RESEARCH_SERVICE is y in a stale sdkconfig.
+        The consumer feature stream and the whitelisted config write remain.
+
 config SYNAPSE_FEATURE_WIRED_SYNC
     bool "Enable wired GPIO sync (pod<->hub hardware marker)"
     default y

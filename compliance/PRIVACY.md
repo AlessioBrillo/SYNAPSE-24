@@ -15,7 +15,8 @@ This project operates no service and receives no data from you. Whoever deploys 
 | Encryption of LSL streams on the network | **Not implemented** (LSL is unencrypted) |
 | Pseudonymisation of subject identifiers | **Not implemented** in `src/synapse24`; subject IDs are whatever the operator supplies |
 | Consent capture, withdrawal, data-subject export/erasure tooling | **Not implemented** |
-| BLE bonding and Wi-Fi/cloud provisioning (CSR flow) in `firmware/esp32_band` | Present; **not security-reviewed** |
+| BLE pairing on encrypted characteristics; bonding persistence | Pairing is required for config/provisioning writes (`BLE_GATT_CHR_F_WRITE_ENC`); `sm_bonding = 0`, no key store, Just Works (`sm_mitm = 0`) — **not a shipped security posture** |
+| Product build raw research service | Disabled in `band-product` (`CONFIG_SYNAPSE_PRODUCT_MODE`); not yet verified on a radio |
 | Cloud ingestion | Not part of this repository's released scope; only design documents exist |
 
 Do not describe a deployment as "GDPR compliant" on the basis of this repository.

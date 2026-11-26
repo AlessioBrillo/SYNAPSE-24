@@ -1,0 +1,82 @@
+name: Hardware / bench defect
+description: Report a failed bench test with the evidence needed to reproduce it
+title: "[TEST-ID]: "
+labels: ["bug", "area: acquisition"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include a subject's real name, health data or a full raw recording here.
+        Link to the evidence file instead.
+
+  - type: input
+    id: test_id
+    attributes:
+      label: Test ID
+      description: From docs/testing/G1_TEST_MATRIX.md, e.g. T05
+      placeholder: T05
+    validations:
+      required: true
+
+  - type: input
+    id: serial
+    attributes:
+      label: Band serial
+      placeholder: SYN-A1B2C3D4E5F6
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware / build
+      placeholder: band-core, build hash or version
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      description: Copy the command from the evidence file
+      placeholder: uv run python scripts/bench_suite.py stream --live --duration 60
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected vs actual
+      placeholder: |
+        Expected: zero dropped frames
+        Actual: 17 sequence gaps in 60 s
+    validations:
+      required: true
+
+  - type: input
+    id: evidence
+    attributes:
+      label: Evidence file
+      placeholder: evidence/T05_20261126T101500Z.json
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempts
+    attributes:
+      label: Attempts
+      description: Every attempt, green or red. Do not delete failed ones.
+      placeholder: |
+        1/3: fail, 17 gaps
+        2/3: fail, 4 gaps
+        3/3: fail, 21 gaps
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Conditions and notes
+      placeholder: seated, LiPo only, USB unplugged, DLE negotiated, room temperature
+    validations:
+      required: false

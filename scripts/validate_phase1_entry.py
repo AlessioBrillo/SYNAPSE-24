@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import struct
 import sys
 import time
@@ -382,6 +383,7 @@ class Phase1Validator:
         # What the pod says it actually booted with, read from its device
         # config characteristic before the recording starts.
         self.device_config_readback: dict[str, Any] = {}
+        self.device_config_attempts = 0
 
     def _decoder_history_limit(self) -> int:
         """Values kept in memory per stream (30 s at the highest rate)."""
@@ -1148,17 +1150,43 @@ class Phase1Validator:
         pod = next(p for p in bring.get("pods", []) if p.get("pod_id") == "forearm_hub")
         meta = pod["metadata"]
         ecg_cfg = meta["ecg_config"]
-        ppg_cfg = meta["ppg_config"]
-        result: dict[str, float | int] = {
+        ppg_cfg_meta = meta["ppg_config"]
+        imu_cfg = meta["imu_config"]
+        i2c = meta["i2c"]
+        result: dict[str, float | int | str] = {
             "ecg_hz": rates["SYNAPSE_ECG_T0"],
             "ppg_hz": rates["SYNAPSE_PPG_T0"],
             "imu_hz": rates["SYNAPSE_ACC_T0"],
             "ecg_gain_x100": int(round(float(ecg_cfg["gain"]) * 100)),
-            "ppg_led_red": int(ppg_cfg["led_current_red"]),
-            "ppg_led_ir": int(ppg_cfg["led_current_ir"]),
+            "ppg_led_red": int(ppg_cfg_meta["led_current_red"]),
+            "ppg_led_ir": int(ppg_cfg_meta["led_current_ir"]),
             "battery_mah": int(bring["power_budget"]["hub_battery_mah"]),
+            "ecg_adc_ch": int(ecg_cfg["adc_channel"]),
+            "ecg_lead_off": int(ecg_cfg["gpio_lead_off"]),
+            "ppg_addr": int(ppg_cfg_meta["i2c_addr"]),
+            "ppg_sr": int(ppg_cfg_meta["sample_rate_reg"]),
+            "ppg_pw": int(ppg_cfg_meta["pulse_width_reg"]),
+            "ppg_adc": int(ppg_cfg_meta["adc_range_reg"]),
+            "imu_addr": int(imu_cfg["i2c_addr"]),
+            "accel_g": int(imu_cfg["accel_range_g"]),
+            "gyro_dps": int(imu_cfg["gyro_range_dps"]),
+            "accel_hz": int(imu_cfg["accel_sensor_odr_hz"]),
+            "gyro_hz": int(imu_cfg["gyro_sensor_odr_hz"]),
+            "i2c_port": int(i2c["port"]),
+            "i2c_sda": int(i2c["sda_gpio"]),
+            "i2c_scl": int(i2c["scl_gpio"]),
+            "sync_gpio": int(meta["sync_config"]["wired_gpio"]),
+            "ina_addr": int(meta["ina219_config"]["i2c_addr"]),
+            "ina_shunt": int(meta["ina219_config"]["shunt_mohm"]),
+            "power_profile": 1 if str(bring["power_budget"]["profile"]) == "kit" else 0,
+            "cal_serial": "",
+            "cal_state": "none",
+            "cal_date": "",
+            "cal_operator": "",
         }
         # A calibrated unit is authoritative over the nominal manifest gain.
+        # The local manufacturing record must describe THIS device; the readback
+        # gate below compares the serial and the state too.
         cal_source = self._calibration_source()
         if cal_source:
             try:
@@ -1166,6 +1194,12 @@ class Phase1Validator:
                 for key in ("ecg_gain_x100", "ppg_led_red", "ppg_led_ir"):
                     if record.get(key):
                         result[key] = int(record[key])
+                # The DIS serial is the identity truth; a record that claims
+                # another serial must fail even if the file name matches.
+                result["cal_serial"] = self.device_serial or ""
+                result["cal_state"] = "nvs"
+                result["cal_date"] = str(record.get("date", ""))
+                result["cal_operator"] = str(record.get("operator", ""))
             except Exception:  # noqa: BLE001 - a bad record is reported by the gate below
                 self.logger.warning("Calibration record unreadable", exc_info=True)
         return result
@@ -1189,7 +1223,13 @@ class Phase1Validator:
         mismatches = []
         for key, expected in self._expected_flashed_config().items():
             actual = readback.get(key)
-            if actual is None or float(actual) != float(expected):
+            if actual is None:
+                mismatches.append(f"{key}: missing from pod readback, contract={expected!r}")
+                continue
+            if isinstance(expected, str):
+                if str(actual) != expected:
+                    mismatches.append(f"{key}: pod={actual!r}, contract={expected!r}")
+            elif float(actual) != float(expected):
                 mismatches.append(f"{key}: pod={actual!r}, contract={expected!r}")
         return self._gate(
             "flashed_config_matches_contract",
@@ -2268,15 +2308,24 @@ class Phase1Validator:
         """
         if self.client is None or self.transport is not None:
             return
-        try:
-            raw = await self.client.read_gatt_char(DEVICE_CONFIG_UUID)
-            payload = bytes(raw).decode("ascii", errors="replace").strip("\x00 ")
-            parsed = json.loads(payload) if payload else {}
-            if isinstance(parsed, dict):
-                self.device_config_readback = parsed
-                self.logger.info(f"Device config readback: {parsed}")
-        except Exception as exc:  # noqa: BLE001 - the gate reports the missing proof
-            self.logger.warning(f"Device config readback unavailable: {exc}")
+        # A single BLE read can fail on a busy link. Three attempts, then the
+        # gate fails: an absent readback is never a free pass on a live run.
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            self.device_config_attempts = attempt
+            try:
+                raw = await self.client.read_gatt_char(DEVICE_CONFIG_UUID)
+                payload = bytes(raw).decode("ascii", errors="replace").strip("\x00 ")
+                parsed = json.loads(payload) if payload else {}
+                if isinstance(parsed, dict) and parsed:
+                    self.device_config_readback = parsed
+                    self.logger.info(f"Device config readback (attempt {attempt}): {parsed}")
+                    return
+                last_error = ValueError("empty device-config readback")
+            except Exception as exc:  # noqa: BLE001 - the gate reports the missing proof
+                last_error = exc
+            self.logger.warning(f"Device config readback attempt {attempt} failed: {last_error}")
+        self.logger.warning(f"Device config readback unavailable after 3 attempts: {last_error}")
 
     def _feed_downstream_from_raw(self, timestamp: float) -> None:
         """Feed clock sync and the acquisition controller from raw frames.
@@ -2362,7 +2411,52 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
     return logger
 
 
-async def main_async(args: argparse.Namespace) -> int:
+SUBJECT_RE = re.compile(r"^S\d{3,}$")
+
+
+def load_session_manifest(path: Path | None) -> dict[str, Any] | None:
+    """A human session needs consent and a pseudonym before any recording.
+
+    Returns ``None`` for synthetic runs. On a live run the caller refuses to
+    start when this raises; no health data is recorded without a lawful basis
+    recorded in the manifest.
+    """
+    if path is None:
+        return None
+    manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = ("subject_id", "consent", "condition", "device_serial", "operator", "date")
+    missing = [key for key in required if key not in manifest]
+    if missing:
+        raise ValueError(f"session manifest is missing {missing}")
+    if not SUBJECT_RE.match(str(manifest["subject_id"])):
+        raise ValueError(f"subject_id must be S### (a pseudonym), got {manifest['subject_id']!r}")
+    if manifest["consent"] is not True:
+        raise ValueError("consent must be true before a live recording")
+    return manifest
+
+
+def append_gate_history(
+    gate_report_path: Path, gate_report: dict[str, Any], report: Any, *, live: bool = True
+) -> dict[str, Any]:
+    """Write a per-run report and append one line to the run index."""
+    gate_report_path.parent.mkdir(parents=True, exist_ok=True)
+    per_run = gate_report_path.parent / f"gate_report_{report.run_id}.json"
+    payload = json.dumps(gate_report, indent=2, default=str)
+    per_run.write_text(payload)
+    entry = {
+        "run_id": report.run_id,
+        "timestamp": report.timestamp,
+        "overall_pass": bool(report.overall_pass),
+        # A dry run or a synthetic transport is not G1 evidence either.
+        "rehearsal": bool(gate_report.get("rehearsal")) or not live,
+        "gate_report": str(per_run),
+    }
+    with (gate_report_path.parent / "history.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, default=str) + "\n")
+    return entry
+
+
+async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
     logger = setup_logging(args.verbose)
 
     if BleakClient is None or BleakScanner is None:
@@ -2397,6 +2491,17 @@ async def main_async(args: argparse.Namespace) -> int:
             logger.error(message)
         return 2
 
+    session = None
+    if args.live_hardware:
+        try:
+            session = load_session_manifest(getattr(args, "manifest", None))
+        except (ValueError, OSError, json.JSONDecodeError) as exc:
+            logger.error(f"live recording refused: {exc}")  # noqa: TRY400
+            return 2
+        if session is None:
+            logger.error("live recording refused: --manifest is required (consent + pseudonym)")
+            return 2
+
     validator = Phase1Validator(config_path, logger)
 
     try:
@@ -2420,8 +2525,13 @@ async def main_async(args: argparse.Namespace) -> int:
 
         # SOP evidence: the ten measurements PROCUREMENT.md gates G1 on.
         gate_report = validator._build_gate_report(report)
+        gate_report["session"] = session
+        gate_report["verified_by"] = getattr(args, "verified_by", None) or None
         args.gate_report.parent.mkdir(parents=True, exist_ok=True)
         args.gate_report.write_text(json.dumps(gate_report, indent=2, default=str))
+        # Append-only history: a later run must never erase an earlier attempt,
+        # and the hand-filled rows stay with the run they belonged to.
+        append_gate_history(args.gate_report, gate_report, report, live=args.live_hardware)
         logger.info(f"SOP gate report saved to: {args.gate_report}")
 
         # Print summary
@@ -2513,6 +2623,15 @@ def main() -> int:
         type=Path,
         default=Path("data/live_validation/gate_report.json"),
         help="Where to write the SOP gate report (default: data/live_validation/gate_report.json)",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Session manifest (required for live runs): subject pseudonym and consent",
+    )
+    parser.add_argument(
+        "--verified-by",
+        help="Maintainer who verified the hand-filled rows of this run",
     )
     parser.add_argument(
         "--verbose",

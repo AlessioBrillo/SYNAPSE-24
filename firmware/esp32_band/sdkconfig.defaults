@@ -1,4 +1,8 @@
 # Synapse Band v1 - ESP32-S3 SDK Configuration
+# Pin the target here: idf.py fullclean removes sdkconfig, and without this a
+# later variant silently rebuilt for the generic ESP32 (no octal PSRAM, no
+# curve-fitting ADC calibration) instead of the S3 the project targets.
+CONFIG_IDF_TARGET="esp32s3"
 # Band-specific settings (the former forearm/tier0 projects are removed; see git history)
 
 # Flash: DevKitC-1 N8R8 (WROOM-1-N8R8, 8 MB Quad flash + 8 MB Octal PSRAM).

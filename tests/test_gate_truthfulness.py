@@ -14,10 +14,12 @@ stream were counted as passes. This file pins the new contract:
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -26,6 +28,8 @@ from scripts.validate_phase1_entry import (  # noqa: E402
     LSLStreamManager,
     Phase1Validator,
     _overall_pass,
+    append_gate_history,
+    load_session_manifest,
 )
 from tests.test_validator_clock_gate import (  # noqa: E402
     CONFIG,
@@ -40,6 +44,40 @@ def _validator() -> Phase1Validator:
         _logger(),
         transport=SyntheticPodTransport(offset_ms=0.0, duration_s=1.0),
     )
+
+
+_FULL_READBACK = {
+    "v": 1,
+    "ecg_hz": 500,
+    "ppg_hz": 50,
+    "imu_hz": 50,
+    "ecg_gain_x100": 110000,
+    "ppg_led_red": 31,
+    "ppg_led_ir": 31,
+    "battery_mah": 1000,
+    "ecg_adc_ch": 0,
+    "ecg_lead_off": 15,
+    "ppg_addr": 87,
+    "ppg_sr": 0,
+    "ppg_pw": 3,
+    "ppg_adc": 3,
+    "imu_addr": 104,
+    "accel_g": 8,
+    "gyro_dps": 500,
+    "accel_hz": 102,
+    "gyro_hz": 100,
+    "i2c_port": 0,
+    "i2c_sda": 8,
+    "i2c_scl": 9,
+    "sync_gpio": 10,
+    "ina_addr": 64,
+    "ina_shunt": 100,
+    "power_profile": 1,
+    "cal_serial": "",
+    "cal_state": "none",
+    "cal_date": "",
+    "cal_operator": "",
+}
 
 
 class TestGateStates:
@@ -140,14 +178,8 @@ class TestFlashedConfig:
         validator = _validator()
         validator.live_hardware = True
         validator.device_config_readback = {
-            "v": 1,
-            "ecg_hz": 500,
-            "ppg_hz": 50,
-            "imu_hz": 50,
+            **_FULL_READBACK,
             "ecg_gain_x100": 60000,  # the stale sdkconfig gain trap
-            "ppg_led_red": 31,
-            "ppg_led_ir": 31,
-            "battery_mah": 1000,
         }
         gate = validator._flashed_config_gate()
         assert gate.status == "FAIL"
@@ -156,17 +188,30 @@ class TestFlashedConfig:
     def test_matching_config_passes(self) -> None:
         validator = _validator()
         validator.live_hardware = True
-        validator.device_config_readback = {
-            "v": 1,
-            "ecg_hz": 500,
-            "ppg_hz": 50,
-            "imu_hz": 50,
-            "ecg_gain_x100": 110000,
-            "ppg_led_red": 31,
-            "ppg_led_ir": 31,
-            "battery_mah": 1000,
-        }
+        validator.device_config_readback = dict(_FULL_READBACK)
         assert validator._flashed_config_gate().status == "PASS"
+
+    def test_missing_field_fails_instead_of_being_ignored(self) -> None:
+        validator = _validator()
+        validator.live_hardware = True
+        readback = dict(_FULL_READBACK)
+        del readback["accel_g"]
+        validator.device_config_readback = readback
+        gate = validator._flashed_config_gate()
+        assert gate.status == "FAIL"
+        assert "accel_g" in str(gate.value)
+
+    def test_calibration_serial_mismatch_fails(self) -> None:
+        validator = _validator()
+        validator.live_hardware = True
+        validator.device_serial = "SYN-A1B2C3D4E5F6"
+        validator.config["bringup"]["ble"]["serial"] = "SYN-A1B2C3D4E5F6"
+        readback = dict(_FULL_READBACK)
+        readback["cal_serial"] = "SYN-000000000000"
+        validator.device_config_readback = readback
+        gate = validator._flashed_config_gate()
+        assert gate.status == "FAIL"
+        assert "cal_serial" in str(gate.value)
 
     def test_no_readback_on_live_run_fails(self) -> None:
         validator = _validator()
@@ -192,6 +237,52 @@ class TestSerialIdentity:
     def test_synthetic_runs_are_explicitly_tagged(self) -> None:
         cfg = {"source_id": "synapse_ecg_t0_{serial}"}
         assert LSLStreamManager.render_source_id(cfg) == "synapse_ecg_t0_synthetic"
+
+
+class TestSessionGovernance:
+    """No live recording without consent, and no overwritten history."""
+
+    def _manifest(self, tmp_path: Path, **overrides: object) -> Path:
+        payload = {
+            "subject_id": "S001",
+            "consent": True,
+            "condition": "seated",
+            "device_serial": "SYN-A1B2C3D4E5F6",
+            "operator": "tester",
+            "date": "2026-11-26",
+        }
+        payload.update(overrides)
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps(payload))
+        return path
+
+    def test_valid_manifest_is_accepted(self, tmp_path: Path) -> None:
+        manifest = load_session_manifest(self._manifest(tmp_path))
+        assert manifest is not None
+        assert manifest["subject_id"] == "S001"
+
+    def test_missing_consent_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="consent"):
+            load_session_manifest(self._manifest(tmp_path, consent=False))
+
+    def test_a_real_name_is_not_a_pseudonym(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="pseudonym"):
+            load_session_manifest(self._manifest(tmp_path, subject_id="Mario Rossi"))
+
+    def test_history_is_append_only(self, tmp_path: Path) -> None:
+        class Report:
+            run_id = "run-one"
+            timestamp = "2026-11-26T00:00:00Z"
+            overall_pass = False
+
+        path = tmp_path / "gate_report.json"
+        append_gate_history(path, {"rehearsal": False}, Report())
+        Report.run_id = "run-two"
+        append_gate_history(path, {"rehearsal": False}, Report())
+        lines = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        assert (tmp_path / "gate_report_run-one.json").exists()
+        assert (tmp_path / "gate_report_run-two.json").exists()
 
 
 class TestEvidenceNeverFabricated:
