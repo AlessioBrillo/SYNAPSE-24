@@ -59,6 +59,19 @@ def test_the_core_profile_really_turns_those_features_off() -> None:
     assert "CONFIG_SYNAPSE_FEATURE_FIT_STORAGE=n" in core
 
 
+def test_the_product_build_disables_the_raw_path() -> None:
+    commands = _commands()
+    product = [c for c in commands if "sdkconfig.defaults.product" in c and "idf.py build" in c]
+    assert len(product) == 1
+    assert any("CONFIG_SYNAPSE_PRODUCT_MODE=y" in c for c in commands)
+    assert any("CONFIG_SYNAPSE_FACTORY_MODE is not set" in c for c in commands)
+    profile = (ROOT / "firmware" / "esp32_band" / "sdkconfig.defaults.product").read_text(
+        encoding="utf-8"
+    )
+    assert "CONFIG_SYNAPSE_PRODUCT_MODE=y" in profile
+    assert "CONFIG_SYNAPSE_FACTORY_MODE=n" in profile
+
+
 def test_the_flagged_rr_code_is_built_too() -> None:
     """CONFIG_SYNAPSE_RR_ENABLE is off in the product: without a build with it on, it could rot."""
     commands = _commands()

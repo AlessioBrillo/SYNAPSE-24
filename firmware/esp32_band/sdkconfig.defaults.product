@@ -1,0 +1,10 @@
+# Product profile: the first commercial-image candidate.
+# The raw research service stays compiled but is not registered (see the
+# CONFIG_SYNAPSE_PRODUCT_MODE guard in ble_gatt_server.c), so a stale
+# SYNAPSE_FEATURE_RESEARCH_SERVICE=y in an sdkconfig cannot reopen the dataset
+# path on a shipped band. Factory-only commands are off as well.
+CONFIG_SYNAPSE_PRODUCT_MODE=y
+CONFIG_SYNAPSE_FACTORY_MODE=n
+CONFIG_SYNAPSE_FEATURE_PROVISIONING=n
+CONFIG_SYNAPSE_FEATURE_OTA=n
+CONFIG_SYNAPSE_FIRMWARE_VERSION="1.0.0-product"

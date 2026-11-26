@@ -54,6 +54,10 @@ class FakeTransport:
                 "gyro_bias_mdps": [0, 0, 0],
                 "date": "",
                 "operator": "",
+                "instrument": "",
+                "fw_version": "",
+                "gain_uncertainty_pct_x100": 0,
+                "noise_std_uv_x10": 0,
             }
         parts = line.strip().split()
         if not parts:
@@ -81,8 +85,14 @@ class FakeTransport:
             self.record["accel_bias_mg"] = [int(v) for v in values]
         elif key == "gyro_bias":
             self.record["gyro_bias_mdps"] = [int(v) for v in values]
-        elif key == "serial":
-            self.record["serial"] = values[0]
+        elif key == "instrument":
+            self.record["instrument"] = values[0]
+        elif key == "fw":
+            self.record["fw_version"] = values[0]
+        elif key == "uncertainty":
+            self.record["gain_uncertainty_pct_x100"] = int(values[0])
+        elif key == "noise":
+            self.record["noise_std_uv_x10"] = int(values[0])
         elif key == "date":
             self.record["date"] = values[0]
         elif key == "operator":
@@ -139,12 +149,22 @@ def build_commands(args: argparse.Namespace) -> list[str]:
         commands.append("cal accel_bias " + " ".join(args.accel_bias))
     if args.gyro_bias:
         commands.append("cal gyro_bias " + " ".join(args.gyro_bias))
-    if args.serial:
-        if not SERIAL_RE.match(args.serial):
-            raise ValueError(
-                f"serial must be SYN- followed by 12 uppercase hex digits: {args.serial}"
-            )
-        commands.append(f"cal serial {args.serial}")
+    if args.imu_json:
+        payload = json.loads(Path(args.imu_json).read_text(encoding="utf-8"))
+        accel = payload.get("accel_bias_mg")
+        gyro = payload.get("gyro_bias_mdps")
+        if not accel or not gyro:
+            raise ValueError(f"{args.imu_json} needs accel_bias_mg and gyro_bias_mdps")
+        commands.append("cal accel_bias " + " ".join(str(int(v)) for v in accel))
+        commands.append("cal gyro_bias " + " ".join(str(int(v)) for v in gyro))
+    if args.instrument:
+        commands.append(f"cal instrument {args.instrument}")
+    if args.fw:
+        commands.append(f"cal fw {args.fw}")
+    if args.uncertainty is not None:
+        commands.append(f"cal uncertainty {int(round(float(args.uncertainty) * 100))}")
+    if args.noise_uv is not None:
+        commands.append(f"cal noise {int(round(float(args.noise_uv) * 10))}")
     if args.date:
         commands.append(f"cal date {args.date}")
     elif not args.dry_run:
@@ -189,7 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--led", help="red,IR LED codes in hex, e.g. 1F,1F")
     parser.add_argument("--accel-bias", nargs=3, metavar=("X", "Y", "Z"))
     parser.add_argument("--gyro-bias", nargs=3, metavar=("X", "Y", "Z"))
-    parser.add_argument("--serial", help="SYN- followed by 12 uppercase hex digits")
+    parser.add_argument("--imu-json", help="output of scripts/calibrate_imu.py")
+    parser.add_argument("--instrument", help="serial/ID of the generator or meter used")
+    parser.add_argument("--fw", help="firmware version used for the measurement")
+    parser.add_argument("--uncertainty", type=float, help="gain uncertainty in percent")
+    parser.add_argument("--noise-uv", type=float, help="shorted-input ECG noise in uV")
     parser.add_argument("--date", help="YYYY-MM-DD")
     parser.add_argument("--operator", help="who performed the calibration")
     parser.add_argument("--dump", action="store_true", help="only print the current record")

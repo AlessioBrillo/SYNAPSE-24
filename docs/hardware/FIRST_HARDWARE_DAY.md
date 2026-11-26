@@ -42,19 +42,23 @@ Segui `BRINGUP_SOP.md` nell'ordine; i punti dove serve qualcosa in più:
 3. **§1a Test di fabbrica.** Subito dopo il primo flash riuscito, con la band ferma sul tavolo e **senza elettrodi**: abilita `CONFIG_SYNAPSE_FACTORY_MODE` in menuconfig, riflasha e leggi `FACTORY RESULT: PASS|FAIL` (circa 13 s). Ogni riga `[FAIL]` dice quale controllo è fallito e con che numero. Se un sensore non parte, anche senza questa modalità il log di avvio elenca gli indirizzi I²C che rispondono. A prova finita rimetti l'opzione a `n`. Mai provato su una scheda: i valori d'esempio nel SOP sono illustrativi.
 4. **Calibrazione per unità (USB seriale, con `CONFIG_SYNAPSE_FACTORY_MODE=y`).** Il seriale DIS è ora `SYN-` + 12 cifre del MAC completo: segnalo il valore stampato nel log `SYNAPSE_ID` e usalo come `SYNAPSE_FOREARM_SERIAL_ID`. Con la banda collegata via USB:
 
-   `uv run python scripts/factory_calibrate.py --port COM3 --serial SYN-XXXXXXXXXXXX --operator "<nome>" --dump`
+   `uv run python scripts/factory_calibrate.py --port COM3 --dump`
+
+   Il seriale non si scrive a mano: la banda lo deriva dal MAC e il comando `--dump` deve mostrare lo stesso `SYN-` + 12 cifre del log.
 
    Dopo la misura del gain (§4a.2) scrivi il valore misurato **nell'NVS della banda**, non solo in Kconfig:
 
-   `uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/calibration/gain.json --led 1F,1F --operator "<nome>"`
+   `uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/calibration/gain.json --led 1F,1F --instrument GEN-42 --uncertainty 5 --fw 1.0.0 --operator "<nome>"`
+
+   Il bias IMU si calcola con `scripts/calibrate_imu.py` su 10 s di banda ferma e si passa con `--imu-json`; lo sweep dei LED con `scripts/ppg_sweep.py`.
 
    Il record finisce in `data/calibration/<serial>.json` (fuori git) e il firmware lo applica al boot. `gain_measured` in `hardware.yaml` resta solo documentazione del valore nominale: il dato che conta è il record NVS. `--dry-run` esercita lo stesso comando senza scheda.
-5. **§3 Primo giro.** Scollega l'USB prima di indossare gli elettrodi (sezione 0). `uv run python scripts/validate_phase1_entry.py --live-hardware --config config/hardware_bringup.yaml --duration 60`. L'XDF finisce in `data/processed/live_validation/synapse_live_<timestamp>.xdf` e il report in `data/live_validation/gate_report.json`.
+5. **§3 Primo giro.** Scollega l'USB prima di indossare gli elettrodi (sezione 0). Crea un manifest con pseudonimo `S001` e consenso, poi: `uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/2026-11-26/manifest.json --config config/hardware_bringup.yaml --duration 60`. Senza `--manifest` il registratore si rifiuta di partire. L'XDF finisce in `data/processed/live_validation/synapse_live_<timestamp>.xdf`; il report corrente in `data/live_validation/gate_report.json`, la copia del tentativo in `gate_report_<run_id>.json` e lo storico in `history.jsonl`.
 6. **§4a.1 Rumore.** Cortocircuita RA, LA e RL con un filo (nessun elettrodo sul corpo), registra 60 s con il validatore e poi:
    `uv run python scripts/g1_measure.py noise data/processed/live_validation/synapse_live_<timestamp>.xdf`
    Il validatore potrà segnare FAIL sui gate di HR e qualità perché non c'è un battito: è atteso, interessa solo l'XDF. Se il file non viene scritto, registra con LabRecorder (SOP §5).
 7. **§4a.2 Gain (opzionale per G1, obbligatorio per il prodotto).** Con il generatore (1 mVpp a 10 Hz applicati tra RA e LA tramite il partitore, RL a massa del partitore) registra 60 s e poi:
-   `uv run python scripts/g1_measure.py gain <xdf> --freq 10 --applied-mvpp 1 > data/calibration/gain.json`
+   `uv run python scripts/g1_measure.py gain <xdf> --freq 10 --applied-mvpp 1 --serial SYN-XXXXXXXXXXXX > data/calibration/gain.json`
    Lo strumento stampa JSON su stdout: reindirizzalo come sopra. Il risultato contiene `gain_measured` e `sdkconfig_ecg_gain`: passa quest'ultimo a `factory_calibrate.py --gain-json` (passo 4). **Non** serve più ricompilare per ogni unità: il gain misurato vive nel record NVS. `CONFIG_SYNAPSE_ECG_GAIN` resta il default di fabbrica e `ecg_config.gain_measured` in `hardware.yaml` resta documentazione. Lo strumento rifiuta un flusso saturato o senza la sinusoide, invece di dare un numero.
 8. **Tabella G1 di PROCUREMENT.** Le righe 3, 4, 8, 9, 11 le scrive il validatore; le righe 1, 2, 5, 6, 7, 10 si scrivono a mano in `gate_report.json`. HR contro il conteggio manuale (riga 5): 30 s di polso contati con un timer mentre il PPG registra.
 9. **Soak (6 ore, a batteria):** `--soak` come in PROCUREMENT.

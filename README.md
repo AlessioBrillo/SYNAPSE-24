@@ -2,7 +2,7 @@
 
 > **Software ready for the first bench day — nothing verified on hardware**
 >
-> The signal processing, edge AI, firmware (acquisition → BLE) and host pipeline are built and tested against public datasets, recorded signals and simulated pods. **No board, sensor, radio or phone has ever run this code**: read `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md` for what is proven and what is not. Phase 0 baseline claims are still `partial`.
+> The signal processing, edge AI, firmware (acquisition → BLE) and host pipeline are built and tested against public datasets, recorded signals and simulated pods. **No board, sensor, radio or phone has ever run this code**: read `docs/hardware/STATUS.md` for the authoritative state and `docs/increments/MVP2_6_READINESS_GOVERNANCE.md` for what is proven and what is not. Phase 0 baseline claims are still `partial`.
 
 [![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](compliance/LICENSING.md)
 [![CI gate: Woodpecker](https://img.shields.io/badge/CI-Woodpecker-blue)](.woodpecker/ci.yml)
@@ -397,7 +397,7 @@ system target) are `docs/hardware/POWER_BUDGET.md`.
 | Phase | Timeline | Focus | Status |
 |-------|----------|-------|--------|
 | **Phase 0** | Weeks 1-4 | Software stack, public data, baselines | code complete; baseline claims `partial` |
-| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software ready for the first bench day; nothing verified on hardware** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget ~€140; what is and is not proven: `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`, `docs/hardware/READINESS_GATE.md`) |
+| Phase 1 | Months 2-5 | ECG+PPG+IMU rig, LSL sync, measured power | 🔄 **Software ready for the first bench day; nothing verified on hardware** (smoke kit per `docs/hardware/PROCUREMENT.md`, budget ~€140; authoritative state: `docs/hardware/STATUS.md`) |
 | Phase 2 | Months 5-12 | Real EEG (Cerelog/PiEEG), multimodal sync | ⏳ Planned |
 | Phase 3 | Months 12-24+ | Edge AI fusion, fNIRS, 24/7 wearability | ⏳ Planned |
 

@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "synapse_calibration.h"
+#include "synapse_identity.h"
 
 static const char *TAG = "SYNAPSE_CAL_CLI";
 static synapse_calibration_t s_cal;
@@ -31,9 +32,13 @@ static void print_help(void) {
         "  cal led <red> <ir>                MAX30102 LED codes (0x00-0xFF)\r\n"
         "  cal accel_bias <mg> <mg> <mg>     static accel bias\r\n"
         "  cal gyro_bias <mdps> <mdps> <mdps> static gyro bias\r\n"
-        "  cal serial <SYN-XXXXXXXXXXXX>     printed on the box / QR\r\n"
+        "  date and serial come from the device identity and the host script\r\n"
         "  cal date <YYYY-MM-DD>             calibration date\r\n"
         "  cal operator <name>               who calibrated it\r\n"
+        "  cal instrument <id>               serial of the generator / meter\r\n"
+        "  cal fw <version>                  firmware used for the measurement\r\n"
+        "  cal uncertainty <pct_x100>        gain uncertainty, e.g. 500 = 5 %%\r\n"
+        "  cal noise <uv_x10>                shorted-input ECG noise, 0 = not measured\r\n"
         "  cal save                          seal and persist the record\r\n"
         "  cal erase                         drop the record, use Kconfig\r\n");
 }
@@ -44,13 +49,16 @@ static void dump_record(void) {
         "\"ecg_gain_x100\":%u,\"ecg_midrail_mv\":%d,"
         "\"ppg_led_red\":%u,\"ppg_led_ir\":%u,"
         "\"accel_bias_mg\":[%d,%d,%d],\"gyro_bias_mdps\":[%d,%d,%d],"
-        "\"date\":\"%s\",\"operator\":\"%s\"}\r\n",
+        "\"date\":\"%s\",\"operator\":\"%s\","
+        "\"instrument\":\"%s\",\"fw_version\":\"%s\","
+        "\"gain_uncertainty_pct_x100\":%u,\"noise_std_uv_x10\":%d}\r\n",
         s_cal.serial, synapse_calibration_state(), (unsigned)s_cal.version,
         (unsigned)s_cal.ecg_gain_x100, (int)s_cal.ecg_midrail_mv,
         (unsigned)s_cal.ppg_led_red, (unsigned)s_cal.ppg_led_ir,
         (int)s_cal.accel_bias_mg[0], (int)s_cal.accel_bias_mg[1], (int)s_cal.accel_bias_mg[2],
         (int)s_cal.gyro_bias_mdps[0], (int)s_cal.gyro_bias_mdps[1], (int)s_cal.gyro_bias_mdps[2],
-        s_cal.date, s_cal.operator);
+        s_cal.date, s_cal.operator, s_cal.instrument, s_cal.fw_version,
+        (unsigned)s_cal.gain_uncertainty_pct_x100, (int)s_cal.noise_std_uv_x10);
 }
 
 static int parse_int(const char *text, bool hex, int *out) {
@@ -119,9 +127,17 @@ static void handle_cal(char *args) {
         s_cal.gyro_bias_mdps[0] = (int16_t)a;
         s_cal.gyro_bias_mdps[1] = (int16_t)b;
         s_cal.gyro_bias_mdps[2] = (int16_t)c;
-    } else if (strcmp(cmd, "serial") == 0 && p1 && strlen(p1) < sizeof(s_cal.serial) &&
-               strncmp(p1, "SYN-", 4) == 0) {
-        snprintf(s_cal.serial, sizeof(s_cal.serial), "%s", p1);
+    } else if (strcmp(cmd, "instrument") == 0 && p1 &&
+               strlen(p1) < sizeof(s_cal.instrument)) {
+        snprintf(s_cal.instrument, sizeof(s_cal.instrument), "%s", p1);
+    } else if (strcmp(cmd, "fw") == 0 && p1 && strlen(p1) < sizeof(s_cal.fw_version)) {
+        snprintf(s_cal.fw_version, sizeof(s_cal.fw_version), "%s", p1);
+    } else if (strcmp(cmd, "uncertainty") == 0 && p1 &&
+               parse_int(p1, false, &a) == 0 && a >= 0 && a <= 10000) {
+        s_cal.gain_uncertainty_pct_x100 = (uint16_t)a;
+    } else if (strcmp(cmd, "noise") == 0 && p1 &&
+               parse_int(p1, false, &a) == 0 && a >= 0 && a <= 32767) {
+        s_cal.noise_std_uv_x10 = (int16_t)a;
     } else if (strcmp(cmd, "date") == 0 && p1 && strlen(p1) < sizeof(s_cal.date)) {
         snprintf(s_cal.date, sizeof(s_cal.date), "%s", p1);
     } else if (strcmp(cmd, "operator") == 0 && p1 && strlen(p1) < sizeof(s_cal.operator)) {
@@ -168,8 +184,14 @@ static void cli_task(void *arg) {
 void synapse_factory_cli_start(void) {
     synapse_calibration_defaults(&s_cal);
     if (synapse_calibration_load(&s_cal) != ESP_OK) {
-        ESP_LOGW(TAG, "no calibration record: editing a new one");
+        ESP_LOGW(TAG, "no calibration record (or it belongs to another band): editing a new one");
         synapse_calibration_defaults(&s_cal);
+    }
+    // The serial is never typed at the factory shell: it is the identity of
+    // this exact band, derived from its MAC and stored in NVS at boot.
+    const char *serial = synapse_identity_serial();
+    if (serial != NULL && serial[0] != '\0') {
+        snprintf(s_cal.serial, sizeof(s_cal.serial), "%s", serial);
     }
     xTaskCreate(cli_task, "cal_cli", 4096, NULL, 2, NULL);
 }

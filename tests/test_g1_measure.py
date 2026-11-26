@@ -6,6 +6,7 @@ The "bench" here is ``ecg_to_wire_uv``: the same model of the front end, the ADC
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -133,6 +134,16 @@ def test_the_nominal_gain_is_one_number_everywhere() -> None:
         if "ecg_config" in p.get("metadata", {})
     )
     assert g1.NOMINAL_GAIN == rsr.NOMINAL_GAIN == ecg["gain"]
+
+
+def test_a_calibration_record_supplies_the_configured_gain(tmp_path: Path, monkeypatch) -> None:
+    cal_dir = tmp_path / "data" / "calibration"
+    cal_dir.mkdir(parents=True)
+    (cal_dir / "SYN-TESTGAIN.json").write_text(json.dumps({"ecg_gain_x100": 90000}))
+    monkeypatch.setattr(g1, "ROOT", tmp_path)
+    assert g1.configured_gain_for("SYN-TESTGAIN") == 900.0
+    assert g1.configured_gain_for("SYN-MISSING") is None
+    assert g1.configured_gain_for(None) is None
 
 
 def test_a_capture_that_is_not_one_channel_is_refused(tmp_path: Path) -> None:

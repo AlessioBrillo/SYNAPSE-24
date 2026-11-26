@@ -47,7 +47,7 @@ You keep the copyright in your contribution. Do not submit code you do not have 
 
 | Branch Type | Naming Convention | Purpose |
 |-------------|-------------------|---------|
-| Feature | `feature/<short-description>` | New functionality |
+| Feature | `feat/<short-description>` | New functionality |
 | Bug Fix | `fix/<short-description>` | Bug fixes |
 | Refactor | `refactor/<short-description>` | Code improvements |
 | Documentation | `docs/<short-description>` | Documentation updates |
@@ -121,7 +121,7 @@ test(acquisition): add tier transition integration tests
 
 ### Review Process
 
-1. CI must pass (lint, typecheck, tests, baseline validation)
+1. CI must pass (lint, typecheck, tests, contract and interface checks). Baseline validation is **not** in the gate; see `docs/hardware/STATUS.md` for its state.
 2. At least one maintainer review required
 3. Address all review comments
 4. Squash commits if requested

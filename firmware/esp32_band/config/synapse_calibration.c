@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "synapse_identity.h"
 
 static const char *TAG = "SYNAPSE_CAL";
 
@@ -96,6 +97,18 @@ esp_err_t synapse_calibration_load(synapse_calibration_t *out) {
                  esp_err_to_name(err), (unsigned)len);
         s_state = "invalid";
         return ESP_ERR_INVALID_CRC;
+    }
+
+    /* A per-unit record is manufacturing data for ONE serial. A flash image
+     * cloned from another band, or a swapped NVS blob, must not silently
+     * rescale this band's ECG by someone else's gain. Fail closed. */
+    const char *device_serial = synapse_identity_serial();
+    if (device_serial != NULL && device_serial[0] != '\0' &&
+        strncmp(stored.serial, device_serial, sizeof(stored.serial)) != 0) {
+        ESP_LOGE(TAG, "calibration serial mismatch (record=%.20s device=%s): using defaults",
+                 stored.serial, device_serial);
+        s_state = "invalid";
+        return ESP_ERR_INVALID_STATE;
     }
 
     memcpy(out, &stored, sizeof(stored));

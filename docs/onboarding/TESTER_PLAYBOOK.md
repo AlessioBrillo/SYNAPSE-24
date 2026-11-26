@@ -1,0 +1,294 @@
+# Il manuale del collaboratore tester — SYNAPSE-24
+
+**Versione:** bozza approvata a parole il 26/11/2026.
+**Destinatario:** una persona con profilo tecnico che si occupa di prove pratiche, non di scrivere firmware.
+**Disponibilità prevista:** 4-6 ore a settimana, in laboratorio.
+**Permessi:** puoi eseguire test, compilare report e documenti, aprire issue. **Non** modifichi firmware, Kconfig o file di configurazione tracciati da Git.
+
+Questo manuale spiega **cosa fare, in che ordine e come capire se è andata bene**. Non devi conoscere il C o ESP-IDF: trovi i comandi già scritti e, accanto, il significato in parole semplici.
+
+---
+
+## 0. Cinque regole che non si discutono
+
+1. **Elettrodi sul corpo solo con la banda a batteria e USB scollegato.** Prima di indossare gli elettrodi fai sempre flash, calibrazione e lettura dei log. Durante la registrazione guardi solo via Bluetooth, oppure da un portatile a batteria e non in carica.
+2. **Il generatore di segnali e gli strumenti alimentati a rete si collegano agli ingressi solo fuori dal corpo.** Mai collegare il generatore a una persona.
+3. **Le batterie LiPo si caricano fuori dal corpo, mai incustodite.** Se una cella è gonfia, ammaccata o calda: non usarla.
+4. **Nessun nome vero nei dati.** Ogni persona registrata ha un codice tipo `S001`. Il consenso deve essere segnato prima della registrazione.
+5. **Se un passo fallisce, ti fermi.** Non "aggiusti al volo" e non cancelli un tentativo andato male: ogni tentativo va segnalato, anche quello rosso.
+
+---
+
+## 1. Preparare il PC (una volta, poi solo ricontrollo)
+
+Scopo: avere un computer che sa compilare il firmware e fare i controlli.
+
+1. Apri PowerShell nella cartella del progetto.
+2. Digita, uno alla volta:
+
+```powershell
+uv sync --dev
+$py="$env:APPDATA\uv\python\cpython-3.12-windows-x86_64-none"
+$env:PATH="$py;$py\Scripts;$env:PATH"
+. "$env:USERPROFILE\esp\esp-idf\export.ps1"
+uv run python tools/check_toolchain.py
+```
+
+3. Vuoi vedere scritto **READY**. Se vedi **BLOCKED**, non andare avanti: significa che l'ambiente ESP-IDF non è attivo in quella finestra.
+4. Controlla che il contratto sia pulito:
+
+```powershell
+uv run python tools/check_contract.py
+uv run python tools/generate_contracts.py --check
+```
+
+**Criterio di successo:** i due comandi finiscono senza errori. In caso di errore, non correggi i file: apri una issue con il messaggio esatto.
+
+Nota: il gate completo su questa macchina Windows può esaurire la memoria. La prova verde di riferimento è quella eseguita su Linux dal server. Tu la usi come verità, non devi ripeterla sul PC.
+
+---
+
+## 2. Controllare il kit appena arriva (incoming inspection)
+
+Prima di dare corrente, controlla fisicamente ogni pezzo. Segna ogni riga con OK o KO.
+
+| # | Cosa controlli | Come | Criterio |
+|---|---|---|---|
+| 1 | ESP32-S3 | Leggi la scritta sul chip/modulo | Deve essere **N8R8** (8 MB flash + 8 MB PSRAM). Se è N16R8V, è sbagliato: fermati |
+| 2 | Seconda ESP32 | Stessa verifica | Serve per il test di sincronizzazione a due pod |
+| 3 | Cavi USB | Prova a passare dati | Non devono essere "solo carica" |
+| 4 | AD8232, MAX30102, ICM-20948 | Controlla i pin e le saldature | Nessun pin piegato, nessun corto visibile |
+| 5 | Resistenze e pull-up | Prendi quelle da 1 % | Servono per il partitore del gain e le pull-up I²C da 4,7 kΩ |
+| 6 | Batterie | Misura la tensione col multimetro | 500 mAh per il banco, 1000+ mAh per il soak |
+| 7 | INA219 | Controlla l'indirizzo 0x40 e lo shunt 0,1 Ω | Deve rispondere sull'I²C |
+| 8 | Elettrodi | Confezione integra | Monouso, pelle integra |
+
+Prima di alimentare: con il multimetro verifica che **3V3 non sia in corto con GND** e che i pin usati siano quelli giusti: SDA **8**, SCL **9**, ECG **1**, INT PPG **5**, INT IMU **6**, lead-off **15**, sync **10**. Non usare mai i GPIO 26-37: su questa scheda sono flash e PSRAM.
+
+Dove scriverlo: `data/live_validation/incoming_<data>.json`.
+
+---
+
+## 3. Primo avvio della banda
+
+1. Cancella la configurazione vecchia:
+
+```powershell
+Remove-Item firmware\esp32_band\sdkconfig -ErrorAction SilentlyContinue
+Remove-Item firmware\esp32_band\sdkconfig.old -ErrorAction SilentlyContinue
+```
+
+Perché: un `sdkconfig` vecchio conserva valori vecchi (ad esempio il gain). È la trappola più comune.
+
+2. Fai il flash della versione `band-core`:
+
+```powershell
+uv run python scripts/build_and_flash_firmware.py --variant band-core --port COM3 --clean monitor
+```
+
+3. Nel log devi vedere, nell'ordine:
+   - `port 0 up: SDA=8 SCL=9`
+   - `Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]`
+   - `research service registered`
+   - `Entering main loop`
+
+4. Abilita la modalità factory (`CONFIG_SYNAPSE_FACTORY_MODE=y`) con `idf.py menuconfig`, riflasha e poi chiedi alla banda il suo record:
+
+```powershell
+uv run python scripts/factory_calibrate.py --port COM3 --dump
+```
+
+**Criterio:** la risposta deve contenere un seriale `SYN-` seguito da 12 caratteri esadecimali, e deve essere **lo stesso** che vedi nel log `SYNAPSE_ID` e nella characteristic DIS `2A25`. Se il seriale è vuoto, è un bug: fermati e segnalalo. Non provare a scriverlo a mano.
+
+Il factory test (`FACTORY RESULT: PASS`) deve durare circa 13 secondi e non mostrare righe `[FAIL]`.
+
+---
+
+## 4. Configurare e calibrare i sensori
+
+Ci sono tre livelli. Non confonderli:
+
+- **Default di fabbrica**: i valori compilati nel firmware (gain 1100, LED `1F,1F`, IMU 8 g / 500 dps).
+- **Record di calibrazione**: un piccolo archivio dentro la banda, con i valori misurati davvero per quella unità.
+- **Contratto**: `config/hardware.yaml`, il riferimento che nessuno deve cambiare a mano durante una prova.
+
+La regola è: **si misura, si scrive nel record, si verifica che la banda legga lo stesso valore**.
+
+### 4.1 Gain ECG
+
+1. Fuori dal corpo, collega il generatore all'ingresso: sinusoide da **1 mVpp a 10 Hz**, con partitore 1000:1 e resistenze all'1 %.
+2. Registra 60 secondi con il validatore.
+3. Calcola:
+
+```powershell
+uv run python scripts/g1_measure.py gain <xdf> --freq 10 --applied-mvpp 1 --configured-gain <valore-attuale>
+```
+
+ Il `<valore-attuale>` è il gain che la banda sta usando adesso (quello del record, se già calibrata). Se lo lasci fuori e la banda è già calibrata, il numero sarà sbagliato.
+
+**Criterio:** tre misure consecutive devono concordare entro il **5 %**. Un valore fino a ±15 % dal nominale 1100 è accettato ma va annotato; oltre il doppio significa cablaggio o Kconfig sbagliato.
+
+### 4.2 Corrente LED del PPG
+
+1. Con la banda ferma sul tavolo, prova le coppie di corrente una alla volta (per esempio `1A,1A`, `1F,1F`, `24,24`).
+2. Per ogni coppia registra 30 secondi e annota SQI e perfusion index.
+3. Scegli la coppia con il miglior compromesso tra qualità e consumo.
+4. Scrivila nel record:
+
+```powershell
+uv run python scripts/factory_calibrate.py --port COM3 --led 1F,1F --operator "Il tuo nome"
+```
+
+**Criterio:** la misura con la corrente scelta deve restare stabile per almeno 30 secondi consecutivi.
+
+### 4.3 Bias IMU
+
+1. Metti la banda su un tavolo fermo, senza muoverla, per 10 secondi.
+2. Esegui `uv run python scripts/calibrate_imu.py <xdf> --duration 10 > imu.json`.
+3. Scrivi i valori nel record con `factory_calibrate.py --imu-json imu.json`.
+
+**Criterio:** la banda ferma deve leggere circa 1 g sull'asse Z e valori prossimi a zero sugli altri assi.
+
+### 4.4 Chiusura della calibrazione
+
+Ogni volta che salvi, ricontrolla:
+
+```powershell
+uv run python scripts/factory_calibrate.py --port COM3 --dump
+```
+
+**Criterio:** seriale corretto (derivato dal MAC, non scritto a mano), data, operatore, strumento (`--instrument`), versione firmware (`--fw`), incertezza del gain (`--uncertainty 5` = ±5 %) e rumore ECG (`--noise-uv`). Il file finisce in `data/calibration/<seriale>.json`, fuori da Git.
+
+---
+
+## 5. Matrice dei test da eseguire
+
+Ogni test ha un ID. Quando lo esegui, salva l'esito in `evidence/<ID>.json`.
+
+| ID | Test | Comando / azione | Criterio di passaggio |
+|---|---|---|---|
+| T01 | Controllo kit | Tabella del paragrafo 2 | Tutte le righe OK |
+| T02 | Factory self-test | `FACTORY RESULT` nel log | Nessun `[FAIL]` |
+| T03 | I²C scan | Log di avvio / factory dump | Rispondono 0x57, 0x68, 0x40 |
+| T04 | Configurazione flashed | Readback device-config | Ogni campo uguale al contratto; un campo mancante è FAIL |
+| T05 | Streaming 60 s | `validate_phase1_entry.py --live-hardware --duration 60` | Zero frame persi, XDF valido |
+| T06 | Qualità PPG | Stesso run | SQI ≥ 0,3 e MAP ≤ 0,5 per oltre 30 s |
+| T07 | Frequenza cardiaca | Conteggio manuale del polso per 30 s | Errore medio ≤ 2 bpm |
+| T08 | RMSSD | Confronto con reference NeuroKit2 | Errore medio < 5 ms |
+| T09 | Potenza INA219 | Carico noto da 100 Ω | Corrente entro ±5 % del valore atteso |
+| T10 | Sync a due pod | Due devkit accoppiati | Deriva residua ≤ 10 ms su 30 min |
+| T11 | Soak 6 ore | `--soak` con LabRecorderCLI | Zero drop, XDF monotono, batteria sufficiente |
+
+I campi manuali (T07, T09) li compili tu; io li verifico e aggiungo `verified_by` nel report.
+
+---
+
+## 6. Registrare una sessione con una persona
+
+1. Chiedi il consenso e assegna un codice: `S001`, `S002`, ... Non scrivere mai il nome vero.
+2. Compila `data/sessions/<data>/manifest.json` con: codice soggetto, consenso, condizione (seduto / in movimento), seriale banda, firmware, operatore.
+3. Collega gli elettrodi: RA vicino al gomito, LA vicino al polso, RL su una parte ossea. Pelle pulita e asciutta.
+4. **Stacca l'USB.**
+5. Avvia:
+
+```powershell
+uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<data>/manifest.json --config config/hardware_bringup.yaml --duration 60
+```
+
+6. Alla fine controlla:
+   - il file XDF esiste e ha `sha256`;
+   - il gate report ha `rehearsal: false`;
+   - `device_serial` è il seriale della banda;
+   - nessun `source_id` contiene il nome della persona.
+
+Se il soggetto si sente a disagio o la pelle si arrossa: fermati, togli gli elettrodi, segnala.
+
+---
+
+## 7. Il soak di 6 ore
+
+Serve per provare il clock, la radio e la batteria per davvero.
+
+- Usa la batteria da **1000+ mAh**, non quella da 500.
+- Serve LabRecorderCLI installato e avviato: è lui il solo scrittore del file.
+- Comando:
+
+```powershell
+uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<data>/manifest.json --config config/hardware_bringup.yaml --duration 21600 --soak
+```
+
+Con 4-6 ore a settimana non puoi stare presente per sei ore di fila: fai l'avvio insieme a me, poi fissiamo un controllo a metà e la verifica finale. **Non** usare `--soak-rehearsal` come prova: è solo una prova del meccanismo e il suo report è marcato `rehearsal: true`.
+
+**Criterio:** zero frame persi, XDF con timestamp monotone, batteria ancora sufficiente alla fine.
+
+---
+
+## 8. Come segnalare un difetto
+
+Apri una issue con questo schema:
+
+```
+Titolo: [T05] drop di sequenza con banda SYN-XXXXXXXXXXXX
+
+ID test: T05
+Seriale banda: SYN-XXXXXXXXXXXX
+Firmware/build: <hash o versione>
+Config usata: config/hardware_bringup.yaml
+Comando esatto: <copia il comando>
+Risultato atteso: zero drop
+Risultato visto: 17 drop in 60 s
+Evidence: evidence/T05_<timestamp>.json
+Log: <incolla le righe utili>
+Foto: <se serve>
+Tentativi: 1/3, 2/3, 3/3
+```
+
+Non scrivere dati della persona nella issue.
+
+---
+
+## 9. Cosa significa "task chiuso"
+
+Un compito è finito solo se:
+
+- [ ] ha un ID test;
+- [ ] esiste il file di evidenza corrispondente;
+- [ ] il gate report dice PASS o FAIL esplicitamente (no N/A su una prova live);
+- [ ] è collegata una issue, anche se il risultato è verde;
+- [ ] io ho aggiunto `verified_by`;
+- [ ] la tabella in `STATUS.md` è aggiornata.
+
+Un tentativo fallito **non** si cancella: si segnala e si ripete.
+
+---
+
+## 10. Routine settimanale
+
+- **Lunedì:** controllo che PC e contratto siano puliti; leggo `STATUS.md`.
+- **Martedì:** test T01-T04 (kit, factory, I²C, configurazione).
+- **Mercoledì:** test T05-T09 (streaming, qualità, HR, RMSSD, potenza).
+- **Giovedì:** calibrazione e ripetizione dei test andati male.
+- **Venerdì:** scrivo il report, aggiorno le evidenze, preparo le issue del lunedì dopo.
+
+---
+
+## Appendice A — Parole che incontrerai
+
+- **XDF**: il file che contiene tutti i segnali registrati, con i tempi.
+- **LSL**: il sistema che fa arrivare i segnali al PC con orari affidabili.
+- **BLE / GATT**: il Bluetooth usato dalla banda per parlare col PC.
+- **NVS**: la piccola memoria della banda dove sta la calibrazione.
+- **sdkconfig**: il file di configurazione generato quando compili; vecchio = valori vecchi.
+- **Gate**: un controllo con un risultato preciso: PASS, FAIL o N/A.
+- **Seriale**: l'identificativo unico della banda, `SYN-` + 12 caratteri.
+- **Drop**: un pezzo di dati perso. "Zero drop" è il requisito.
+
+## Appendice B — Cose da non fare mai
+
+- Fare flash o calibrazione con gli elettrodi addosso.
+- Cancellare o riscrivere un gate report precedente.
+- Cambiare `hardware.yaml` per "far passare" una misura.
+- Scrivere il nome di una persona in `source_id`, log o issue.
+- Modificare Kconfig a mano per provare un valore: si cambia il contratto e si ricompila.
+- Usare `--soak-rehearsal` come se fosse un soak reale.
+- Andare avanti dopo un `[FAIL]` senza averlo segnalato.

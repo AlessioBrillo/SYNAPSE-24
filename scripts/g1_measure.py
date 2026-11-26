@@ -9,8 +9,10 @@ The band does not send ADC counts: it sends electrode-referred microvolts, compu
    amplitude, with ``r = true_gain / configured_gain``, hence ``gain_measured = r * configured_gain`` and
    the Kconfig value ``CONFIG_SYNAPSE_ECG_GAIN = round(gain_measured * 100)``.
 
-No pass/fail thresholds: neither READINESS_GATE.md nor the SOP defines any, and a made-up one would read
-as a requirement. The numbers are what G1 asks for.
+The tool reports numbers; it does not invent a verdict. BRINGUP_SOP §4a does define a
+*provisional* noise bound (<= 30 uV true noise) and gain repeatability (+/-5 % over
+three runs) — apply those in the report, not in this fit. The nominal gain and the
+ECG stream name come from config/hardware.yaml, never from a second literal here.
 
     uv run python scripts/g1_measure.py noise capture.npy
     uv run python scripts/g1_measure.py gain  capture.npy --freq 10 --applied-mvpp 1 [--configured-gain 1100]
@@ -30,11 +32,25 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import yaml
 
 MIN_SNR_DB = 10.0  # below this the "sine" is not in the data and a gain would be a fiction
 S16_LIMIT = 32767  # the wire value saturates here: a clipped sine measures a gain that is too low
-NOMINAL_GAIN = 1100.0  # config/hardware.yaml ecg_config.gain, the Kconfig default
-ECG_STREAM = "SYNAPSE_ECG_T0"  # config/hardware.yaml ecg_config.lsl_stream
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _contract_ecg() -> dict[str, object]:
+    manifest = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+    return next(
+        pod["metadata"]["ecg_config"]
+        for pod in manifest["pods"]
+        if "ecg_config" in pod.get("metadata", {})
+    )
+
+
+_ECG = _contract_ecg()
+NOMINAL_GAIN = float(_ECG["gain"])  # the Kconfig default, from the manifest
+ECG_STREAM = str(_ECG["lsl_stream"])
 
 
 def load_capture(path: Path, fs: float) -> tuple[npt.NDArray[np.float64], float]:
@@ -64,6 +80,18 @@ def load_capture(path: Path, fs: float) -> tuple[npt.NDArray[np.float64], float]
             )
         return stream.data[:, 0].astype(np.float64), rate
     raise ValueError(f"no {ECG_STREAM} stream in {path}")
+
+
+def configured_gain_for(serial: str | None) -> float | None:
+    """The gain the band is actually using, from its manufacturing record."""
+    if not serial:
+        return None
+    path = ROOT / "data" / "calibration" / f"{serial}.json"
+    if not path.exists():
+        return None
+    record = json.loads(path.read_text(encoding="utf-8"))
+    value = record.get("ecg_gain_x100")
+    return int(value) / 100.0 if value else None
 
 
 def noise_floor_uv(wire_uv: npt.ArrayLike) -> dict[str, float]:
@@ -123,18 +151,29 @@ def main() -> int:
     ap.add_argument("--fs", type=float, default=500.0)
     ap.add_argument("--freq", type=float, default=10.0)
     ap.add_argument("--applied-mvpp", type=float, default=1.0)
-    ap.add_argument("--configured-gain", type=float, default=NOMINAL_GAIN)
+    ap.add_argument("--configured-gain", type=float, help="gain the band is currently using")
+    ap.add_argument("--serial", help="band serial, to read its calibration record")
     args = ap.parse_args()
     wire, fs = load_capture(args.capture, args.fs)
     if args.what == "noise":
         result = noise_floor_uv(wire)
     else:
+        configured = args.configured_gain
+        if configured is None:
+            configured = configured_gain_for(args.serial)
+        if configured is None:
+            configured = NOMINAL_GAIN
+            print(
+                "warning: no --configured-gain and no calibration record: "
+                f"assuming the nominal {NOMINAL_GAIN:g}x",
+                file=sys.stderr,
+            )
         result = gain_from_sine(
             wire,
             fs,
             args.freq,
             args.applied_mvpp,
-            configured_gain=args.configured_gain,
+            configured_gain=configured,
         )
     print(json.dumps(result, indent=2))
     return 0

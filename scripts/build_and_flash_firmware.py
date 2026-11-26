@@ -57,6 +57,7 @@ class FirmwareBuilder:
     VARIANT_SDKCONFIG_SUFFIX = {
         "band-core": "core",
         "band-full": None,
+        "band-product": "product",
     }
 
     def __init__(

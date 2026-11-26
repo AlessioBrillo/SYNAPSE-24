@@ -10,14 +10,16 @@ Acquisition, signal-quality scoring and on-device triage of physiological signal
 
 | Evidence | Where |
 |----------|-------|
-| Automated tests with an 80% line+branch coverage gate | `tests/`, `.github/workflows/ci.yml` |
-| Lint, format and strict type checks in CI | `.github/workflows/ci.yml` |
+| Automated tests with an 80% line+branch coverage gate | `tests/`, `.woodpecker/ci.yml` (authoritative gate) |
+| Lint, format and strict type checks in CI | `.woodpecker/ci.yml` |
 | Validation against public benchmarks (WESAD, MIT-BIH, Sleep-EDF) | `scripts/validate_baseline.py`, `tests/test_*_closure*.py` |
 | Clock-sync and tier-promotion validation | `scripts/validate_sync.py`, `tests/test_clock_sync.py`, `tests/test_tier_promotion_cycle.py` |
 | Reproducible dependency lock | `uv.lock` |
 | Software bill of materials | [docs/sbom.spdx.json](docs/sbom.spdx.json) |
 
 This is good engineering practice. It is **not** a regulated quality system: there is no documented requirements-to-test traceability matrix, no formal risk file and no controlled release process.
+
+The authoritative engineering status is [docs/hardware/STATUS.md](../docs/hardware/STATUS.md); this file records the regulatory position only.
 
 ## Gaps by regime (EU market)
 
