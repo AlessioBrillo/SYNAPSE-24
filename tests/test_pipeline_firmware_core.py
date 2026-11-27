@@ -25,8 +25,12 @@ def _commands() -> list[str]:
 def test_the_core_build_uses_the_variable_esp_idf_reads() -> None:
     commands = _commands()
     core = [c for c in commands if "sdkconfig.defaults.core" in c and "idf.py build" in c]
-    assert len(core) == 1
-    assert "SDKCONFIG_DEFAULTS=" in core[0]
+    assert len(core) == 2, "the core and the bench (core + factory shell) profiles"
+    assert any(
+        c.strip().startswith('SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults"')
+        for c in core
+    )
+    assert any("sdkconfig.defaults.bench" in c for c in core)
     assert not any("SDKCONFIG_DEFAULT=" in c for c in commands), "the misspelt variable is back"
 
 

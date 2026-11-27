@@ -30,6 +30,7 @@ from scripts.validate_phase1_entry import (  # noqa: E402
     _overall_pass,
     append_gate_history,
     load_session_manifest,
+    merge_bench_values,
 )
 from tests.test_validator_clock_gate import (  # noqa: E402
     CONFIG,
@@ -268,6 +269,66 @@ class TestSessionGovernance:
     def test_a_real_name_is_not_a_pseudonym(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="pseudonym"):
             load_session_manifest(self._manifest(tmp_path, subject_id="Mario Rossi"))
+
+    def test_a_bench_manifest_needs_no_subject_or_consent(self, tmp_path: Path) -> None:
+        payload = {
+            "kind": "bench",
+            "condition": "shorted input, off body",
+            "device_serial": "SYN-A1B2C3D4E5F6",
+            "operator": "tester",
+            "date": "2026-11-27",
+        }
+        path = tmp_path / "bench.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        manifest = load_session_manifest(path)
+        assert manifest is not None
+        assert manifest["kind"] == "bench"
+        assert manifest["consent"] is None
+
+    def test_a_bench_manifest_cannot_claim_a_consent(self, tmp_path: Path) -> None:
+        payload = {
+            "kind": "bench",
+            "condition": "bench",
+            "device_serial": "SYN-A1B2C3D4E5F6",
+            "operator": "tester",
+            "date": "2026-11-27",
+            "consent": True,
+        }
+        path = tmp_path / "bench.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError, match="consent"):
+            load_session_manifest(path)
+
+    def test_a_bench_profile_drops_the_human_reference_gates(self) -> None:
+        validator = _validator()
+        validator.live_hardware = True
+        human = validator._required_gates()
+        validator.session_kind = "bench"
+        bench = validator._required_gates()
+        assert "hr_accuracy" in human
+        assert "rmssd_accuracy" in human
+        assert "hr_accuracy" not in bench
+        assert "rmssd_accuracy" not in bench
+        assert "flashed_config_matches_contract" in bench
+
+    def test_bench_values_need_a_verifier_and_only_name_hand_rows(self, tmp_path: Path) -> None:
+        report = {
+            "verified_by": None,
+            "measurements": {
+                "idle_current_ma": {"value": None, "source": "bench"},
+                "hr_mean_bpm": {"value": 70, "source": "synapse24.signal_quality.ecg"},
+            },
+        }
+        values = tmp_path / "values.json"
+        values.write_text(json.dumps({"idle_current_ma": 83.2}), encoding="utf-8")
+        with pytest.raises(ValueError, match="verified-by"):
+            merge_bench_values(report, values)
+        report["verified_by"] = "maintainer"
+        merge_bench_values(report, values)
+        assert report["measurements"]["idle_current_ma"]["value"] == 83.2
+        values.write_text(json.dumps({"hr_mean_bpm": 0}), encoding="utf-8")
+        with pytest.raises(ValueError, match="only contain"):
+            merge_bench_values(report, values)
 
     def test_history_is_append_only(self, tmp_path: Path) -> None:
         class Report:

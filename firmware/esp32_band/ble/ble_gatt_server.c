@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <assert.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -58,6 +59,9 @@ static char s_fw_rev[32] = "1.0.0";
 static char s_hw_rev[32] = "1.0";
 static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
 static uint16_t s_cfg_len = 0;
+/* A profile write changes the NVS record; the drivers read it at boot. Until
+ * the reboot the host must not claim the sensors are running the new values. */
+static bool s_config_pending_reboot = false;
 
 // 128-bit UUIDs (little-endian byte order, GATT v1 frozen) — generated from
 // config/hardware.yaml, so the firmware cannot carry a second copy of the
@@ -247,6 +251,9 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     uint32_t gain_x100 = (uint32_t)CONFIG_SYNAPSE_ECG_GAIN;
     uint8_t led_red = cfg.ppg_led_current_red;
     uint8_t led_ir = cfg.ppg_led_current_ir;
+    uint32_t battery_mah = (uint32_t)cfg.hub_battery_mah;
+    int accel_bias[3] = {0, 0, 0};
+    int gyro_bias[3] = {0, 0, 0};
     synapse_calibration_t cal;
     char cal_serial[SYNAPSE_CAL_SERIAL_MAX] = {0};
     char cal_date[SYNAPSE_CAL_DATE_MAX] = {0};
@@ -256,6 +263,11 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
         if (cal.ecg_gain_x100 != 0) gain_x100 = cal.ecg_gain_x100;
         if (cal.ppg_led_red != 0) led_red = cal.ppg_led_red;
         if (cal.ppg_led_ir != 0) led_ir = cal.ppg_led_ir;
+        if (cal.battery_capacity_mah != 0) battery_mah = cal.battery_capacity_mah;
+        for (int i = 0; i < 3; i++) {
+            accel_bias[i] = cal.accel_bias_mg[i];
+            gyro_bias[i] = cal.gyro_bias_mdps[i];
+        }
         cal_state = synapse_calibration_state();
         json_safe(cal_serial, sizeof(cal_serial), cal.serial);
         json_safe(cal_date, sizeof(cal_date), cal.date);
@@ -268,7 +280,9 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     snprintf((char *)buf, cap,
              "{\"v\":1,\"fw\":\"%s\",\"ecg_hz\":%u,\"ppg_hz\":%u,\"imu_hz\":%u,"
              "\"ecg_gain_x100\":%lu,\"ppg_led_red\":%u,\"ppg_led_ir\":%u,"
-             "\"battery_mah\":%u,\"ecg_adc_ch\":%d,\"ecg_lead_off\":%d,"
+             "\"battery_mah\":%u,\"feature_rate_hz\":%u,\"pending_reboot\":%u,"
+             "\"accel_bias_mg\":[%d,%d,%d],\"gyro_bias_mdps\":[%d,%d,%d],"
+             "\"ecg_adc_ch\":%d,\"ecg_lead_off\":%d,"
              "\"ppg_addr\":%u,\"ppg_sr\":%u,\"ppg_pw\":%u,\"ppg_adc\":%u,"
              "\"imu_addr\":%u,\"accel_g\":%d,\"gyro_dps\":%d,"
              "\"accel_hz\":%u,\"gyro_hz\":%u,"
@@ -282,7 +296,10 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)synapse_ppg_rate_hz(cfg.ppg_sample_rate),
              (unsigned)cfg.imu_accel_odr_hz,
              (unsigned long)gain_x100, (unsigned)led_red, (unsigned)led_ir,
-             (unsigned)cfg.hub_battery_mah,
+             battery_mah, (unsigned)s_feat2_rate_hz,
+             (unsigned)(s_config_pending_reboot ? 1u : 0u),
+             accel_bias[0], accel_bias[1], accel_bias[2],
+             gyro_bias[0], gyro_bias[1], gyro_bias[2],
              (int)cfg.ecg_adc_channel, (int)cfg.ecg_gpio_lead_off,
              (unsigned)cfg.ppg_i2c_addr, (unsigned)cfg.ppg_sample_rate,
              (unsigned)cfg.ppg_pulse_width, (unsigned)cfg.ppg_adc_range,
@@ -297,6 +314,43 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)cfg.power_profile,
              cal_serial, cal_state, cal_date, cal_operator);
 }
+
+#if defined(CONFIG_SYNAPSE_FACTORY_MODE)
+/* Minimal JSON readers for the device-config whitelist. A full parser would
+ * accept keys we deliberately refuse; these extract only the named fields and
+ * leave everything else to fail closed. */
+static bool json_u32(const char *req, const char *key, uint32_t *out) {
+    char pattern[40];
+    if (snprintf(pattern, sizeof(pattern), "\"%s\":", key) >= (int)sizeof(pattern)) return false;
+    const char *p = strstr(req, pattern);
+    if (p == NULL) return false;
+    p += strlen(pattern);
+    char *end = NULL;
+    unsigned long value = strtoul(p, &end, 10);
+    if (end == p || value > 0xFFFFFFFFu) return false;
+    /* Reject `31abc`: a truncated field is a malformed profile, not 31. */
+    if (*end != '\0' && *end != ',' && *end != '}' && *end != ' ' && *end != '\t') return false;
+    *out = (uint32_t)value;
+    return true;
+}
+
+static bool json_i16_array(const char *req, const char *key, int16_t *out, size_t n) {
+    char pattern[40];
+    if (snprintf(pattern, sizeof(pattern), "\"%s\":", key) >= (int)sizeof(pattern)) return false;
+    const char *p = strstr(req, pattern);
+    if (p == NULL) return false;
+    p += strlen(pattern);
+    for (size_t i = 0; i < n; i++) {
+        while (*p == ' ' || *p == '\t' || *p == '[' || *p == ',') p++;
+        char *end = NULL;
+        long value = strtol(p, &end, 10);
+        if (end == p || value < -32768 || value > 32767) return false;
+        out[i] = (int16_t)value;
+        p = end;
+    }
+    return true;
+}
+#endif
 
 static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
@@ -313,52 +367,79 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
 #else
         /* Contract 2.4, deliberately narrow: only the per-unit values the
          * calibration record already owns, plus the consumer feature rate.
-         * Rates, pins and UUIDs stay compile-time contract values. */
-        uint8_t req[96];
+         * Rates, pins and UUIDs stay compile-time contract values. A whole
+         * profile may be sent in one write; every field is validated before
+         * the record is sealed, so a partial/invalid write cannot be committed. */
+        uint8_t req[256];
         uint16_t len = 0;
         if (ble_hs_mbuf_to_flat(ctxt->om, req, sizeof(req), &len) != 0) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         req[len < sizeof(req) ? len : sizeof(req) - 1] = '\0';
-        unsigned red = 0, ir = 0, gain = 0, rate = 0;
-        if (sscanf((const char *)req, "{\"led_red\":%u,\"led_ir\":%u}", &red, &ir) == 2 &&
-            red <= 255 && ir <= 255) {
-            synapse_calibration_t cal;
-            esp_err_t err = synapse_calibration_load(&cal);
-            if (err != ESP_OK) {
-                synapse_calibration_defaults(&cal);
-                const char *serial = synapse_identity_serial();
-                if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
-            }
+
+        uint32_t red = 0, ir = 0, gain = 0, rate = 0, battery = 0;
+        int16_t accel[3] = {0}, gyro[3] = {0};
+        const bool have_rate = json_u32((const char *)req, "feature_rate_hz", &rate);
+        const bool have_led = json_u32((const char *)req, "led_red", &red) &&
+                              json_u32((const char *)req, "led_ir", &ir);
+        const bool have_gain = json_u32((const char *)req, "gain_x100", &gain);
+        const bool have_battery = json_u32((const char *)req, "battery_mah", &battery);
+        const bool have_accel = json_i16_array((const char *)req, "accel_bias_mg", accel, 3);
+        const bool have_gyro = json_i16_array((const char *)req, "gyro_bias_mdps", gyro, 3);
+
+        if (have_rate &&
+            (rate < 1 || rate > SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ)) {
+            ESP_LOGW(BLE_TAG, "config write refused: feature rate out of range");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (!have_led && !have_gain && !have_battery && !have_accel && !have_gyro && !have_rate) {
+            ESP_LOGW(BLE_TAG, "config write refused: no whitelisted field");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if ((have_led && (red > 255 || ir > 255)) ||
+            (have_gain && (gain == 0 || gain > 1000000u)) ||
+            (have_battery && (battery < 100u || battery > 10000u))) {
+            ESP_LOGW(BLE_TAG, "config write refused: value out of range");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (have_accel && (accel[0] < -2000 || accel[0] > 2000 ||
+                           accel[1] < -2000 || accel[1] > 2000 ||
+                           accel[2] < -2000 || accel[2] > 2000)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (have_gyro && (gyro[0] < -20000 || gyro[0] > 20000 ||
+                          gyro[1] < -20000 || gyro[1] > 20000 ||
+                          gyro[2] < -20000 || gyro[2] > 20000)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (have_rate) {
+            ctl_set_feature_rate((uint8_t)rate, NULL);
+            ESP_LOGI(BLE_TAG, "config write: feature rate=%lu Hz", (unsigned long)rate);
+        }
+        if (!have_led && !have_gain && !have_battery && !have_accel && !have_gyro) {
+            return 0;
+        }
+
+        synapse_calibration_t cal;
+        esp_err_t err = synapse_calibration_load(&cal);
+        if (err != ESP_OK) {
+            synapse_calibration_defaults(&cal);
+            const char *serial = synapse_identity_serial();
+            if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
+        }
+        if (have_led) {
             if (red != 0) cal.ppg_led_red = (uint8_t)red;
             if (ir != 0) cal.ppg_led_ir = (uint8_t)ir;
-            synapse_calibration_seal(&cal);
-            if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
-            ESP_LOGI(BLE_TAG, "config write: LED red=%u ir=%u", red, ir);
-            return 0;
         }
-        if (sscanf((const char *)req, "{\"gain_x100\":%u}", &gain) == 1 && gain > 0) {
-            synapse_calibration_t cal;
-            esp_err_t err = synapse_calibration_load(&cal);
-            if (err != ESP_OK) {
-                synapse_calibration_defaults(&cal);
-                const char *serial = synapse_identity_serial();
-                if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
-            }
-            cal.ecg_gain_x100 = gain;
-            synapse_calibration_seal(&cal);
-            if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
-            ESP_LOGI(BLE_TAG, "config write: ECG gain=%ux100", gain);
-            return 0;
-        }
-        if (sscanf((const char *)req, "{\"feature_rate_hz\":%u}", &rate) == 1 &&
-            rate >= 1 && rate <= SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ) {
-            ctl_set_feature_rate((uint8_t)rate, NULL);
-            ESP_LOGI(BLE_TAG, "config write: feature rate=%u Hz", rate);
-            return 0;
-        }
-        ESP_LOGW(BLE_TAG, "config write refused: unknown or out-of-range payload");
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (have_gain) cal.ecg_gain_x100 = gain;
+        if (have_battery) cal.battery_capacity_mah = (uint16_t)battery;
+        if (have_accel) memcpy(cal.accel_bias_mg, accel, sizeof(cal.accel_bias_mg));
+        if (have_gyro) memcpy(cal.gyro_bias_mdps, gyro, sizeof(cal.gyro_bias_mdps));
+        synapse_calibration_seal(&cal);
+        if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
+        s_config_pending_reboot = true;
+        ESP_LOGI(BLE_TAG, "config write: per-unit profile sealed; reboot needed");
+        return 0;
 #endif
     }
     return BLE_ATT_ERR_UNLIKELY;

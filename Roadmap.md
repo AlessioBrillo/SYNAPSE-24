@@ -178,6 +178,7 @@ Every row below is "closed" in the sense of *merged and tested on the host*; **n
 | MVP-1.9 | Pre-hardware hardening: no silent sample loss, one contract (2.3), true documentation | `docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md` |
 | MVP-2.0 / 2.1 / 2.2 | Firmware sensor hardening, device identity and calibration, fail-closed G1 evidence | `docs/increments/MVP2_1_HARDWARE_READY.md`, `docs/increments/MVP2_2_G1_EVIDENCE_TRUTH.md` |
 | MVP-2.3 / 2.4 / 2.5 / 2.6 | Full flashed-config truth, calibration v2 and bench suite, session governance, product build | `docs/hardware/STATUS.md`, `docs/increments/MVP2_6_READINESS_GOVERNANCE.md` |
+| MVP-2.7 | Fail-closed bench evidence, bench/human manifests, one per-unit profile command, executable T10 | `docs/hardware/STATUS.md`, `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md` |
 | **Next** | The first bench day (`docs/hardware/FIRST_HARDWARE_DAY.md`); a BLE dongle (MVP-1.7 radio); a Mac (iOS) | |
 
 **Honest reality check:** 24/7 dry-electrode EEG at good signal quality is an unsolved problem even for funded labs; fNIRS DIY is genuinely hard analog/optical work; and long-term wearability/power are their own multi-month efforts. A solo, part-time researcher should treat the ECG+PPG+IMU+consumer-EEG stack as the achievable near-term win and treat dense dry-EEG and DIY-fNIRS as ambitious research spikes, not deliverables on a fixed schedule.

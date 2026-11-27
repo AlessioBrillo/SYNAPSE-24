@@ -9,4 +9,7 @@
 #ifndef STUB_SDKCONFIG_H
 #define STUB_SDKCONFIG_H
 
+/* The boot log prints the compiled variant; host gates have no Kconfig. */
+#define CONFIG_SYNAPSE_BUILD_VARIANT "host"
+
 #endif /* STUB_SDKCONFIG_H */

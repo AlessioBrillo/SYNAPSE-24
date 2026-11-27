@@ -8,6 +8,8 @@
 # bringup does not block on sensors that have not been procured yet.
 # Everything disabled here is still available in the default band-full build.
 
+CONFIG_SYNAPSE_BUILD_VARIANT="band-core"
+
 # Sensors not present in the smoke kit.
 CONFIG_SYNAPSE_FEATURE_GPS=n
 CONFIG_SYNAPSE_FEATURE_TEMPERATURE=n

@@ -20,6 +20,10 @@ READBACK_KEYS = (
     "ppg_led_red",
     "ppg_led_ir",
     "battery_mah",
+    "feature_rate_hz",
+    "pending_reboot",
+    "accel_bias_mg",
+    "gyro_bias_mdps",
     "ecg_adc_ch",
     "ecg_lead_off",
     "ppg_addr",
@@ -60,10 +64,19 @@ def test_operator_strings_cannot_break_the_json() -> None:
 
 def test_config_write_is_a_narrow_whitelist_in_factory_mode() -> None:
     assert "CONFIG_SYNAPSE_FACTORY_MODE" in GATT
-    for key in ("led_red", "led_ir", "gain_x100", "feature_rate_hz"):
-        assert f'\\"{key}\\"' in GATT
+    for key in (
+        "led_red",
+        "led_ir",
+        "gain_x100",
+        "feature_rate_hz",
+        "battery_mah",
+        "accel_bias_mg",
+        "gyro_bias_mdps",
+    ):
+        assert f'"{key}"' in GATT
     assert "config write refused: factory mode off" in GATT
-    assert "unknown or out-of-range payload" in GATT
+    assert "no whitelisted field" in GATT
+    assert "value out of range" in GATT
 
 
 def test_product_build_never_registers_the_raw_service() -> None:

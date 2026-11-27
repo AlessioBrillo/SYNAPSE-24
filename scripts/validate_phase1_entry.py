@@ -377,6 +377,10 @@ class Phase1Validator:
         # profile and the fail-closed preconditions. CI/synthetic runs keep the
         # reduced "synthetic" profile and must say so in the report.
         self.live_hardware = False
+        # "human" keeps the G1 profile; "bench" is an off-body technical run
+        # with no subject and therefore no human-reference gates. It is set by
+        # main() from the session manifest before the validation loop starts.
+        self.session_kind = "human"
         # One measurement per session: both the gates and the SOP gate report
         # read these numbers, so they must not be recomputed twice.
         self._quality_cache: dict[str, Any] | None = None
@@ -812,7 +816,13 @@ class Phase1Validator:
 
     def _save_xdf_and_verify(self) -> tuple[dict, Path | None]:
         val_cfg = self.config["bringup"]["validation"]
-        output_dir = Path(val_cfg["xdf_output_dir"])
+        # Off-body bench captures are not human sessions: they never land in
+        # the session tree, so a later export cannot mistake them for data
+        # recorded from a person.
+        configured_dir = val_cfg["xdf_output_dir"]
+        if self.live_hardware and self.session_kind == "bench":
+            configured_dir = val_cfg.get("bench_xdf_output_dir", "data/bench")
+        output_dir = Path(configured_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -1005,7 +1015,10 @@ class Phase1Validator:
     def _required_gates(self) -> set[str]:
         """Names of the gates that decide this run's verdict."""
         validation = self.config["bringup"]["validation"]
-        profile = "live" if self.live_hardware else "synthetic"
+        if self.live_hardware and self.session_kind == "bench":
+            profile = "bench"
+        else:
+            profile = "live" if self.live_hardware else "synthetic"
         return set(validation.get("required_gates", {}).get(profile, []))
 
     def _gate(
@@ -2417,6 +2430,10 @@ SUBJECT_RE = re.compile(r"^S\d{3,}$")
 def load_session_manifest(path: Path | None) -> dict[str, Any] | None:
     """A human session needs consent and a pseudonym before any recording.
 
+    An off-body technical run declares ``kind: bench`` instead: no subject, no
+    consent, but still an operator, a band serial and a condition. Factory
+    benches must not invent a pseudonym and a consent that never happened.
+
     Returns ``None`` for synthetic runs. On a live run the caller refuses to
     start when this raises; no health data is recorded without a lawful basis
     recorded in the manifest.
@@ -2424,15 +2441,60 @@ def load_session_manifest(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
     manifest = json.loads(Path(path).read_text(encoding="utf-8"))
-    required = ("subject_id", "consent", "condition", "device_serial", "operator", "date")
-    missing = [key for key in required if key not in manifest]
+    if not isinstance(manifest, dict):
+        raise ValueError("session manifest must be a JSON object")  # noqa: TRY004 - CLI error text
+    common = ("condition", "device_serial", "operator", "date")
+    missing = [key for key in common if key not in manifest]
     if missing:
         raise ValueError(f"session manifest is missing {missing}")
-    if not SUBJECT_RE.match(str(manifest["subject_id"])):
-        raise ValueError(f"subject_id must be S### (a pseudonym), got {manifest['subject_id']!r}")
-    if manifest["consent"] is not True:
+
+    kind = str(manifest.get("kind", "human"))
+    if kind not in ("human", "bench"):
+        raise ValueError(f"manifest kind must be 'human' or 'bench', got {kind!r}")
+    manifest["kind"] = kind
+    if kind == "bench":
+        for key in ("subject_id", "consent"):
+            if key in manifest:
+                raise ValueError(f"a bench manifest must not declare {key!r}")
+        manifest["subject_id"] = None
+        manifest["consent"] = None
+        return manifest
+
+    if not SUBJECT_RE.match(str(manifest.get("subject_id", ""))):
+        raise ValueError(
+            f"subject_id must be S### (a pseudonym), got {manifest.get('subject_id')!r}"
+        )
+    if manifest.get("consent") is not True:
         raise ValueError("consent must be true before a live recording")
     return manifest
+
+
+# Only rows a person measures off-bench may be supplied from outside: the
+# rest of the report is computed from this recording and must stay computed.
+HAND_MEASURED_ROWS = ("idle_current_ma", "tier0_avg_current_ma")
+
+
+def merge_bench_values(gate_report: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Merge hand-measured bench rows into the gate report, with provenance.
+
+    Hand-filled rows used to be typed into ``gate_report.json`` after the run
+    and were erased by the next run. Supplying them at run time keeps them
+    inside the append-only history run they belong to.
+    """
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("bench values must be a JSON object")  # noqa: TRY004 - CLI error text
+    unknown = sorted(set(payload) - set(HAND_MEASURED_ROWS))
+    if unknown:
+        raise ValueError(f"bench values may only contain {HAND_MEASURED_ROWS}, got {unknown}")
+    if not gate_report.get("verified_by"):
+        raise ValueError("bench values require --verified-by (the maintainer who checked them)")
+    for name, value in payload.items():
+        row = gate_report["measurements"][name]
+        row["value"] = value
+        row["source"] = "bench"
+        row["verified_by"] = gate_report["verified_by"]
+    return gate_report
 
 
 def append_gate_history(
@@ -2503,6 +2565,7 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
             return 2
 
     validator = Phase1Validator(config_path, logger)
+    validator.session_kind = str(session.get("kind", "human")) if session else "human"
 
     try:
         report = await validator.run(
@@ -2527,6 +2590,26 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
         gate_report = validator._build_gate_report(report)
         gate_report["session"] = session
         gate_report["verified_by"] = getattr(args, "verified_by", None) or None
+        if getattr(args, "bench_values", None):
+            try:
+                merge_bench_values(gate_report, args.bench_values)
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                logger.error(f"bench values refused: {exc}")  # noqa: TRY400
+                return 2
+        # A hand-filled row is a claim made by a person. Without a second
+        # signature it stays visible but cannot turn the run green (G1 matrix
+        # rule 3). This applies to bench runs too: an operator still measured
+        # the known load or the manual pulse count.
+        hand_filled = [
+            name
+            for name, row in gate_report["measurements"].items()
+            if row.get("source") == "bench" and row.get("value") is not None
+        ]
+        gate_report["unverified_manual_rows"] = [] if gate_report["verified_by"] else hand_filled
+        if hand_filled and not gate_report["verified_by"]:
+            gate_report["overall_pass"] = False
+            report.overall_pass = False
+            logger.error("hand-filled rows need --verified-by: %s", ", ".join(hand_filled))
         args.gate_report.parent.mkdir(parents=True, exist_ok=True)
         args.gate_report.write_text(json.dumps(gate_report, indent=2, default=str))
         # Append-only history: a later run must never erase an earlier attempt,
@@ -2627,7 +2710,18 @@ def main() -> int:
     parser.add_argument(
         "--manifest",
         type=Path,
-        help="Session manifest (required for live runs): subject pseudonym and consent",
+        help=(
+            "Session manifest (required for live runs): kind=human needs a "
+            "subject pseudonym and consent; kind=bench is an off-body test"
+        ),
+    )
+    parser.add_argument(
+        "--bench-values",
+        type=Path,
+        help=(
+            "JSON with the hand-measured bench rows (idle_current_ma, "
+            "tier0_avg_current_ma); requires --verified-by"
+        ),
     )
     parser.add_argument(
         "--verified-by",

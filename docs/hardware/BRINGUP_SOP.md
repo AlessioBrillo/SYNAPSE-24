@@ -110,18 +110,25 @@ validator binds to that serial (and derives the LSL `source_id`) instead of
 taking the first device whose name contains `SYNAPSE`; with two bands on the
 bench an ambiguous scan is an error, not a guess.
 
-With `CONFIG_SYNAPSE_FACTORY_MODE=y` the USB serial console offers a
-calibration shell (`help` lists it). The host driver is:
+The **`band-bench`** image already enables `CONFIG_SYNAPSE_FACTORY_MODE=y`, so
+the USB serial console offers a calibration shell (`help` lists it) without
+`menuconfig`. The host drivers are:
 
 ```bash
 uv run python scripts/factory_calibrate.py --port COM3 --dump
 uv run python scripts/factory_calibrate.py --port COM3 --gain-json <gain.json> \
-    --led 1F,1F --operator "<name>"
+    --led 1F,1F --battery 1000 --operator "<name>"
+# Over BLE, with atomic readback verification:
+uv run python scripts/device_profile.py configure <serial> --address <ble-addr> \
+    --profile profile.json
+uv run python scripts/device_profile.py verify <serial> --address <ble-addr>
 ```
 
 Commands write a versioned, CRC-checked NVS record that the sensor layer
-applies before configuring the drivers: ECG gain, PPG LED currents and IMU
-zero offsets. `cal erase` returns the band to Kconfig defaults. The resulting
+applies before configuring the drivers: ECG gain, PPG LED currents, IMU zero
+offsets and the fitted cell capacity. `cal erase` returns the band to Kconfig
+defaults. A profile write sets `pending_reboot: 1` in the readback: reboot the
+band before recording, or `device_profile.py verify` fails. The resulting
 `data/calibration/<serial>.json` is manufacturing data and is not committed.
 The ECG mid-rail is **not** forced at boot: the driver re-measures it after
 lead-off, and a stale stored DC offset would be worse than none.
@@ -141,7 +148,7 @@ measurement.
 ```bash
 rm -f firmware/esp32_band/sdkconfig   # a stale sdkconfig overrides the defaults (gain trap)
 uv run python tools/check_contract.py
-uv run python scripts/build_and_flash_firmware.py --variant band-core \
+uv run python scripts/build_and_flash_firmware.py --variant band-bench \
     --port COM3 --clean monitor
 ```
 
@@ -150,7 +157,7 @@ Expected first-boot sequence:
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
 I (xxx) synapse_i2c: port 0 up: SDA=8 SCL=9 400000 Hz
-I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
+I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-bench]
 I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
 I (xxx) INA219: INA219 ready at 0x40 (bus 3.70 V, shunt 0.100 ohm)
 I (xxx) SYNAPSE_POWER: INA219 power monitor active: measured current telemetry enabled
@@ -165,8 +172,10 @@ keeps running and the rest keeps streaming. During a capture, `ECG input stuck` 
 has been on a rail or constant for ~2 s (AD8232 unpowered, broken wire to the ADC pin): that is
 not a quiet ECG, and the lead-off pin cannot tell it.
 
-`[band-core]` must appear. If GPS/Temp lines appear instead, the wrong variant
-was built. The INA219 lines appear only when the monitor is stocked and
+`[band-bench]` must appear — it is the core smoke-kit profile with the factory
+shell enabled. If GPS/Temp lines appear, the wrong variant was built. A stale
+`[band-core]` here is equally wrong: the boot log now prints the variant that
+was actually compiled. The INA219 lines appear only when the monitor is stocked and
 answering at 0x40; without it the rig still boots and reports the current
 figure as a tier-model estimate rather than a measurement — the SOP's power
 row then says so instead of inventing a number.
@@ -179,10 +188,10 @@ bus (`I2C scan: 0x57 answers (MAX30102)` …). That separates the causes that us
 setting (`CONFIG_SYNAPSE_PPG_I2C_ADDR`, the ICM-20948 AD0 pin: 0x68 or 0x69); the right address
 answering with a failed init is the part itself.
 
-The **factory test** is the whole check of an assembled band in one run. Enable it in
-`idf.py menuconfig` (*Synapse Band Hardware Configuration → Run the factory self-test at every
-boot*, `CONFIG_SYNAPSE_FACTORY_MODE`, off by default and never on in a shipped image), flash, and
-leave the band **still on the bench with no electrodes on it** (USB is fine then; the safety rule
+The **factory test** is the whole check of an assembled band in one run. It is
+already enabled by the `band-bench` image (`CONFIG_SYNAPSE_FACTORY_MODE`; it is
+off in the product image). Flash that variant and leave the band **still on the
+bench with no electrodes on it** (USB is fine then; the safety rule
 at the top is about electrodes on a body). It takes about 13 s and prints (the values are illustrative: no band has run it yet):
 
 ```
@@ -232,10 +241,14 @@ which `sdkconfig.defaults.core` sets.
 
 ```bash
 export SYNAPSE_FOREARM_BLE="aa:bb:cc:dd:ee:ff"   # or leave as auto
-# A live session needs consent and a pseudonym (S###) in a manifest.
+# A human session needs "kind": "human", consent and a pseudonym (S###).
+# An off-body bench run uses "kind": "bench" with an operator and a serial
+# instead; it must never declare a subject or a consent that did not happen.
 uv run python scripts/validate_phase1_entry.py --live-hardware \
     --manifest data/sessions/2026-11-26/manifest.json \
     --config config/hardware_bringup.yaml --duration 60
+# Hand-measured rows belong to the same run and need a verifier:
+#   ... --bench-values data/bench/values.json --verified-by "<maintainer>"
 ```
 
 The validator must report, in this order:
@@ -295,18 +308,26 @@ for €0:
    attainable — pods on different body sites (head vs forearm) see different
    motion and will never correlate, whatever the clocks do.
 2. Flash both with `band-core`; they advertise as two `SYNAPSE-BAND` devices.
-3. Subscribe to ECG+PPG+ACC on both; run the validator once per pod; align
-   the two recordings via `PodClockModel`/`ACC cross-correlation` and record
-   the residual. **≤10 ms over 30 min PASSES** the sync precondition for the
-   Cerelog order.
+3. Subscribe to ECG+PPG+ACC on both; record both pods simultaneously (two
+   recorders, or one PC with two BLE adapters). Then compute the residual:
+
+   ```bash
+   uv run python scripts/bench_suite.py sync --pods pod_a.xdf pod_b.xdf
+   ```
+
+   The tool interpolates both ACC magnitudes on a 1 kHz grid, cross-correlates
+   six windows across the overlap and writes `sync.pod_pair_residual_ms` with
+   the observed correlation. A window below `min_acc_correlation: 0.7` returns
+   **no residual**, never a zero. **≤10 ms over 30 min PASSES** the sync
+   precondition for the Cerelog order.
 4. The wired-sync line (GPIO 10 between the pods, not GPIO 27: a flash pin on the N8R8) is driven by the hub-side
    driver already compiled into band-core, but *emitting* the pulse is a G2
    feature (real head pod, second body site): for the bench measurement above
    leave GPIO 10 unconnected.
 
-Write the residual into `gate_report.json` under `sync.pod_pair_residual_ms`
-— `PROCUREMENT.md` treats the pod↔pod number, not pod↔host, as the evidence
-for spending €350.
+Attach the tool's `pod_pair_sync.json` (or `evidence/T10_*.json`) to the gate
+report — `PROCUREMENT.md` treats the pod↔pod number, not pod↔host, as the
+evidence for spending €350.
 
 ## 4. Record the numbers
 
@@ -401,7 +422,7 @@ There are exactly two soak modes, and only one of them counts:
 
 | Mode | Command | What it proves |
 |---|---|---|
-| **Real soak (`--soak`)** — the G1 evidence | `uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<id>/manifest.json --config config/hardware_bringup.yaml --duration 21600 --soak` | six physical hours on the pod: radio, ring, clock wrap, battery. Writes the XDF through LabRecorderCLI (single writer, see the note at the top) and the gate report to `data/live_validation/gate_report.json` (override with `--gate-report`) |
+| **Real soak (`--soak`)** — the G1 evidence | `uv run python scripts/bench_suite.py soak --live --manifest data/sessions/<id>/manifest.json --duration 21600` | six physical hours on the pod: radio, ring, clock wrap, battery. Writes the XDF through LabRecorderCLI (single writer, see the note at the top) and the gate report to `data/live_validation/gate_report.json` (override with `--gate-report`) |
 | **Rehearsal (`--soak-rehearsal`)** — machinery proof only | `uv run python scripts/validate_phase1_entry.py --config config/hardware_bringup.yaml --duration 300 --soak-rehearsal` | the same validation loop and gate-report path over a deterministic synthetic spool, runnable in CI and without LabRecorderCLI. Its artifact marks itself (`rehearsal: true`, `source: "spool (synthetic rehearsal)"`) and is **never** G1 evidence |
 
 The two flags are mutually exclusive — the script refuses the combination.

@@ -39,6 +39,7 @@ static void print_help(void) {
         "  cal fw <version>                  firmware used for the measurement\r\n"
         "  cal uncertainty <pct_x100>        gain uncertainty, e.g. 500 = 5 %%\r\n"
         "  cal noise <uv_x10>                shorted-input ECG noise, 0 = not measured\r\n"
+        "  cal battery <mah>                 fitted cell capacity (0 = Kconfig default)\r\n"
         "  cal save                          seal and persist the record\r\n"
         "  cal erase                         drop the record, use Kconfig\r\n");
 }
@@ -51,14 +52,16 @@ static void dump_record(void) {
         "\"accel_bias_mg\":[%d,%d,%d],\"gyro_bias_mdps\":[%d,%d,%d],"
         "\"date\":\"%s\",\"operator\":\"%s\","
         "\"instrument\":\"%s\",\"fw_version\":\"%s\","
-        "\"gain_uncertainty_pct_x100\":%u,\"noise_std_uv_x10\":%d}\r\n",
+        "\"gain_uncertainty_pct_x100\":%u,\"noise_std_uv_x10\":%d,"
+        "\"battery_capacity_mah\":%u}\r\n",
         s_cal.serial, synapse_calibration_state(), (unsigned)s_cal.version,
         (unsigned)s_cal.ecg_gain_x100, (int)s_cal.ecg_midrail_mv,
         (unsigned)s_cal.ppg_led_red, (unsigned)s_cal.ppg_led_ir,
         (int)s_cal.accel_bias_mg[0], (int)s_cal.accel_bias_mg[1], (int)s_cal.accel_bias_mg[2],
         (int)s_cal.gyro_bias_mdps[0], (int)s_cal.gyro_bias_mdps[1], (int)s_cal.gyro_bias_mdps[2],
         s_cal.date, s_cal.operator, s_cal.instrument, s_cal.fw_version,
-        (unsigned)s_cal.gain_uncertainty_pct_x100, (int)s_cal.noise_std_uv_x10);
+        (unsigned)s_cal.gain_uncertainty_pct_x100, (int)s_cal.noise_std_uv_x10,
+        (unsigned)s_cal.battery_capacity_mah);
 }
 
 static int parse_int(const char *text, bool hex, int *out) {
@@ -138,6 +141,9 @@ static void handle_cal(char *args) {
     } else if (strcmp(cmd, "noise") == 0 && p1 &&
                parse_int(p1, false, &a) == 0 && a >= 0 && a <= 32767) {
         s_cal.noise_std_uv_x10 = (int16_t)a;
+    } else if (strcmp(cmd, "battery") == 0 && p1 &&
+               parse_int(p1, false, &a) == 0 && a >= 0 && a <= 65535) {
+        s_cal.battery_capacity_mah = (uint16_t)a;
     } else if (strcmp(cmd, "date") == 0 && p1 && strlen(p1) < sizeof(s_cal.date)) {
         snprintf(s_cal.date, sizeof(s_cal.date), "%s", p1);
     } else if (strcmp(cmd, "operator") == 0 && p1 && strlen(p1) < sizeof(s_cal.operator)) {
