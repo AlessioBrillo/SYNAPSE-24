@@ -46,6 +46,10 @@ READBACK_KEYS = (
     "cal_state",
     "cal_date",
     "cal_operator",
+    "cal_instrument",
+    "cal_fw_version",
+    "cal_uncertainty_pct_x100",
+    "cal_noise_std_uv_x10",
 )
 
 
@@ -78,6 +82,61 @@ def test_config_write_is_a_narrow_whitelist_in_factory_mode() -> None:
     assert "no whitelisted field" in GATT
     assert "unknown field in payload" in GATT
     assert "value out of range" in GATT
+
+
+def test_whitelist_parsers_fail_closed() -> None:
+    helper = (ROOT / "firmware" / "esp32_band" / "config" / "synapse_config_json.h").read_text(
+        encoding="utf-8"
+    )
+    # Signed values must be refused: on the 32-bit firmware strtoul() would
+    # wrap `{"battery_mah":-4294966296}` into 1000 and commit it.
+    assert "*p == '-' || *p == '+'" in helper
+    assert "errno == ERANGE" in helper
+    assert "ULONG_MAX > 0xFFFFFFFFu" in helper
+    # A truncated number and a malformed array are not silently accepted.
+    assert "*end != ',' && *end != '}'" in helper
+    assert "if (*p != '[') return false;" in helper
+    assert "if (*p != ',') return false;" in helper
+    assert "if (*p != ']') return false;" in helper
+    # One balanced object, no duplicate keys, no quoted value, no trailing junk.
+    assert "CFG_JSON_ERR_DUPLICATE_KEY" in helper
+    assert "CFG_JSON_ERR_MALFORMED" in helper
+    assert "if (*before != '{' && *before != ',')" in helper
+    assert "if (*after != ':')" in helper
+    assert "CFG_JSON_OK : CFG_JSON_ERR_MALFORMED" in helper
+    assert "json_safe(" in GATT
+
+
+def test_readback_reports_state_and_effective_pending_reboot() -> None:
+    assert "synapse_calibration_effective_crc(&cal)" in GATT
+    assert 'strcmp(state, "defaults") == 0 ? "none" : state' in GATT
+    assert "synapse_calibration_state()" in GATT
+    for key in (
+        "cal_instrument",
+        "cal_fw_version",
+        "cal_uncertainty_pct_x100",
+        "cal_noise_std_uv_x10",
+    ):
+        assert f'\\"{key}\\"' in GATT
+
+
+def test_per_unit_writes_need_a_provenance_complete_record() -> None:
+    assert "cal_has_provenance" in GATT
+    for field in (
+        "serial",
+        "date",
+        "operator",
+        "instrument",
+        "fw_version",
+        "gain_uncertainty_pct_x100",
+    ):
+        assert f"cal->{field}" in GATT
+    assert "no provenance-complete calibration record" in GATT
+    assert "BLE_ATT_ERR_WRITE_NOT_PERMITTED" in GATT
+    assert "malformed JSON payload" in GATT
+    assert "duplicate key in payload" in GATT
+    assert "feature_rate_hz is session-only" in GATT
+    assert "if (!per_unit) return 0;" in GATT  # rate-only: RAM, never persisted
 
 
 def test_product_build_never_registers_the_raw_service() -> None:

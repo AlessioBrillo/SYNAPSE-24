@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,10 +13,19 @@ def _text(relative: str) -> str:
 
 
 def test_status_is_the_source_of_truth() -> None:
+    """The latest increment comes from STATUS.md, not from a pinned literal."""
     status = _text("docs/hardware/STATUS.md")
-    assert "MVP-2.6" in status
+    # STATUS.md writes the label in bold: "**Latest increment:** MVP-2.7 ...",
+    # so skip the markdown asterisks before reading the increment id.
+    match = re.search(r"Latest increment:\s*\**\s*(\S+)", status)
+    assert match is not None, "STATUS.md must declare 'Latest increment:'"
+    increment = match.group(1).strip("*")
+    assert increment.startswith("MVP-"), increment
     assert "G1" in status
-    assert (ROOT / "docs/increments/MVP2_6_READINESS_GOVERNANCE.md").is_file()
+
+    prefix = "MVP" + increment.removeprefix("MVP-").replace(".", "_")
+    increments = sorted((ROOT / "docs/increments").glob(f"{prefix}_*.md"))
+    assert increments, f"no docs/increments/{prefix}_*.md for {increment}"
 
 
 def test_other_documents_point_to_status() -> None:

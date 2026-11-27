@@ -100,6 +100,16 @@ config SYNAPSE_FACTORY_MODE
         the bench while it runs. Leave this off in a product image: it delays the start of the
         normal work and, while it runs, nothing consumes the sample queue.
 
+        Factory mode unlocks three things, and only these three:
+          1. the boot self-test and the USB factory CLI (cal dump/save/erase);
+          2. the USB calibration shell that writes the per-unit NVS record;
+          3. BLE device-config writes. Even then a BLE write of a per-unit field
+             is accepted only when a complete, valid calibration record already
+             exists with non-empty serial, date, operator, instrument,
+             firmware version and a non-zero gain uncertainty; otherwise the
+             write is refused. feature_rate_hz stays a session-only setting
+             and is never persisted.
+
 config SYNAPSE_FEATURE_EDGE_AI
     bool "Enable Edge AI (Stress Triage + Motion Classifier)"
     default n

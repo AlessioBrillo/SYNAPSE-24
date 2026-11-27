@@ -837,6 +837,37 @@ def check_config_readback(report: Report) -> None:
     )
 
 
+def check_hub_battery_capacity(
+    bringup: dict,
+    report: Report,
+    defaults_path: Path | None = None,
+) -> None:
+    """The G1 bringup cell capacity must match the band-core firmware value.
+
+    The firmware divides the charge it consumed by
+    ``CONFIG_SYNAPSE_HUB_BATTERY_MAH`` from ``sdkconfig.defaults.core``, while
+    the host reads ``power_budget.hub_battery_mah`` from
+    ``hardware_bringup.yaml``. A disagreement makes ``measured_battery_pct``
+    wrong by the ratio, so a soak can end with a battery figure that is not the
+    cell that was actually fitted. The optional path exists only to exercise a
+    deliberate mismatch in a unit test; the CLI always uses the committed
+    defaults file (or the Kconfig default if it is absent).
+    """
+    path = defaults_path if defaults_path is not None else FIRMWARE_DIR / "sdkconfig.defaults.core"
+    firmware_capacity = _defaults_value(path, "CONFIG_SYNAPSE_HUB_BATTERY_MAH")
+    if firmware_capacity is None:
+        firmware_capacity = _kconfig_default("SYNAPSE_HUB_BATTERY_MAH")
+    live_capacity = bringup.get("bringup", {}).get("power_budget", {}).get("hub_battery_mah")
+    report.check(
+        live_capacity is not None
+        and firmware_capacity is not None
+        and live_capacity == firmware_capacity,
+        f"CONFIG_SYNAPSE_HUB_BATTERY_MAH in {path.name} ({firmware_capacity}) must equal "
+        f"hardware_bringup.yaml bringup.power_budget.hub_battery_mah ({live_capacity}) "
+        "and the fitted soak cell",
+    )
+
+
 def check_bringup_truth(hw: dict, bringup: dict, report: Report) -> None:
     """The live-run knobs must agree with the firmware and carry no dead copies."""
     bring = bringup.get("bringup", {})
@@ -846,15 +877,7 @@ def check_bringup_truth(hw: dict, bringup: dict, report: Report) -> None:
         "hardware.yaml power_budget.hub_battery_mah disagrees with the firmware Kconfig default "
         f"({power.get('hub_battery_mah')} vs {_kconfig_default('SYNAPSE_HUB_BATTERY_MAH')})",
     )
-    core_capacity = _defaults_value(
-        FIRMWARE_DIR / "sdkconfig.defaults.core", "CONFIG_SYNAPSE_HUB_BATTERY_MAH"
-    )
-    live_capacity = bring.get("power_budget", {}).get("hub_battery_mah")
-    report.check(
-        live_capacity is not None and live_capacity == core_capacity,
-        f"the G1 bringup battery capacity ({live_capacity}) must match the band-core firmware "
-        f"({core_capacity}) and the fitted soak cell",
-    )
+    check_hub_battery_capacity(bringup, report)
     report.check(
         "power_monitor" not in bring,
         "hardware_bringup.yaml still carries a dead power_monitor block; "

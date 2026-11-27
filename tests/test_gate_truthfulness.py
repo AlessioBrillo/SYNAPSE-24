@@ -24,6 +24,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from scripts import g1_measure as g1  # noqa: E402
 from scripts.validate_phase1_entry import (  # noqa: E402
     LSLStreamManager,
     Phase1Validator,
@@ -56,6 +57,10 @@ _FULL_READBACK = {
     "ppg_led_red": 31,
     "ppg_led_ir": 31,
     "battery_mah": 1000,
+    "feature_rate_hz": 1,
+    "pending_reboot": 0,
+    "accel_bias_mg": [0, 0, 0],
+    "gyro_bias_mdps": [0, 0, 0],
     "ecg_adc_ch": 0,
     "ecg_lead_off": 15,
     "ppg_addr": 87,
@@ -78,6 +83,10 @@ _FULL_READBACK = {
     "cal_state": "none",
     "cal_date": "",
     "cal_operator": "",
+    "cal_instrument": "",
+    "cal_fw_version": "",
+    "cal_uncertainty_pct_x100": 0,
+    "cal_noise_std_uv_x10": 0,
 }
 
 
@@ -220,6 +229,100 @@ class TestFlashedConfig:
         gate = validator._flashed_config_gate()
         assert gate.status == "FAIL"
         assert "did not report" in gate.details
+
+    def test_stale_bias_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import scripts.validate_phase1_entry as vpe
+
+        serial = "SYN-A1B2C3D4E5F6"
+        cal_dir = tmp_path / "data" / "calibration"
+        cal_dir.mkdir(parents=True)
+        (cal_dir / f"{serial}.json").write_text(
+            json.dumps(
+                {
+                    "serial": serial,
+                    "accel_bias_mg": [0, 0, 0],
+                    "gyro_bias_mdps": [0, 0, 0],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(vpe, "ROOT", tmp_path)
+        validator = _validator()
+        validator.live_hardware = True
+        validator.device_serial = serial
+        readback = dict(_FULL_READBACK)
+        readback.update({"cal_serial": serial, "cal_state": "nvs", "accel_bias_mg": [40, 0, 0]})
+        validator.device_config_readback = readback
+        gate = validator._flashed_config_gate()
+        assert gate.status == "FAIL"
+        assert "accel_bias_mg" in str(gate.value)
+
+    def test_stale_feature_rate_fails(self) -> None:
+        validator = _validator()
+        validator.live_hardware = True
+        readback = dict(_FULL_READBACK)
+        readback["feature_rate_hz"] = 5
+        validator.device_config_readback = readback
+        gate = validator._flashed_config_gate()
+        assert gate.status == "FAIL"
+        assert "feature_rate_hz" in str(gate.value)
+
+    def test_pending_reboot_fails(self) -> None:
+        validator = _validator()
+        validator.live_hardware = True
+        readback = dict(_FULL_READBACK)
+        readback["pending_reboot"] = 1
+        validator.device_config_readback = readback
+        gate = validator._flashed_config_gate()
+        assert gate.status == "FAIL"
+        assert "reboot the band" in str(gate.value)
+
+
+class TestEcgContractUnit:
+    """The validator's XDF must speak the microvolts g1_measure.py fits."""
+
+    def test_only_ecg_is_converted_to_microvolts(self) -> None:
+        validator = _validator()
+        assert validator._contract_units("SYNAPSE_ECG_T0", [0.5, -0.25]) == [500.0, -250.0]
+        for outlet in ("SYNAPSE_PPG_T0", "SYNAPSE_ACC_T0", "SYNAPSE_Power"):
+            assert validator._contract_units(outlet, [100.0]) == [100.0]
+
+    def test_a_validator_xdf_yields_the_configured_gain(self, tmp_path: Path) -> None:
+        from synapse24.utils import verify_xdf_roundtrip
+
+        validator = _validator()
+        validator.lsl_manager.stream_configs["SYNAPSE_ECG_T0"] = {
+            "name": "SYNAPSE_ECG_T0",
+            "type": "ECG",
+            "sampling_rate": 500.0,
+            "channel_format": "float32",
+            "source_id": "test",
+        }
+        fs = 500.0
+        samples = np.arange(int(20 * fs), dtype=np.float64) / fs
+        # 1 mVpp at 10 Hz through gain 1100: the research client hands the
+        # validator 0.5 mV peak, which must become 500 uV in its XDF.
+        wire_mv = 0.5 * np.sin(2 * np.pi * 10.0 * samples)
+        for index, value in enumerate(wire_mv):
+            validator._push_raw_to_lsl("SYNAPSE_ECG_T0", [float(value)], float(samples[index]))
+        rows, stamps = validator.lsl_manager.spool.read_all("SYNAPSE_ECG_T0")
+        assert float(np.max(np.abs(rows))) > 100.0
+        path = tmp_path / "gain.xdf"
+        verify_xdf_roundtrip(
+            [
+                {
+                    "name": "SYNAPSE_ECG_T0",
+                    "type": "ECG",
+                    "data": rows,
+                    "timestamps": stamps,
+                    "sampling_rate": fs,
+                }
+            ],
+            path,
+        )
+        values, rate = g1.load_capture(path, fs)
+        got = g1.gain_from_sine(values, rate, 10.0, 1.0, configured_gain=1100.0)
+        assert got["gain_measured"] == pytest.approx(1100.0, rel=0.02)
 
 
 class TestSerialIdentity:

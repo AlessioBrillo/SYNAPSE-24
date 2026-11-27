@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +36,24 @@ PROFILE_KEYS = (
     "gyro_bias_mdps",
     "battery_mah",
 )
+# Measurement provenance is manufacturing data too: it travels in the
+# readback and must survive into the host record alongside the profile.
+PROVENANCE_KEYS = (
+    "cal_instrument",
+    "cal_fw_version",
+    "cal_uncertainty_pct_x100",
+    "cal_noise_std_uv_x10",
+)
+SERIAL_RE = re.compile(r"SYN-[0-9A-F]{12}")
+
+
+def validate_serial(serial: str) -> str:
+    """Reject anything but the DIS identity before touching a file or device."""
+    if not SERIAL_RE.fullmatch(str(serial)):
+        raise ValueError(f"invalid serial {serial!r}: expected SYN- + 12 hex characters")
+    return str(serial)
+
+
 # Payload key -> key in the device-config readback. The two formats use
 # different short names; this map is the only place that knows the difference.
 READBACK_KEYS = {
@@ -116,7 +135,7 @@ def update_local_record(
 ) -> Path:
     """Commit the host record only when the band proves it holds this profile."""
     record = {"serial": serial}
-    for key in PROFILE_KEYS:
+    for key in PROFILE_KEYS + PROVENANCE_KEYS:
         value = readback.get(key)
         if value is not None:
             record[key] = value
@@ -152,7 +171,7 @@ async def _write(address: str, payload: dict[str, Any]) -> dict[str, Any]:
         return json.loads(bytes(raw).decode("ascii", errors="replace").strip("\x00 "))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", required=True)
     parser.add_argument("--serial", required=True)
@@ -165,15 +184,16 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="print the payload without touching a device"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
+        serial = validate_serial(args.serial)
         payload = build_payload(args)
         if args.dry_run:
             print(json.dumps(payload, separators=(",", ":")))
             return 0
         readback = asyncio.run(_write(args.address, payload))
-        verify_readback(readback, expected_from_payload(payload), args.serial)
-        path = update_local_record(readback, args.serial)
+        verify_readback(readback, expected_from_payload(payload), serial)
+        path = update_local_record(readback, serial)
         print(f"profile applied and host record updated: {path}")
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"device config write failed: {exc}", file=sys.stderr)

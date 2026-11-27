@@ -3,8 +3,9 @@
 
 Rate, range, ODR, pins and UUIDs stay compilation-time values from
 ``config/hardware.yaml``. What this command owns is the per-unit part: ECG
-gain, PPG LED currents, IMU biases, fitted cell capacity and the consumer
-feature rate.
+gain, PPG LED currents, IMU biases and fitted cell capacity. The consumer
+feature rate is a session-only setting applied through the control point /
+config write at run time; it is not a persisted per-unit profile field.
 
     uv run python scripts/device_profile.py example
     uv run python scripts/device_profile.py configure SYN-A1B2C3D4E5F6 \
@@ -12,10 +13,11 @@ feature rate.
     uv run python scripts/device_profile.py verify SYN-A1B2C3D4E5F6 \
         --address AA:BB:CC:DD:EE:FF
 
-``configure`` writes one atomic profile, reads every field back and commits
-the host manufacturing record only on a complete match. ``verify`` compares
-the live readback with the contract and with that host record, and refuses a
-profile that is stored but not yet applied (the band needs a reboot).
+``configure`` writes one atomic profile and reads every field back; it does
+NOT commit the host record. ``verify`` (after the reboot that applies the
+NVS record) compares the live readback with the contract and with that host
+record, commits the record only on a complete match, and refuses a profile
+that is stored but not yet applied.
 """
 
 from __future__ import annotations
@@ -62,6 +64,22 @@ def contract_fields() -> dict[str, Any]:
     }
 
 
+def _require_int(key: str, value: Any, low: int, high: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer, got {value!r}")  # noqa: TRY004 - CLI error text
+    if not low <= value <= high:
+        raise ValueError(f"{key} out of range {low}..{high}: {value}")
+
+
+def _require_bias(key: str, value: Any, limit: int) -> None:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError(f"{key} must be a list of three integers")
+    for item in value:
+        _require_int(key, item, -32768, 32767)  # the firmware whitelist reads int16
+        if not -limit <= int(item) <= limit:
+            raise ValueError(f"{key} out of range -{limit}..{limit}: {item}")
+
+
 def load_profile(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -71,6 +89,21 @@ def load_profile(path: Path) -> dict[str, Any]:
         raise ValueError(f"unknown profile fields: {unknown}")
     if not payload:
         raise ValueError("empty profile")
+    # Mirror the firmware whitelist on the host: an out-of-range value must
+    # fail before any file or device is touched, with a clear reason.
+    if "gain_x100" in payload:
+        _require_int("gain_x100", payload["gain_x100"], 1, 1_000_000)
+    for key in ("led_red", "led_ir"):
+        if key in payload:
+            _require_int(key, payload[key], 0, 255)
+    if "battery_mah" in payload:
+        _require_int("battery_mah", payload["battery_mah"], 100, 10_000)
+    if "accel_bias_mg" in payload:
+        _require_bias("accel_bias_mg", payload["accel_bias_mg"], 2000)
+    if "gyro_bias_mdps" in payload:
+        _require_bias("gyro_bias_mdps", payload["gyro_bias_mdps"], 20_000)
+    if "feature_rate_hz" in payload:
+        _require_int("feature_rate_hz", payload["feature_rate_hz"], 1, 5)
     return payload
 
 
@@ -119,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(EXAMPLE, indent=2, sort_keys=True))
             return 0
 
+        serial = dcw.validate_serial(args.serial)
         readback: dict[str, Any]
         expected: dict[str, Any]
         if args.command == "configure":
@@ -128,26 +162,40 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             readback = asyncio.run(dcw._write(args.address, payload))
             expected = dcw.expected_from_payload(payload)
-            problems = diff_fields(readback, {"cal_serial": args.serial, **expected})
-            if problems:
-                return _print_report("profile write", problems, readback)
-            dcw.update_local_record(readback, args.serial)
-            code = _print_report("profile write", [], readback)
-            print("record committed to NVS; reboot the band before recording")
+            problems = diff_fields(readback, {"cal_serial": serial, **expected})
+            code = _print_report("profile write", problems, readback)
+            if not problems:
+                print(
+                    "profile written to NVS; run 'verify' after the reboot to commit the host record"
+                )
             return code
 
         readback = asyncio.run(dcw._read(args.address))
         expected = dict(contract_fields())
-        record_path = ROOT / "data" / "calibration" / f"{args.serial}.json"
-        if record_path.exists():
+        record_path = ROOT / "data" / "calibration" / f"{serial}.json"
+        problems: list[str] = []
+        if not record_path.exists():
+            problems.append("host calibration record is missing: nothing to verify against")
+        else:
             record = json.loads(record_path.read_text(encoding="utf-8"))
-            for key in dcw.PROFILE_KEYS:
-                if key in record:
+            missing = [key for key in dcw.PROFILE_KEYS if key not in record]
+            if missing:
+                problems.append(f"host calibration record is incomplete: missing {missing}")
+            else:
+                for key in dcw.PROFILE_KEYS:
                     expected[key] = record[key]
-        problems = diff_fields(readback, {"cal_serial": args.serial, **expected})
+                for key in dcw.PROVENANCE_KEYS:
+                    if key in record:
+                        expected[key] = record[key]
+        problems.extend(diff_fields(readback, {"cal_serial": serial, **expected}))
         if readback.get("pending_reboot"):
             problems.append("pending_reboot: the band still runs the previous profile")
-        return _print_report("profile verify", problems, readback)
+        if problems:
+            return _print_report("profile verify", problems, readback)
+        code = _print_report("profile verify", [], readback)
+        path = dcw.update_local_record(readback, serial)
+        print(f"host record committed to data/calibration/{path.name}")
+        return code
     except (ValueError, OSError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"device profile failed: {exc}", file=sys.stderr)
         return 1

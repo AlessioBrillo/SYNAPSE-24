@@ -88,3 +88,37 @@ def test_local_record_is_updated_after_a_matching_readback() -> None:
     assert payload["ecg_gain_x100"] == 112300
     assert payload["battery_mah"] == 1000
     assert payload["accel_bias_mg"] == [1, 2, 3]
+
+
+def test_local_record_persists_the_measurement_provenance() -> None:
+    written: list[tuple[Path, str]] = []
+    path = dcw.update_local_record(
+        {
+            "cal_serial": "SYN-MINE",
+            "cal_instrument": "GEN-42",
+            "cal_fw_version": "1.2.3",
+            "cal_uncertainty_pct_x100": 500,
+            "cal_noise_std_uv_x10": 125,
+        },
+        "SYN-MINE",
+        lambda p, text: written.append((p, text)),
+    )
+    assert path.name == "SYN-MINE.json"
+    payload = json.loads(written[0][1])
+    assert payload["cal_instrument"] == "GEN-42"
+    assert payload["cal_fw_version"] == "1.2.3"
+    assert payload["cal_uncertainty_pct_x100"] == 500
+    assert payload["cal_noise_std_uv_x10"] == 125
+
+
+def test_a_bad_serial_is_refused_before_a_dry_run(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert dcw.main(["--address", "AA:BB", "--serial", "SYN-short", "--led", "1F,1F"]) == 1
+    assert "invalid serial" in capsys.readouterr().err
+    assert (
+        dcw.main(
+            ["--address", "AA:BB", "--serial", "SYN-A1B2C3D4E5F6", "--dry-run", "--led", "1F,1F"]
+        )
+        == 0
+    )

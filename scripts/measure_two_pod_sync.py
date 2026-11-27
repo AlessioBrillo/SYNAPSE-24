@@ -27,13 +27,15 @@ ROOT = Path(__file__).resolve().parents[1]
 ACC_STREAM = "SYNAPSE_ACC_T0"
 
 
-def _load_acc(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Return (timestamps, |acceleration|) of one pod's ACC stream."""
+def _load_acc(path: Path) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return (timestamps, |acceleration|, source_id) of one pod's ACC stream."""
     streams, _header = pyxdf.load_xdf(str(path))
     for stream in streams:
-        name = stream["info"].get("name", [""])[0]
+        info = stream["info"]
+        name = info.get("name", [""])[0]
         if str(name) != ACC_STREAM:
             continue
+        source_id = str(info.get("source_id", [""])[0] or "")
         stamps = np.asarray(stream["time_stamps"], dtype=np.float64)
         values = np.asarray(stream["time_series"], dtype=np.float64)
         if values.ndim == 1:
@@ -42,7 +44,7 @@ def _load_acc(path: Path) -> tuple[np.ndarray, np.ndarray]:
             raise ValueError(f"{path}: {ACC_STREAM} has no usable samples")
         # Motion magnitude: independent of the board's roll/pitch on the bench.
         magnitude = np.linalg.norm(values[:, :3], axis=1)
-        return stamps, magnitude
+        return stamps, magnitude, source_id
     raise ValueError(f"{path}: no {ACC_STREAM} stream (is this a band-core capture?)")
 
 
@@ -54,6 +56,7 @@ def residual_ms(
     *,
     window_s: float = 30.0,
     min_correlation: float = 0.7,
+    min_overlap_s: float = 1800.0,
 ) -> dict[str, Any]:
     """Lag of best ACC agreement, or a refusal when the signals do not correlate.
 
@@ -65,11 +68,15 @@ def residual_ms(
     start = max(float(stamps_a[0]), float(stamps_b[0]))
     end = min(float(stamps_a[-1]), float(stamps_b[-1]))
     overlap = end - start
-    if overlap < window_s:
+    # T10 is a 30-minute claim: a 40-second lab curiosity cannot prove it.
+    required_overlap = max(float(min_overlap_s), float(window_s))
+    if overlap < required_overlap:
         return {
             "correlated": False,
             "residual_ms": None,
-            "reason": f"overlap {overlap:.1f} s is shorter than the {window_s:g} s window",
+            "reason": (
+                f"overlap {overlap:.1f} s is shorter than the {required_overlap:g} s minimum"
+            ),
             "overlap_s": round(overlap, 2),
         }
 
@@ -115,6 +122,7 @@ def residual_ms(
         "correlation_min": round(worst, 4),
         "residual_ms": residual if correlated else None,
         "overlap_s": round(overlap, 2),
+        "min_overlap_s": round(required_overlap, 2),
         "window_s": window_s,
         "method": "ACC magnitude cross-correlation, 6 windows across the overlap",
         "per_window": per_window,
@@ -126,14 +134,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pods", nargs=2, required=True, metavar=("XDF_A", "XDF_B"))
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "hardware.yaml")
+    parser.add_argument("--threshold-ms", type=float, default=None, help="T0 sync budget in ms")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
         manifest = yaml.safe_load(args.config.read_text(encoding="utf-8"))
         sync_cfg = manifest["sync"]
-        stamps_a, values_a = _load_acc(Path(args.pods[0]))
-        stamps_b, values_b = _load_acc(Path(args.pods[1]))
+        threshold_ms = float(
+            args.threshold_ms
+            if args.threshold_ms is not None
+            else sync_cfg["tier_budgets"]["T0"]["max_residual_drift_ms"]
+        )
+        stamps_a, values_a, source_a = _load_acc(Path(args.pods[0]))
+        stamps_b, values_b, source_b = _load_acc(Path(args.pods[1]))
+        # Two recordings from the same band are not a pod-to-pod measurement:
+        # refuse when both XDFs name the same source (tolerant when absent).
+        if source_a and source_b and source_a == source_b:
+            raise ValueError(  # noqa: TRY301 - a duplicate source is a hard refusal
+                f"both XDFs declare the same source_id {source_a!r}: not two different pods"
+            )
         result = residual_ms(
             stamps_a,
             values_a,
@@ -145,11 +165,12 @@ def main(argv: list[str] | None = None) -> int:
         result.update(
             {
                 "pods": [str(Path(p).name) for p in args.pods],
-                "threshold_ms": 10.0,
+                "source_ids": [source_a, source_b],
+                "threshold_ms": threshold_ms,
                 "pass": bool(
                     result["correlated"]
                     and result.get("residual_ms") is not None
-                    and float(result["residual_ms"]) <= 10.0
+                    and float(result["residual_ms"]) <= threshold_ms
                 ),
             }
         )

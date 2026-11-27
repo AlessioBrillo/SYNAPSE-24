@@ -21,12 +21,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 from synapse24.export import load_xdf_streams
 from synapse24.signal_quality.ppg import compute_ppg_sqi
 
 PPG_STREAM = "SYNAPSE_PPG_T0"
 DEFAULT_PAIRS = ("1A,1A", "1F,1F", "24,24")
+DEFAULT_MIN_SQI = 0.3
+DEFAULT_MIN_SAMPLES = 1500  # 30 s at the declared 50 Hz
+DEFAULT_MIN_DURATION_S = 30.0
 
 
 def analyse_capture(path: Path, *, window_s: float = 30.0) -> dict[str, Any]:
@@ -39,8 +43,9 @@ def analyse_capture(path: Path, *, window_s: float = 30.0) -> dict[str, Any]:
     stamps = np.asarray(stream.timestamps, dtype=np.float64)
     if data.ndim != 2 or data.shape[1] < 1 or data.shape[0] < 50:
         raise ValueError(f"{path}: unusable PPG data {data.shape}")
-    if stamps.size > 2:
-        data = data[stamps >= stamps[-1] - window_s]
+    if stamps.size > 2 and stamps.size == data.shape[0]:
+        keep = stamps >= stamps[-1] - window_s
+        data, stamps = data[keep], stamps[keep]
     red = data[:, 0]
     rate = int(round(float(stream.nominal_srate or 50) or 50))
     mean = float(np.mean(red))
@@ -48,6 +53,7 @@ def analyse_capture(path: Path, *, window_s: float = 30.0) -> dict[str, Any]:
         raise ValueError(f"{path}: red channel mean is not positive")
     return {
         "samples": int(red.size),
+        "duration_s": float(stamps[-1] - stamps[0]) if stamps.size > 1 else 0.0,
         "sqi": float(compute_ppg_sqi(red, rate)),
         "perfusion_index": float(np.std(red) / mean),
     }
@@ -60,29 +66,76 @@ def run_sweep(
     capture: Callable[[str], Path],
     analyse: Callable[[Path], dict[str, Any]],
     write: Callable[[dict[str, Any]], None],
+    min_sqi: float = DEFAULT_MIN_SQI,
+    min_samples: int = DEFAULT_MIN_SAMPLES,
+    min_duration_s: float = DEFAULT_MIN_DURATION_S,
 ) -> dict[str, Any]:
-    """Pure orchestration: write LEDs, record, analyse, choose, persist."""
+    """Pure orchestration: write LEDs, record, analyse, choose, persist.
+
+    A max() over noisy rows always picks *something*, even when every capture
+    is useless. Only rows that clear the SQI and length floors are eligible;
+    with none eligible the report says so and the verdict is FAIL.
+    """
     rows: list[dict[str, Any]] = []
     for pair in pairs:
         apply_led(pair)
         path = capture(pair)
         result = analyse(path)
         result["led_pair"] = pair
+        result["qualifies"] = (
+            float(result.get("sqi", 0.0) or 0.0) >= min_sqi
+            and int(result.get("samples", 0) or 0) >= min_samples
+            and float(result.get("duration_s", 0.0) or 0.0) >= min_duration_s
+        )
         rows.append(result)
     if not rows:
         raise ValueError("no LED pairs given")
-    best = max(rows, key=lambda row: (row["sqi"], row["perfusion_index"]))
-    report = {"pairs": rows, "chosen": best["led_pair"], "source": "ppg_sweep"}
+    eligible = [row for row in rows if row["qualifies"]]
+    report: dict[str, Any] = {
+        "pairs": rows,
+        "source": "ppg_sweep",
+        "min_sqi": min_sqi,
+        "min_samples": min_samples,
+        "min_duration_s": min_duration_s,
+    }
+    if eligible:
+        best = max(eligible, key=lambda row: (row["sqi"], row["perfusion_index"]))
+        report.update({"chosen": best["led_pair"], "verdict": "PASS", "reason": None})
+    else:
+        report.update(
+            {
+                "chosen": None,
+                "verdict": "FAIL",
+                "reason": f"no capture reached SQI >= {min_sqi:g} and {min_duration_s:g} s",
+            }
+        )
     write(report)
     return report
 
 
-def _live_capture(duration_s: int, config: Path) -> Callable[[str], Path]:
-    out_dir = Path("data/processed/live_validation")
+def _xdf_dirs(config: Path) -> list[Path]:
+    """Both places the validator writes XDFs: human sessions and bench runs."""
+    payload = yaml.safe_load(config.read_text(encoding="utf-8"))
+    validation = payload.get("bringup", payload).get("validation", {})
+    dirs = [validation.get("xdf_output_dir"), validation.get("bench_xdf_output_dir")]
+    result = [Path(item) for item in dirs if item]
+    for fallback in ("data/processed/live_validation", "data/bench"):
+        if Path(fallback) not in result:
+            result.append(Path(fallback))
+    return result
+
+
+def _live_capture(
+    duration_s: int,
+    config: Path,
+    manifest: Path,
+    verified_by: str | None = None,
+) -> Callable[[str], Path]:
+    out_dirs = _xdf_dirs(config)
     gate_report = Path("data/live_validation/ppg_sweep_gate.json")
 
     def capture(_pair: str) -> Path:
-        before = set(out_dir.glob("synapse_live_*.xdf"))
+        before = {directory: set(directory.glob("*.xdf")) for directory in out_dirs}
         command = [
             sys.executable,
             str(Path(__file__).with_name("validate_phase1_entry.py")),
@@ -91,19 +144,48 @@ def _live_capture(duration_s: int, config: Path) -> Callable[[str], Path]:
             str(config),
             "--duration",
             str(duration_s),
+            "--manifest",
+            str(manifest),
             "--gate-report",
             str(gate_report),
         ]
+        if verified_by:
+            command += ["--verified-by", str(verified_by)]
         proc = subprocess.run(command, check=False)  # noqa: S603
-        if proc.returncode not in (0, 1):  # 1 = a gate failed, but the XDF still exists
+        # A failed gate is not evidence: the capture must come from a run that
+        # passed, otherwise we would choose an LED pair from a broken session.
+        if proc.returncode != 0:
             raise RuntimeError(f"validator exited {proc.returncode}")
-        after = set(out_dir.glob("synapse_live_*.xdf"))
-        new = after - before
+        try:
+            report = json.loads(gate_report.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            report = {}
+        artifact = report.get("artifact") or {}
+        recorded = str(artifact.get("path") or "") if isinstance(artifact, dict) else ""
+        if recorded and Path(recorded).is_file():
+            return Path(recorded)
+        new = [
+            path
+            for directory in out_dirs
+            for path in directory.glob("*.xdf")
+            if path not in before.get(directory, set())
+        ]
         if not new:
-            raise RuntimeError("validator produced no XDF")
-        return max(new, key=lambda p: p.stat().st_mtime)
+            raise RuntimeError("validator produced no XDF (check artifact path and output dirs)")
+        return max(new, key=lambda path: path.stat().st_mtime)
 
     return capture
+
+
+def _reboot_band(transport: Any) -> None:
+    """Apply a newly saved LED current: NVS is read by the drivers at boot."""
+    reboot = getattr(transport, "reboot", None)
+    if not callable(reboot):
+        raise RuntimeError(  # noqa: TRY004 - a CLI refusal, not a type error
+            "this serial transport has no reboot method: power-cycle the band "
+            "after 'cal led' / 'cal save' before recording the next pair"
+        )
+    reboot()
 
 
 def main() -> int:
@@ -112,6 +194,22 @@ def main() -> int:
     parser.add_argument("--pairs", nargs="+", default=list(DEFAULT_PAIRS))
     parser.add_argument("--duration", type=int, default=30)
     parser.add_argument("--config", type=Path, default=Path("config/hardware_bringup.yaml"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("data/bench/manifest.json"),
+        help="bench session manifest required by the live validator",
+    )
+    parser.add_argument("--verified-by", help="maintainer who verified the hand-filled rows")
+    parser.add_argument("--min-sqi", type=float, default=DEFAULT_MIN_SQI)
+    parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
+    parser.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION_S)
+    parser.add_argument(
+        "--reboot-between",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="reboot the band after each LED write (default: on)",
+    )
     parser.add_argument("--out", type=Path, default=Path("data/calibration/ppg_sweep.json"))
     parser.add_argument(
         "--analyse-only",
@@ -142,8 +240,10 @@ def main() -> int:
                     reply = transport.send(command)
                     if reply.startswith("ERR"):
                         raise RuntimeError(f"{command}: {reply}")  # noqa: TRY301
+                if args.reboot_between:
+                    _reboot_band(transport)
 
-            capture = _live_capture(args.duration, args.config)
+            capture = _live_capture(args.duration, args.config, args.manifest, args.verified_by)
 
         report = run_sweep(
             pairs,
@@ -154,12 +254,15 @@ def main() -> int:
                 args.out.parent.mkdir(parents=True, exist_ok=True),
                 args.out.write_text(json.dumps(payload, indent=2, sort_keys=True)),
             ),
+            min_sqi=args.min_sqi,
+            min_samples=args.min_samples,
+            min_duration_s=args.min_duration,
         )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"PPG sweep failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0
+    return 0 if report.get("verdict") == "PASS" else 1
 
 
 if __name__ == "__main__":

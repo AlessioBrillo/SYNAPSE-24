@@ -123,3 +123,38 @@ def test_fake_transport_round_trip() -> None:
 def test_parse_dump_rejects_a_missing_record() -> None:
     with pytest.raises(ValueError, match="no calibration JSON"):
         fc.parse_dump("OK saved")
+
+
+def test_a_real_port_dump_emits_json_and_writes_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A dump is read-only: bench_suite.py must be able to parse its JSON line."""
+    record = {
+        "serial": "SYN-A1B2C3D4E5F6",
+        "ecg_gain_x100": 110000,
+        "cal_state": "nvs",
+    }
+
+    class FakePort:
+        def __init__(self, port: str, baud: int = 115200, timeout: float = 2.0) -> None:
+            self.closed = False
+
+        def send(self, line: str) -> str:
+            assert line == "cal dump"
+            return json.dumps(record)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(fc, "SerialTransport", FakePort)
+    cal_dir = tmp_path / "calibration"
+    monkeypatch.setattr(fc, "CAL_DIR", cal_dir)
+
+    assert fc.main(["--port", "COM9", "--dump"]) == 0
+    lines = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert any(item["serial"] == record["serial"] for item in lines)
+    assert not cal_dir.exists(), "a dump must never write the host record"

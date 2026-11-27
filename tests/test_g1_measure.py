@@ -64,6 +64,15 @@ def test_a_saturated_stream_is_refused_not_scored() -> None:
         g1.gain_from_sine(wire, FS, 10.0, 1.0)
 
 
+def test_a_flat_topped_sine_is_refused_below_the_s16_limit() -> None:
+    """The validator writes uV: an ADC rail clips well below +/-32767."""
+    t = np.arange(10_000) / FS
+    clipped = np.clip(5000.0 * np.sin(2 * np.pi * 10.0 * t), -800.0, 800.0)
+    assert np.max(np.abs(clipped)) < g1.S16_LIMIT
+    with pytest.raises(ValueError, match="flat top"):
+        g1.gain_from_sine(clipped, FS, 10.0, 1.0)
+
+
 def test_a_capture_without_the_sine_is_refused_not_scored() -> None:
     rng = np.random.RandomState(0)
     shorted = np.rint(rng.normal(0, 3, 10_000))
