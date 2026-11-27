@@ -49,6 +49,21 @@ def test_a_known_lag_is_recovered_within_the_gate() -> None:
     assert abs(result["residual_ms"] - 7.0) < 3.0
 
 
+def test_a_drifting_clock_is_judged_by_the_worst_window() -> None:
+    t, value = _motion()
+    # B starts 3 ms ahead and lags by 19 ms at the end: the median is ~11 ms
+    # but the final window is far outside the 10 ms criterion.
+    shifted = t + 0.003 + 0.0005 * t
+    result = residual_ms(t, value, shifted, value)
+    from statistics import median
+
+    lags = [abs(item["lag_ms"]) for item in result["per_window"]]
+    assert result["correlated"] is True
+    assert result["residual_ms"] is not None
+    assert result["residual_ms"] == max(lags)
+    assert result["residual_ms"] > median(lags) + 2
+
+
 def test_a_short_overlap_gives_no_residual() -> None:
     t, value = _motion(duration_s=10.0)
     result = residual_ms(t, value, t, value)

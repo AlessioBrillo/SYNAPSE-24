@@ -439,7 +439,7 @@ def main() -> int:
     # Flash
     if not args.build_only:
         if not builder.flash(
-            port=args.port,
+            port=port,
             baud=baud,
             verify=verify,
             erase_flash=args.erase_flash,

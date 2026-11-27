@@ -59,9 +59,6 @@ static char s_fw_rev[32] = "1.0.0";
 static char s_hw_rev[32] = "1.0";
 static uint8_t s_cfg_buf[SYNAPSE_MAX_CONFIG_SIZE] = {0};
 static uint16_t s_cfg_len = 0;
-/* A profile write changes the NVS record; the drivers read it at boot. Until
- * the reboot the host must not claim the sensors are running the new values. */
-static bool s_config_pending_reboot = false;
 
 // 128-bit UUIDs (little-endian byte order, GATT v1 frozen) — generated from
 // config/hardware.yaml, so the firmware cannot carry a second copy of the
@@ -255,6 +252,7 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     int accel_bias[3] = {0, 0, 0};
     int gyro_bias[3] = {0, 0, 0};
     synapse_calibration_t cal;
+    synapse_calibration_defaults(&cal);
     char cal_serial[SYNAPSE_CAL_SERIAL_MAX] = {0};
     char cal_date[SYNAPSE_CAL_DATE_MAX] = {0};
     char cal_operator[SYNAPSE_CAL_OPERATOR_MAX] = {0};
@@ -273,6 +271,10 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
         json_safe(cal_date, sizeof(cal_date), cal.date);
         json_safe(cal_operator, sizeof(cal_operator), cal.operator);
     }
+    /* A new NVS record is not applied until the drivers re-read it at boot.
+     * Comparing CRCs covers both the USB calibration shell and BLE writes. */
+    const bool pending_reboot =
+        synapse_calibration_applied_crc() != synapse_calibration_crc(&cal);
 
     /* Every active hardware.yaml field the host gate checks is reported
      * here, with short keys so a long BLE read stays compact. A stale
@@ -297,7 +299,7 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)cfg.imu_accel_odr_hz,
              (unsigned long)gain_x100, (unsigned)led_red, (unsigned)led_ir,
              battery_mah, (unsigned)s_feat2_rate_hz,
-             (unsigned)(s_config_pending_reboot ? 1u : 0u),
+             (unsigned)(pending_reboot ? 1u : 0u),
              accel_bias[0], accel_bias[1], accel_bias[2],
              gyro_bias[0], gyro_bias[1], gyro_bias[2],
              (int)cfg.ecg_adc_channel, (int)cfg.ecg_gpio_lead_off,
@@ -348,6 +350,34 @@ static bool json_i16_array(const char *req, const char *key, int16_t *out, size_
         out[i] = (int16_t)value;
         p = end;
     }
+    while (*p == ' ' || *p == '\t') p++;
+    return *p == ']';
+}
+
+/* Every quoted token in a profile is a key (all values are numbers or arrays).
+ * Reject an unknown one instead of silently ignoring it: a typo in a field
+ * name must not look like a successful write. */
+static bool json_only_whitelisted(const char *req) {
+    static const char *const allowed[] = {
+        "led_red", "led_ir", "gain_x100", "feature_rate_hz",
+        "battery_mah", "accel_bias_mg", "gyro_bias_mdps",
+    };
+    static const size_t n_allowed = sizeof(allowed) / sizeof(allowed[0]);
+    const char *p = req;
+    while ((p = strchr(p, '"')) != NULL) {
+        const char *end = strchr(p + 1, '"');
+        if (end == NULL) return false;
+        const size_t len = (size_t)(end - p - 1);
+        bool found = false;
+        for (size_t i = 0; i < n_allowed; i++) {
+            if (strlen(allowed[i]) == len && strncmp(p + 1, allowed[i], len) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+        p = end + 1;
+    }
     return true;
 }
 #endif
@@ -376,6 +406,10 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         req[len < sizeof(req) ? len : sizeof(req) - 1] = '\0';
+        if (!json_only_whitelisted((const char *)req)) {
+            ESP_LOGW(BLE_TAG, "config write refused: unknown field in payload");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
 
         uint32_t red = 0, ir = 0, gain = 0, rate = 0, battery = 0;
         int16_t accel[3] = {0}, gyro[3] = {0};
@@ -437,7 +471,6 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
         if (have_gyro) memcpy(cal.gyro_bias_mdps, gyro, sizeof(cal.gyro_bias_mdps));
         synapse_calibration_seal(&cal);
         if (synapse_calibration_save(&cal) != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
-        s_config_pending_reboot = true;
         ESP_LOGI(BLE_TAG, "config write: per-unit profile sealed; reboot needed");
         return 0;
 #endif

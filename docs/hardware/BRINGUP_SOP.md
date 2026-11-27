@@ -317,9 +317,10 @@ for €0:
 
    The tool interpolates both ACC magnitudes on a 1 kHz grid, cross-correlates
    six windows across the overlap and writes `sync.pod_pair_residual_ms` with
-   the observed correlation. A window below `min_acc_correlation: 0.7` returns
-   **no residual**, never a zero. **≤10 ms over 30 min PASSES** the sync
-   precondition for the Cerelog order.
+   the observed correlation and the **worst** window lag (a median would hide
+   a clock drifting out of tolerance at the end). A window below
+   `min_acc_correlation: 0.7` returns **no residual**, never a zero.
+   **≤10 ms over 30 min PASSES** the sync precondition for the Cerelog order.
 4. The wired-sync line (GPIO 10 between the pods, not GPIO 27: a flash pin on the N8R8) is driven by the hub-side
    driver already compiled into band-core, but *emitting* the pulse is a G2
    feature (real head pod, second body site): for the bench measurement above

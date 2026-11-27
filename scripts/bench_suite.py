@@ -27,7 +27,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "evidence"
-SERIAL_PREFIX = "SYN-"
 # The addresses the bringup rig must answer on the shared I²C bus.
 REQUIRED_I2C = {"0x57": "MAX30102 PPG", "0x68": "ICM-20948 IMU", "0x40": "INA219"}
 I2C_LINE = re.compile(r"(0x5[47]|0x68|0x40)", re.IGNORECASE)
@@ -99,22 +98,29 @@ def _read_report(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _report_verdict(path: Path, previous: dict[str, Any]) -> dict[str, Any]:
+def _report_verdict(path: Path, previous: dict[str, Any], command: list[str]) -> dict[str, Any]:
     """A gate report is evidence only when it is fresh, live and green.
 
     ``run_id`` must differ from the report that was on disk before the command
     ran: otherwise a failed command could inherit a PASS from an earlier run.
+    A synthetic run writes a green report too (the normal spool path carries
+    no ``rehearsal`` marker), so the command itself must ask for live hardware.
     """
     report = _read_report(path)
     run_id = str(report.get("run_id") or "")
+    live = "--live-hardware" in command
     details = {
         "run_id": run_id or None,
         "overall_pass": report.get("overall_pass"),
         "rehearsal": report.get("rehearsal"),
+        "live_hardware": live,
         "fresh": bool(run_id) and run_id != str(previous.get("run_id") or ""),
     }
     passed = (
-        details["fresh"] and report.get("overall_pass") is True and report.get("rehearsal") is False
+        details["fresh"]
+        and live
+        and report.get("overall_pass") is True
+        and report.get("rehearsal") is False
     )
     return verdict(passed, "the SOP gate report of THIS run is live and PASS", details)
 
@@ -148,7 +154,10 @@ def incoming(runner: Runner) -> dict[str, Any]:
 def factory(port: str, runner: Runner) -> dict[str, Any]:
     command = [sys.executable, "scripts/factory_calibrate.py", "--port", port, "--dump"]
     evidence = _execute(
-        "T02", command, runner, claim="the band has an identity-bound calibration record"
+        "T02",
+        command,
+        runner,
+        claim="the calibration record carries the identity-bound SYN- + 12 hex serial",
     )
     reply = evidence["output_tail"]
     record: dict[str, Any] = {}
@@ -161,7 +170,7 @@ def factory(port: str, runner: Runner) -> dict[str, Any]:
             break
     serial = str(record.get("serial", ""))
     evidence["observations"]["serial"] = serial
-    valid = serial.startswith(SERIAL_PREFIX) and len(serial) == 16
+    valid = re.fullmatch(r"SYN-[0-9A-F]{12}", serial) is not None
     evidence.update(
         verdict(
             evidence["passed"] and valid,
@@ -252,7 +261,7 @@ def _stream_evidence(
     command = _validator_command(args)
     previous = _read_report(args.gate_report)
     code, output = runner(command)
-    result = _report_verdict(args.gate_report, previous)
+    result = _report_verdict(args.gate_report, previous, command)
     evidence = {
         "test_id": test_id,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -319,9 +328,9 @@ def main() -> int:
     _run_args(sub.add_parser("soak", help="six-hour soak (T12)"))
     sync_parser = sub.add_parser("sync", help="two-pod residual (T10)")
     sync_parser.add_argument("--pods", nargs=2, required=True, metavar=("XDF_A", "XDF_B"))
-    sync_parser.add_argument(
-        "--config", type=Path, default=ROOT / "config" / "hardware_bringup.yaml"
-    )
+    # The sync thresholds live in the main contract; hardware_bringup.yaml
+    # only selects the sync *mode* and carries no correlation threshold.
+    sync_parser.add_argument("--config", type=Path, default=ROOT / "config" / "hardware.yaml")
     sync_parser.add_argument(
         "--out", type=Path, default=ROOT / "data" / "live_validation" / "pod_pair_sync.json"
     )

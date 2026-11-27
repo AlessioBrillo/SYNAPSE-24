@@ -76,6 +76,7 @@ def test_config_write_is_a_narrow_whitelist_in_factory_mode() -> None:
         assert f'"{key}"' in GATT
     assert "config write refused: factory mode off" in GATT
     assert "no whitelisted field" in GATT
+    assert "unknown field in payload" in GATT
     assert "value out of range" in GATT
 
 

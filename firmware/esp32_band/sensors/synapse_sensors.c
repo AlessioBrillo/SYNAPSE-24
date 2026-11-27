@@ -301,14 +301,17 @@ esp_err_t synapse_sensors_init(void) {
         ESP_LOGI(TAG, "Applied calibration for %s (source=%s)",
                  s_calibration.serial, synapse_calibration_state());
     }
+    // Remember exactly what this boot applied. Both the USB shell and the
+    // BLE whitelist write NVS; the readback compares this CRC with the stored
+    // record so a profile cannot look applied before a reboot.
+    synapse_calibration_mark_applied(&s_calibration);
     // Publish the effective values through the config manager: the power
     // module and the device-config readback both read it, so neither can keep
     // reporting Kconfig defaults after a per-unit profile was applied. This
-    // only updates RAM; it deliberately does not persist the overlay.
+    // updates RAM only (the config manager is never saved here).
     esp_err_t set_err = synapse_config_set(&hw_cfg);
     if (set_err != ESP_OK) {
-        ESP_LOGE(TAG, "Effective calibration config rejected: %s", esp_err_to_name(set_err));
-        return set_err;
+        ESP_LOGW(TAG, "Effective calibration config not published: %s", esp_err_to_name(set_err));
     }
     populate_sensor_configs(&hw_cfg);
 

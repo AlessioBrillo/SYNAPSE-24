@@ -57,9 +57,10 @@ def residual_ms(
 ) -> dict[str, Any]:
     """Lag of best ACC agreement, or a refusal when the signals do not correlate.
 
-    Both streams are resampled to a common 50 Hz grid over their overlap. A
-    single global lag is enough for the two rigidly coupled devkits of the
-    bench; a drift over 30 min is precisely what the T10 criterion measures.
+    Both streams are resampled on a common 1 kHz grid over their overlap, and
+    several windows across the run are measured. The reported residual is the
+    WORST window: a median would hide a clock drifting out of tolerance at the
+    end of the run, which is exactly what the T10 criterion measures.
     """
     start = max(float(stamps_a[0]), float(stamps_b[0]))
     end = min(float(stamps_a[-1]), float(stamps_b[-1]))
@@ -106,7 +107,9 @@ def residual_ms(
 
     worst = min(item["correlation"] for item in per_window)
     correlated = worst >= min_correlation
-    residual = round(float(np.median([abs(item["lag_ms"]) for item in per_window])), 3)
+    # The claim is "<= 10 ms over 30 min": a clock that drifts past the limit
+    # in the last window must fail even if the other five windows are fine.
+    residual = round(max(abs(item["lag_ms"]) for item in per_window), 3)
     return {
         "correlated": correlated,
         "correlation_min": round(worst, 4),
