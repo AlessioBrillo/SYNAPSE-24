@@ -70,13 +70,18 @@ esp_err_t synapse_calibration_erase(void);
 /** Where the last load came from: "defaults", "nvs" or "invalid". */
 const char *synapse_calibration_state(void);
 
-/** CRC of a record, with the CRC field itself zeroed. */
+/** CRC of a whole record, with the CRC field itself zeroed (validation only). */
 uint32_t synapse_calibration_crc(const synapse_calibration_t *cal);
 
-/** Remember the record the sensor layer actually applied at boot. */
+/** CRC of only the sensor-effective fields, with all metadata/version/CRC zeroed.
+ *  Compare with synapse_calibration_applied_crc() to detect a pending reboot. */
+uint32_t synapse_calibration_effective_crc(const synapse_calibration_t *cal);
+
+/** Remember the sensor-effective values the sensor layer actually applied at boot. */
 void synapse_calibration_mark_applied(const synapse_calibration_t *cal);
 
-/** CRC of the applied record; compare with the stored one to see a pending reboot. */
+/** Effective CRC of the applied record; compare with the stored record's effective
+ *  CRC to see a pending reboot. Metadata-only edits do not change it. */
 uint32_t synapse_calibration_applied_crc(void);
 
 #ifdef __cplusplus

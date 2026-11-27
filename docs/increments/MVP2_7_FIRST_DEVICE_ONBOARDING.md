@@ -29,7 +29,8 @@ radio or person was used in its implementation.
   removed.
 - **Bench firmware variant.** `band-bench` enables factory mode on top of the
   core smoke-kit profile, so no operator has to run `menuconfig`. CI builds it
-  as a fifth config. Build metadata now comes from the generated `sdkconfig`
+  as the **third of five** configurations (band-full, band-core, band-bench,
+  band-full+RR, band-product). Build metadata now comes from the generated `sdkconfig`
   instead of the variant name: `band-product` no longer claims a registered
   raw research service.
 - **T10 is executable.** `scripts/measure_two_pod_sync.py` cross-correlates
@@ -65,3 +66,27 @@ Commands run on this host (2026-11-27) against the final tree:
 
 Hardware evidence remains open: no board, sensor, radio, long BLE read or
 human session has been exercised. Status stays in `docs/hardware/STATUS.md`.
+
+## Follow-up fixes (review findings — closed in MVP-2.8)
+
+The review of this increment found the issues below. They are recorded here so
+the verification claims above are not overstated: **none of them was fixed in
+MVP-2.7**, and the results above describe the tree as it stood at that point.
+They are implemented and verified in
+[`MVP2_8_HARDWARE_READINESS_FIXES.md`](MVP2_8_HARDWARE_READINESS_FIXES.md).
+
+- **Unit mismatch** — the gain generator instruction conflated 1 Vpp at the
+  generator with 1 mVpp at the electrodes (1000:1 divider), and the validator's
+  ECG XDF needed to be stated in µV, consistent with `g1_measure.py`.
+- **Bench T02 dump** — the identity check must also compare the DIS `2A25`
+  characteristic and a fresh log, not just the factory `--dump` exit/output.
+- **`--bench-values`** — hand-measured rows must carry `--verified-by`; a
+  `g1-report` without `--manifest` must write FAIL evidence instead of raising.
+- **Parser negatives** — the firmware's per-unit JSON whitelist parser must
+  reject negative gain/current/bias/capacity values.
+- **Provenance** — BLE writes of per-unit values must require an existing,
+  provenance-complete record calibrated over USB first.
+- **Feature rate** — `feature_rate_hz` is session-only and must not be
+  persisted into the per-unit record.
+- **`pending_reboot` false positive** — `verify` must not reject a profile
+  that was applied successfully when the pending bit is stale.

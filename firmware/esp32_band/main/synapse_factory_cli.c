@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "synapse_calibration.h"
@@ -41,7 +42,8 @@ static void print_help(void) {
         "  cal noise <uv_x10>                shorted-input ECG noise, 0 = not measured\r\n"
         "  cal battery <mah>                 fitted cell capacity (0 = Kconfig default)\r\n"
         "  cal save                          seal and persist the record\r\n"
-        "  cal erase                         drop the record, use Kconfig\r\n");
+        "  cal erase                         drop the record, use Kconfig\r\n"
+        "  cal reboot                        restart the band (apply a new profile)\r\n");
 }
 
 static void dump_record(void) {
@@ -102,6 +104,14 @@ static void handle_cal(char *args) {
         } else {
             printf("ERR save: %s\r\n", esp_err_to_name(err));
         }
+        return;
+    }
+    if (strcmp(cmd, "reboot") == 0) {
+        /* The sensor layer reads the per-unit record only at boot. A bench tool
+         * that writes LEDs and then records must be able to apply them without
+         * asking the operator to unplug the cable. */
+        printf("OK reboot\r\n");
+        esp_restart();
         return;
     }
 

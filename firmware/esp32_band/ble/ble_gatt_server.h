@@ -131,7 +131,7 @@ _Static_assert(sizeof(synapse_feature_stream_t) == 23, "feature stream v1 is 23 
 // ============================================================================
 // Device Config (small JSON whitelist, read/write; see ble_gatt_server.c)
 // ============================================================================
-#define SYNAPSE_MAX_CONFIG_SIZE 768
+#define SYNAPSE_MAX_CONFIG_SIZE 1024
 
 typedef struct {
     uint8_t data[SYNAPSE_MAX_CONFIG_SIZE];

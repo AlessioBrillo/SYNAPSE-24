@@ -25,6 +25,9 @@ from pathlib import Path
 from typing import Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.calibration_record import canonical_record  # noqa: E402
+
 CAL_DIR = ROOT / "data" / "calibration"
 SERIAL_RE = re.compile(r"^SYN-[0-9A-F]{12}$")
 
@@ -111,6 +114,9 @@ class SerialTransport:
     def __init__(self, port: str, baud: int = 115200, timeout: float = 2.0) -> None:
         import serial  # noqa: PLC0415 - optional until a real port is used
 
+        self._port = port
+        self._baud = baud
+        self._timeout = timeout
         self._conn = serial.Serial(port, baudrate=baud, timeout=timeout)
 
     def send(self, line: str) -> str:
@@ -127,6 +133,24 @@ class SerialTransport:
             if chunks or len(chunks) > 50:
                 break
         return "\n".join(chunks)
+
+    def reboot(self) -> None:
+        """Restart the band so a written per-unit profile is actually applied.
+
+        The firmware answers ``OK reboot`` and then calls ``esp_restart()``.
+        Reopen the port afterwards so the next calibration command reaches the
+        shell of the booted band, not the dead handle of the previous one.
+        """
+        import time  # noqa: PLC0415 - only when a real reboot is requested
+
+        import serial  # noqa: PLC0415 - already imported by __init__, kept local for clarity
+
+        reply = self.send("cal reboot")
+        if not reply.startswith("OK"):
+            raise RuntimeError(f"cal reboot refused: {reply!r}")
+        time.sleep(2.0)
+        self._conn.close()
+        self._conn = serial.Serial(self._port, baudrate=self._baud, timeout=self._timeout)
 
     def close(self) -> None:
         self._conn.close()
@@ -199,7 +223,9 @@ def write_record(record: dict[str, object]) -> Path:
     path = CAL_DIR / f"{record['serial']}.json"
     serial_port = path.open("w", encoding="utf-8")
     with serial_port as handle:
-        json.dump(record, handle, indent=2, sort_keys=True)
+        # The band dumps `battery_capacity_mah`/`instrument`/...; the host
+        # record must use the canonical names device_profile.verify expects.
+        json.dump(canonical_record(record), handle, indent=2, sort_keys=True)
         handle.write("\n")
     return path
 
@@ -248,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.erase:
             print("calibration record erased: the band uses Kconfig defaults")
             return 0
-        if args.dry_run:
+        if args.dump:
+            # A dump is read-only evidence: bench_suite.py parses the JSON line
+            # from stdout. Never write a host file just to look at the record —
+            # only a real write command creates data/calibration/<serial>.json.
+            print(json.dumps(record, sort_keys=True))
+        elif args.dry_run:
             print(json.dumps(record, indent=2, sort_keys=True))
         else:
             path = write_record(record)

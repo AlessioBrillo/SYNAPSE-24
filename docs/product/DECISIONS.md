@@ -10,6 +10,9 @@ implemented by MVP-2.7. The authoritative engineering state is
 Changing that position changes every row below, so it must be decided with
 counsel before any design freeze.
 
+PDR-02 (Just Works pairing) is **explicitly accepted for the bench prototype**
+and remains **Open** for the commercial image.
+
 ## Risk register
 
 | ID | Risk | Why it matters for a commercial image | Decision / trigger | Status |

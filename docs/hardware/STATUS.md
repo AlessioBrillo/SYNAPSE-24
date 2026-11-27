@@ -4,10 +4,12 @@ This file is the authoritative status of the project. README, Roadmap,
 AGENTS.md, CONTRIBUTING.md and the compliance documents point here instead of
 keeping their own copy. If a number below changes, change it here first.
 
-**Latest increment:** MVP-2.7 (first device onboarding). **Last gate:** see
-`docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md` for the exact command
-sequence and result. The previous increment (MVP-2.6, readiness governance) is
-recorded in `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
+**Latest increment:** MVP-2.8 (hardware readiness fixes). **Last gate:** see
+`docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md` for the exact command
+sequence and result. The previous increment (MVP-2.7, first device onboarding)
+is recorded in `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`; its review
+follow-ups are closed by MVP-2.8. MVP-2.6 (readiness governance) is recorded in
+`docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
 
 ## Gate status
 
@@ -26,10 +28,12 @@ recorded in `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
   1:1 with `config/hardware.yaml`. Bench evidence now derives its verdict from
   the measurement (a fresh gate report, a parsed boot log), not from an exit
   code; per-unit profiles are written and verified by one command.
-- Firmware: band-full, band-core, band-full+RR and band-product build in CI.
-  The product image does **not** register the raw research service.
+- Firmware: band-full, band-core, **band-bench**, band-full+RR and
+  band-product build in CI. The bench image is the core smoke-kit profile with
+  the factory shell enabled; the product image does **not** register the raw
+  research service.
 - Host path: raw-frame parity, research service, XDF/FIT conformance, SDK and
-  backend suites; C host gate with zero skips.
+  backend suites; C host gate with zero skips (Linux replay of all 12 modules).
 - Per-unit calibration is bound to the DIS serial, versioned (v2) and
   records instrument, firmware, uncertainty and noise.
 
@@ -40,8 +44,10 @@ recorded in `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
 - Human data: no session has been recorded with consent yet.
 - Six-hour soak, INA219 known-load check, IMU bias at rest, PPG LED sweep.
 - Security: config writes require an encrypted link, but pairing uses Just
-  Works (`sm_mitm = 0`) and no bonded key store is initialised. Residual MITM
-  risk is accepted for the prototype, not for a shipped product.
+  Works (`sm_mitm = 0`, PDR-02) and no bonded key store is initialised. PDR-02
+  remains **explicitly accepted for the bench prototype** and open for the
+  commercial image; the residual MITM risk is not accepted for a shipped
+  product.
 
 ## Critical rules
 

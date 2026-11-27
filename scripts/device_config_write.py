@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -25,16 +26,27 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from scripts.calibration_record import (  # noqa: E402
+    PROFILE_KEYS,
+    PROVENANCE_KEYS,
+    canonical_record,
+)
 
 # Wire keys must stay in sync with the whitelist in ble_gatt_server.c.
-PROFILE_KEYS = (
-    "ecg_gain_x100",
-    "ppg_led_red",
-    "ppg_led_ir",
-    "accel_bias_mg",
-    "gyro_bias_mdps",
-    "battery_mah",
-)
+# PROFILE_KEYS / PROVENANCE_KEYS come from scripts.calibration_record so the
+# USB factory write, this BLE write and the validator use the same names.
+SERIAL_RE = re.compile(r"SYN-[0-9A-F]{12}")
+
+
+def validate_serial(serial: str) -> str:
+    """Reject anything but the DIS identity before touching a file or device."""
+    if not SERIAL_RE.fullmatch(str(serial)):
+        raise ValueError(f"invalid serial {serial!r}: expected SYN- + 12 hex characters")
+    return str(serial)
+
+
 # Payload key -> key in the device-config readback. The two formats use
 # different short names; this map is the only place that knows the difference.
 READBACK_KEYS = {
@@ -116,7 +128,7 @@ def update_local_record(
 ) -> Path:
     """Commit the host record only when the band proves it holds this profile."""
     record = {"serial": serial}
-    for key in PROFILE_KEYS:
+    for key in PROFILE_KEYS + PROVENANCE_KEYS:
         value = readback.get(key)
         if value is not None:
             record[key] = value
@@ -127,7 +139,7 @@ def update_local_record(
     sink = write or (
         lambda p, text: (p.parent.mkdir(parents=True, exist_ok=True), p.write_text(text))
     )
-    sink(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    sink(path, json.dumps(canonical_record(record), indent=2, sort_keys=True) + "\n")
     return path
 
 
@@ -152,7 +164,7 @@ async def _write(address: str, payload: dict[str, Any]) -> dict[str, Any]:
         return json.loads(bytes(raw).decode("ascii", errors="replace").strip("\x00 "))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--address", required=True)
     parser.add_argument("--serial", required=True)
@@ -165,16 +177,23 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="print the payload without touching a device"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
+        serial = validate_serial(args.serial)
         payload = build_payload(args)
         if args.dry_run:
             print(json.dumps(payload, separators=(",", ":")))
             return 0
         readback = asyncio.run(_write(args.address, payload))
-        verify_readback(readback, expected_from_payload(payload), args.serial)
-        path = update_local_record(readback, args.serial)
-        print(f"profile applied and host record updated: {path}")
+        verify_readback(readback, expected_from_payload(payload), serial)
+        # Match device_profile.configure: the NVS record is written here, but
+        # the host manufacturing record is committed only after the reboot by
+        # `device_profile.py verify`, which proves the drivers applied it.
+        print(
+            "profile written to NVS; after reboot run "
+            f"'device_profile.py verify {serial} --address {args.address}' "
+            "to commit the host record"
+        )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"device config write failed: {exc}", file=sys.stderr)
         return 1

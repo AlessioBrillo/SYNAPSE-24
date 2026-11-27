@@ -36,6 +36,8 @@ import yaml
 
 MIN_SNR_DB = 10.0  # below this the "sine" is not in the data and a gain would be a fiction
 S16_LIMIT = 32767  # the wire value saturates here: a clipped sine measures a gain that is too low
+FLAT_TOP_RUN = 4  # consecutive identical samples at an extreme: an ADC rail, not a sine
+FLAT_TOP_FRACTION = 0.5  # the repeating level must sit at least this far from the signal centre
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -102,6 +104,43 @@ def noise_floor_uv(wire_uv: npt.ArrayLike) -> dict[str, float]:
     return {"std_uv": float(np.std(x, ddof=1)), "mean_uv": float(np.mean(x))}
 
 
+def _longest_run(mask: npt.NDArray[np.bool_]) -> int:
+    """Longest stretch of consecutive True values in a 1-D boolean mask."""
+    if mask.size == 0:
+        return 0
+    edges = np.flatnonzero(mask[1:] != mask[:-1]) + 1
+    starts = np.r_[0, edges]
+    ends = np.r_[edges, mask.size]
+    true_starts = mask[starts]
+    if not np.any(true_starts):
+        return 0
+    return int(np.max(ends[true_starts] - starts[true_starts]))
+
+
+def _is_clipped(x: npt.NDArray[np.float64]) -> bool:
+    """The s16 limit or a flat top at an extreme invalidates a gain fit.
+
+    The validator now writes the ECG in microvolts (the contract's display
+    unit), so a real capture never reaches +/-32767 uV: the ADC rails clip the
+    front end well below that. A clipped sine therefore shows up as repeated
+    identical values at the top or bottom of the trace, and fitting it would
+    report a gain that is too low. Both shapes are refused.
+    """
+    if np.any(np.abs(x) >= S16_LIMIT):
+        return True
+    hi, lo = float(np.max(x)), float(np.min(x))
+    span = hi - lo
+    if span <= 0:
+        return False  # a constant trace has no sine to fit
+    centre = float(np.median(x))
+    for level in (hi, lo):
+        if abs(level - centre) < FLAT_TOP_FRACTION * span:
+            continue
+        if _longest_run(x == level) >= FLAT_TOP_RUN:
+            return True
+    return False
+
+
 def gain_from_sine(
     wire_uv: npt.ArrayLike,
     fs: float,
@@ -116,8 +155,11 @@ def gain_from_sine(
     the noise, and does not need a whole number of periods.
     """
     x = np.asarray(wire_uv, dtype=np.float64)
-    if np.any(np.abs(x) >= S16_LIMIT):
-        raise ValueError("the stream hit the s16 limit: reduce the applied amplitude (or the gain)")
+    if _is_clipped(x):
+        raise ValueError(
+            "the stream is clipped (s16 limit or a flat top at the extreme): "
+            "reduce the applied amplitude (or the gain)"
+        )
     t = np.arange(x.size) / fs
     basis = np.column_stack(
         [np.sin(2 * np.pi * freq_hz * t), np.cos(2 * np.pi * freq_hz * t), np.ones_like(t)]

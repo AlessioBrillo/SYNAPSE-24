@@ -32,6 +32,10 @@
 #include "synapse_config.h"
 #include "synapse_calibration.h"
 #include "synapse_identity.h"
+/* The device-config whitelist parsers are pure C: the firmware and the host
+ * parser tests compile the SAME production header, so a host fix cannot drift
+ * from the image shipped on the band. No NimBLE/ESP-IDF headers are needed. */
+#include "synapse_config_json.h"
 
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool g_connected = false;
@@ -256,7 +260,10 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     char cal_serial[SYNAPSE_CAL_SERIAL_MAX] = {0};
     char cal_date[SYNAPSE_CAL_DATE_MAX] = {0};
     char cal_operator[SYNAPSE_CAL_OPERATOR_MAX] = {0};
-    const char *cal_state = "none";
+    char cal_instrument[SYNAPSE_CAL_INSTRUMENT_MAX] = {0};
+    char cal_fw_version[SYNAPSE_CAL_FW_MAX] = {0};
+    uint16_t cal_uncertainty = 0;
+    int16_t cal_noise = 0;
     if (synapse_calibration_load(&cal) == ESP_OK && synapse_calibration_valid(&cal)) {
         if (cal.ecg_gain_x100 != 0) gain_x100 = cal.ecg_gain_x100;
         if (cal.ppg_led_red != 0) led_red = cal.ppg_led_red;
@@ -266,15 +273,24 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
             accel_bias[i] = cal.accel_bias_mg[i];
             gyro_bias[i] = cal.gyro_bias_mdps[i];
         }
-        cal_state = synapse_calibration_state();
         json_safe(cal_serial, sizeof(cal_serial), cal.serial);
         json_safe(cal_date, sizeof(cal_date), cal.date);
         json_safe(cal_operator, sizeof(cal_operator), cal.operator);
+        json_safe(cal_instrument, sizeof(cal_instrument), cal.instrument);
+        json_safe(cal_fw_version, sizeof(cal_fw_version), cal.fw_version);
+        cal_uncertainty = cal.gain_uncertainty_pct_x100;
+        cal_noise = cal.noise_std_uv_x10;
     }
-    /* A new NVS record is not applied until the drivers re-read it at boot.
-     * Comparing CRCs covers both the USB calibration shell and BLE writes. */
+    /* Report the real state, including a corrupt/foreign record ("invalid").
+     * Only the virgin/defaults case is named "none" on the wire. */
+    const char *state = synapse_calibration_state();
+    const char *cal_state = strcmp(state, "defaults") == 0 ? "none" : state;
+    /* A sensor-effective profile change is not applied until the drivers
+     * re-read it at boot. Metadata-only edits (a serial added by `cal save`,
+     * an operator/instrument note) do not change the effective CRC and must
+     * not be reported as a pending reboot. */
     const bool pending_reboot =
-        synapse_calibration_applied_crc() != synapse_calibration_crc(&cal);
+        synapse_calibration_applied_crc() != synapse_calibration_effective_crc(&cal);
 
     /* Every active hardware.yaml field the host gate checks is reported
      * here, with short keys so a long BLE read stays compact. A stale
@@ -292,7 +308,9 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              "\"sync_gpio\":%u,\"ina_addr\":%u,\"ina_shunt\":%u,"
              "\"power_profile\":%u,"
              "\"cal_serial\":\"%s\",\"cal_state\":\"%s\","
-             "\"cal_date\":\"%s\",\"cal_operator\":\"%s\"}",
+             "\"cal_date\":\"%s\",\"cal_operator\":\"%s\","
+             "\"cal_instrument\":\"%s\",\"cal_fw_version\":\"%s\","
+             "\"cal_uncertainty_pct_x100\":%u,\"cal_noise_std_uv_x10\":%d}",
              synapse_config_get_fw_version(),
              (unsigned)SYNAPSE_CONTRACT_RATE_ECG_HZ,
              (unsigned)synapse_ppg_rate_hz(cfg.ppg_sample_rate),
@@ -314,71 +332,25 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)SYNAPSE_CONTRACT_INA219_I2C_ADDR,
              (unsigned)SYNAPSE_CONTRACT_INA219_SHUNT_MOHM,
              (unsigned)cfg.power_profile,
-             cal_serial, cal_state, cal_date, cal_operator);
+             cal_serial, cal_state, cal_date, cal_operator,
+             cal_instrument, cal_fw_version,
+             (unsigned)cal_uncertainty, (int)cal_noise);
 }
 
 #if defined(CONFIG_SYNAPSE_FACTORY_MODE)
-/* Minimal JSON readers for the device-config whitelist. A full parser would
- * accept keys we deliberately refuse; these extract only the named fields and
- * leave everything else to fail closed. */
-static bool json_u32(const char *req, const char *key, uint32_t *out) {
-    char pattern[40];
-    if (snprintf(pattern, sizeof(pattern), "\"%s\":", key) >= (int)sizeof(pattern)) return false;
-    const char *p = strstr(req, pattern);
-    if (p == NULL) return false;
-    p += strlen(pattern);
-    char *end = NULL;
-    unsigned long value = strtoul(p, &end, 10);
-    if (end == p || value > 0xFFFFFFFFu) return false;
-    /* Reject `31abc`: a truncated field is a malformed profile, not 31. */
-    if (*end != '\0' && *end != ',' && *end != '}' && *end != ' ' && *end != '\t') return false;
-    *out = (uint32_t)value;
-    return true;
-}
+/* The whitelist readers (json_u32, json_i16_array, json_only_whitelisted)
+ * come from the shared, NimBLE-free synapse_config_json.h included above. A full
+ * parser would accept keys we deliberately refuse; these extract only the
+ * named fields and leave everything else to fail closed. */
 
-static bool json_i16_array(const char *req, const char *key, int16_t *out, size_t n) {
-    char pattern[40];
-    if (snprintf(pattern, sizeof(pattern), "\"%s\":", key) >= (int)sizeof(pattern)) return false;
-    const char *p = strstr(req, pattern);
-    if (p == NULL) return false;
-    p += strlen(pattern);
-    for (size_t i = 0; i < n; i++) {
-        while (*p == ' ' || *p == '\t' || *p == '[' || *p == ',') p++;
-        char *end = NULL;
-        long value = strtol(p, &end, 10);
-        if (end == p || value < -32768 || value > 32767) return false;
-        out[i] = (int16_t)value;
-        p = end;
-    }
-    while (*p == ' ' || *p == '\t') p++;
-    return *p == ']';
-}
-
-/* Every quoted token in a profile is a key (all values are numbers or arrays).
- * Reject an unknown one instead of silently ignoring it: a typo in a field
- * name must not look like a successful write. */
-static bool json_only_whitelisted(const char *req) {
-    static const char *const allowed[] = {
-        "led_red", "led_ir", "gain_x100", "feature_rate_hz",
-        "battery_mah", "accel_bias_mg", "gyro_bias_mdps",
-    };
-    static const size_t n_allowed = sizeof(allowed) / sizeof(allowed[0]);
-    const char *p = req;
-    while ((p = strchr(p, '"')) != NULL) {
-        const char *end = strchr(p + 1, '"');
-        if (end == NULL) return false;
-        const size_t len = (size_t)(end - p - 1);
-        bool found = false;
-        for (size_t i = 0; i < n_allowed; i++) {
-            if (strlen(allowed[i]) == len && strncmp(p + 1, allowed[i], len) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
-        p = end + 1;
-    }
-    return true;
+/* A BLE write may edit only a record that already carries its measurement
+ * provenance. Otherwise a client could mint a "valid" but untraceable
+ * calibration by writing one number into otherwise empty NVS. */
+static bool cal_has_provenance(const synapse_calibration_t *cal) {
+    return cal != NULL &&
+           cal->serial[0] != '\0' && cal->date[0] != '\0' &&
+           cal->operator[0] != '\0' && cal->instrument[0] != '\0' &&
+           cal->fw_version[0] != '\0' && cal->gain_uncertainty_pct_x100 != 0u;
 }
 #endif
 
@@ -406,8 +378,15 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         req[len < sizeof(req) ? len : sizeof(req) - 1] = '\0';
-        if (!json_only_whitelisted((const char *)req)) {
-            ESP_LOGW(BLE_TAG, "config write refused: unknown field in payload");
+        const cfg_json_status_t json_status = json_only_whitelisted((const char *)req);
+        if (json_status != CFG_JSON_OK) {
+            if (json_status == CFG_JSON_ERR_DUPLICATE_KEY) {
+                ESP_LOGW(BLE_TAG, "config write refused: duplicate key in payload");
+            } else if (json_status == CFG_JSON_ERR_MALFORMED) {
+                ESP_LOGW(BLE_TAG, "config write refused: malformed JSON payload");
+            } else {
+                ESP_LOGW(BLE_TAG, "config write refused: unknown field in payload");
+            }
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
 
@@ -420,13 +399,16 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
         const bool have_battery = json_u32((const char *)req, "battery_mah", &battery);
         const bool have_accel = json_i16_array((const char *)req, "accel_bias_mg", accel, 3);
         const bool have_gyro = json_i16_array((const char *)req, "gyro_bias_mdps", gyro, 3);
+        /* feature_rate_hz is session-only (RAM never persisted); everything
+         * else edits the per-unit calibration record in NVS. */
+        const bool per_unit = have_led || have_gain || have_battery || have_accel || have_gyro;
 
         if (have_rate &&
             (rate < 1 || rate > SYNAPSE_CONTRACT_V2_FEATURE_RATE_MAX_HZ)) {
             ESP_LOGW(BLE_TAG, "config write refused: feature rate out of range");
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        if (!have_led && !have_gain && !have_battery && !have_accel && !have_gyro && !have_rate) {
+        if (!per_unit && !have_rate) {
             ESP_LOGW(BLE_TAG, "config write refused: no whitelisted field");
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
@@ -446,21 +428,29 @@ static int cfg_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
                           gyro[2] < -20000 || gyro[2] > 20000)) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
+        /* Refuse a per-unit write before changing anything when there is no
+         * complete, valid, provenance-bearing record to edit. A BLE client
+         * must not be able to create a "valid" record with no serial/date /
+         * operator / instrument / firmware / uncertainty. feature_rate_hz is
+         * the one exception: it is session-only and never persisted. */
+        synapse_calibration_t cal;
+        if (per_unit) {
+            const esp_err_t err = synapse_calibration_load(&cal);
+            if (err != ESP_OK || !synapse_calibration_valid(&cal) || !cal_has_provenance(&cal)) {
+                ESP_LOGW(BLE_TAG,
+                         "config write refused: no provenance-complete calibration record");
+                return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+            }
+        }
+
         if (have_rate) {
             ctl_set_feature_rate((uint8_t)rate, NULL);
             ESP_LOGI(BLE_TAG, "config write: feature rate=%lu Hz", (unsigned long)rate);
         }
-        if (!have_led && !have_gain && !have_battery && !have_accel && !have_gyro) {
-            return 0;
-        }
+        if (!per_unit) return 0;  // feature rate only: RAM session, nothing saved
 
-        synapse_calibration_t cal;
-        esp_err_t err = synapse_calibration_load(&cal);
-        if (err != ESP_OK) {
-            synapse_calibration_defaults(&cal);
-            const char *serial = synapse_identity_serial();
-            if (serial != NULL) snprintf(cal.serial, sizeof(cal.serial), "%s", serial);
-        }
+        /* cal already holds every loaded metadata field; edit only the
+         * whitelisted numbers, re-seal and save the whole provenance record. */
         if (have_led) {
             if (red != 0) cal.ppg_led_red = (uint8_t)red;
             if (ir != 0) cal.ppg_led_ir = (uint8_t)ir;

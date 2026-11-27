@@ -19,8 +19,10 @@ static const char *TAG = "SYNAPSE_CAL";
 #define CAL_VERSION_KEY "cal_version"
 
 static const char *s_state = "defaults";
-/* What the sensor layer applied at boot. A USB `cal save` and a BLE profile
- * write both change NVS; comparing CRCs is the only guard that covers both. */
+/* What the sensor layer applied at boot (effective CRC: metadata excluded).
+ * A USB `cal save` and a BLE profile write both change NVS; comparing the
+ * effective CRC with the current record is the only guard that covers both
+ * without flagging metadata-only edits as a pending reboot. */
 static uint32_t s_applied_crc = 0;
 
 /* The CRC-32 of the record is computed here rather than through esp_crc32 so
@@ -40,6 +42,26 @@ static uint32_t crc32_bytes(const uint8_t *data, size_t len) {
 static uint32_t record_crc(const synapse_calibration_t *cal) {
     synapse_calibration_t copy;
     memcpy(&copy, cal, sizeof(copy));
+    copy.crc32 = 0u;
+    return crc32_bytes((const uint8_t *)&copy, sizeof(copy));
+}
+
+/* CRC of only the fields the sensors actually apply. A factory operator can
+ * add a serial/date/instrument with `cal save` after the boot: that changes
+ * the full-record CRC (and must keep the record valid) but changes nothing the
+ * drivers read, so it must not be reported as a pending reboot. */
+static uint32_t effective_record_crc(const synapse_calibration_t *cal) {
+    synapse_calibration_t copy;
+    memcpy(&copy, cal, sizeof(copy));
+    memset(copy.serial, 0, sizeof(copy.serial));
+    memset(copy.date, 0, sizeof(copy.date));
+    memset(copy.operator, 0, sizeof(copy.operator));
+    memset(copy.instrument, 0, sizeof(copy.instrument));
+    memset(copy.fw_version, 0, sizeof(copy.fw_version));
+    copy.ecg_midrail_mv = 0;  /* metadata only: the driver re-measures the DC bias */
+    copy.gain_uncertainty_pct_x100 = 0u;
+    copy.noise_std_uv_x10 = 0;
+    copy.version = 0u;
     copy.crc32 = 0u;
     return crc32_bytes((const uint8_t *)&copy, sizeof(copy));
 }
@@ -169,8 +191,12 @@ uint32_t synapse_calibration_crc(const synapse_calibration_t *cal) {
     return cal == NULL ? 0u : record_crc(cal);
 }
 
+uint32_t synapse_calibration_effective_crc(const synapse_calibration_t *cal) {
+    return cal == NULL ? 0u : effective_record_crc(cal);
+}
+
 void synapse_calibration_mark_applied(const synapse_calibration_t *cal) {
-    s_applied_crc = synapse_calibration_crc(cal);
+    s_applied_crc = synapse_calibration_effective_crc(cal);
 }
 
 uint32_t synapse_calibration_applied_crc(void) {

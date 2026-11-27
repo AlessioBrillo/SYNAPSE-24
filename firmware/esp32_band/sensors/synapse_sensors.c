@@ -301,9 +301,10 @@ esp_err_t synapse_sensors_init(void) {
         ESP_LOGI(TAG, "Applied calibration for %s (source=%s)",
                  s_calibration.serial, synapse_calibration_state());
     }
-    // Remember exactly what this boot applied. Both the USB shell and the
-    // BLE whitelist write NVS; the readback compares this CRC with the stored
-    // record so a profile cannot look applied before a reboot.
+    // Remember the sensor-effective values this boot applied. Both the USB
+    // shell and the BLE whitelist write NVS; the readback compares this
+    // effective CRC with the stored record so a profile cannot look applied
+    // before a reboot, while a metadata-only edit does not create a false one.
     synapse_calibration_mark_applied(&s_calibration);
     // Publish the effective values through the config manager: the power
     // module and the device-config readback both read it, so neither can keep

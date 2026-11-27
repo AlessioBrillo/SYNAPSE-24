@@ -130,6 +130,12 @@ offsets and the fitted cell capacity. `cal erase` returns the band to Kconfig
 defaults. A profile write sets `pending_reboot: 1` in the readback: reboot the
 band before recording, or `device_profile.py verify` fails. The resulting
 `data/calibration/<serial>.json` is manufacturing data and is not committed.
+Writing per-unit values over BLE is allowed **only when a USB-factory-calibrated
+record with complete provenance already exists** for that serial (operator,
+instrument, firmware version, gain uncertainty); BLE may then edit only that
+provenance-bearing record — it cannot create a new calibrations from scratch,
+and it must not be used to overwrite values that were not measured. `feature_rate_hz` is **session-only**: it is not
+persisted into the record or the band's NVS.
 The ECG mid-rail is **not** forced at boot: the driver re-measures it after
 lead-off, and a stale stored DC offset would be worse than none.
 
@@ -267,6 +273,11 @@ The validator must report, in this order:
 8. the pod's boot-time configuration matching `config/hardware.yaml`, read
    from its device-config characteristic.
 
+The ECG stream in the validator's XDF is now written in **µV**, the same unit
+`scripts/g1_measure.py` uses for the gain and noise numbers: do not apply the
+gain a second time when comparing the recording with the bench measurements
+(§4a).
+
 Every gate has a status: PASS, FAIL or N/A. **N/A is not a pass** — the live
 profile requires rows 2–8, so a missing reference, a silent POWER stream or a
 pod that cannot report its configuration fails the run. Tier-1 sync and EEG
@@ -309,18 +320,23 @@ for €0:
    motion and will never correlate, whatever the clocks do.
 2. Flash both with `band-core`; they advertise as two `SYNAPSE-BAND` devices.
 3. Subscribe to ECG+PPG+ACC on both; record both pods simultaneously (two
-   recorders, or one PC with two BLE adapters). Then compute the residual:
+   recorders, or one PC with two BLE adapters). **T10 needs at least 30 minutes
+   of overlap** — a shorter capture returns no residual, not a pass. Then
+   compute the residual:
 
    ```bash
    uv run python scripts/bench_suite.py sync --pods pod_a.xdf pod_b.xdf
    ```
 
    The tool interpolates both ACC magnitudes on a 1 kHz grid, cross-correlates
-   six windows across the overlap and writes `sync.pod_pair_residual_ms` with
-   the observed correlation and the **worst** window lag (a median would hide
-   a clock drifting out of tolerance at the end). A window below
-   `min_acc_correlation: 0.7` returns **no residual**, never a zero.
-   **≤10 ms over 30 min PASSES** the sync precondition for the Cerelog order.
+   six windows across the overlap and writes **`residual_ms`** (not
+   `sync.pod_pair_residual_ms`) with the observed correlation and the **worst**
+   window lag (a median would hide a clock drifting out of tolerance at the
+   end). A window below `min_acc_correlation: 0.7` returns **no residual**,
+   never a zero. The 10 ms limit is not a literal: read it from
+   `sync.tier_budgets.T0.max_residual_drift_ms` in `config/hardware.yaml`
+   (10 ms today). **≤10 ms over ≥30 min PASSES** the sync precondition for the
+   Cerelog order.
 4. The wired-sync line (GPIO 10 between the pods, not GPIO 27: a flash pin on the N8R8) is driven by the hub-side
    driver already compiled into band-core, but *emitting* the pulse is a G2
    feature (real head pod, second body site): for the bench measurement above
@@ -485,7 +501,7 @@ from the generated contract header
 |---|---|---|
 | `ESP_ERR_NOT_FOUND` on PPG PART_ID | I²C wiring or missing pull-ups | Verify GPIO 8/9, add 4.7 kΩ pull-ups. The boot log's `I2C scan` lines say whether anything answers and at which address (§1a) |
 | `[FAIL]` in the factory test | See §1a for what each line means | Fix the line named; the number in it is the measurement that failed |
-| `[band-core]` missing from the boot log | Wrong build variant | Rebuild with `--variant band-core` |
+| `[band-bench]` missing / `[band-core]` present in the boot log | Wrong build variant (stale image) | Rebuild with `--variant band-bench` |
 | ECG reads 0, PPG/IMU fine | AD8232 unpowered | Verify 3V3/GND. Leave an unused LO± unconnected (grounding the module's LO outputs shorts them) or set `gpio_lead_off: -1` |
 | ECG flat or stuck at a rail (about +1.3 / −1.5 mV) from the start | The band started with the electrodes off or still settling, so the resting level was measured from nothing | Apply the electrodes and restart the band; with LO+ wired, a long lead-off followed by steady contact re-measures it by itself |
 | Research service absent | `RESEARCH_SERVICE` disabled or wrong firmware | Check `sdkconfig.defaults.core` |

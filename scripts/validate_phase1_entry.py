@@ -33,9 +33,11 @@ import numpy as np
 from synapse24.config.loader import load_hardware_config_from_path
 from synapse24.contracts_generated import UUIDS as CONTRACT_UUIDS
 
-# Add src to path
+# Add src and the repo root to path (the latter for scripts.calibration_record).
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.calibration_record import canonical_record  # noqa: E402
 from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, TierSyncBudget
 from synapse24.acquisition.coordinator import SensorPodCoordinator
 from synapse24.acquisition.immobility import ImmobilityDetector
@@ -395,9 +397,25 @@ class Phase1Validator:
         highest = max(rates.values()) if rates else 500.0
         return int(max(highest, 1.0) * 30)
 
+    @staticmethod
+    def _contract_units(outlet: str, values: list[float]) -> list[float]:
+        """Convert one decoded row into the display unit declared by the contract.
+
+        The research client deliberately decodes ECG to mV for the live
+        analysis path (``UNIT_DIVISOR[ECG] = 1000``), but the XDF the validator
+        writes is G1 evidence: it must carry the same unit as ``synapse record``
+        and as ``g1_measure.py``, which fit a gain from microvolts. Pushing mV
+        into that XDF produced a ~1000x wrong gain (an sdkconfig gain of ~110
+        instead of ~110000). Convert ONLY ECG at this boundary; every other
+        stream already arrives in its declared unit.
+        """
+        if outlet == "SYNAPSE_ECG_T0":
+            return [float(value) * 1000.0 for value in values]
+        return values
+
     def _push_raw_to_lsl(self, outlet: str, values: list[float], ts: float) -> None:
         """Forward one decoded raw sample row into its LSL outlet."""
-        self.lsl_manager.push_sample(outlet, values, ts)
+        self.lsl_manager.push_sample(outlet, self._contract_units(outlet, values), ts)
 
     def _load_config(self, config_path: Path) -> dict:
         config = load_hardware_config_from_path(
@@ -613,7 +631,9 @@ class Phase1Validator:
 
         try:
             if uuid_str == ble_chars["ecg"].lower():
-                ecg = self.parser.parse_ecg(bytes(data))
+                ecg = self._contract_units(
+                    "SYNAPSE_ECG_T0", list(self.parser.parse_ecg(bytes(data)))
+                )
                 self.lsl_manager.push_sample("SYNAPSE_ECG_T0", ecg, timestamp)
                 self.sample_counts["ecg"] += 1
 
@@ -1156,8 +1176,13 @@ class Phase1Validator:
         self._quality_cache = result
         return result
 
-    def _expected_flashed_config(self) -> dict[str, float | int]:
-        """The configuration the contract says the connected band must run."""
+    def _expected_flashed_config(self) -> dict[str, Any]:
+        """The configuration the contract says the connected band must run.
+
+        Fields with a trusted host-side source (the manifest, or this unit's
+        manufacturing record) are compared against the pod's readback; fields
+        with no such source are absent rather than guessed.
+        """
         bring = self.config["bringup"]
         rates = self._nominal_rates()
         pod = next(p for p in bring.get("pods", []) if p.get("pod_id") == "forearm_hub")
@@ -1166,7 +1191,7 @@ class Phase1Validator:
         ppg_cfg_meta = meta["ppg_config"]
         imu_cfg = meta["imu_config"]
         i2c = meta["i2c"]
-        result: dict[str, float | int | str] = {
+        result: dict[str, Any] = {
             "ecg_hz": rates["SYNAPSE_ECG_T0"],
             "ppg_hz": rates["SYNAPSE_PPG_T0"],
             "imu_hz": rates["SYNAPSE_ACC_T0"],
@@ -1196,14 +1221,26 @@ class Phase1Validator:
             "cal_state": "none",
             "cal_date": "",
             "cal_operator": "",
+            # Provenance of the measurement behind the calibration. Empty/zero
+            # when no host record exists: a band claiming provenance the host
+            # cannot corroborate must fail the readback gate.
+            "cal_instrument": "",
+            "cal_fw_version": "",
+            "cal_uncertainty_pct_x100": 0,
+            "cal_noise_std_uv_x10": 0,
         }
+        # feature_rate_hz is deliberately NOT here: it is a session-only
+        # setting (control point / config write), not a flashed per-unit
+        # truth. A legitimate session-rate change must not fail T04.
         # A calibrated unit is authoritative over the nominal manifest gain.
         # The local manufacturing record must describe THIS device; the readback
         # gate below compares the serial and the state too.
         cal_source = self._calibration_source()
         if cal_source:
             try:
-                record = json.loads((ROOT / cal_source).read_text(encoding="utf-8"))
+                record = canonical_record(
+                    json.loads((ROOT / cal_source).read_text(encoding="utf-8"))
+                )
                 for key in ("ecg_gain_x100", "ppg_led_red", "ppg_led_ir"):
                     if record.get(key):
                         result[key] = int(record[key])
@@ -1213,6 +1250,21 @@ class Phase1Validator:
                 result["cal_state"] = "nvs"
                 result["cal_date"] = str(record.get("date", ""))
                 result["cal_operator"] = str(record.get("operator", ""))
+                for key in ("accel_bias_mg", "gyro_bias_mdps"):
+                    if record.get(key) is not None:
+                        result[key] = [int(value) for value in record[key]]
+                for key in (
+                    "cal_instrument",
+                    "cal_fw_version",
+                    "cal_uncertainty_pct_x100",
+                    "cal_noise_std_uv_x10",
+                ):
+                    if record.get(key) is not None:
+                        result[key] = (
+                            str(record[key])
+                            if key in ("cal_instrument", "cal_fw_version")
+                            else int(record[key])
+                        )
             except Exception:  # noqa: BLE001 - a bad record is reported by the gate below
                 self.logger.warning("Calibration record unreadable", exc_info=True)
         return result
@@ -1239,11 +1291,18 @@ class Phase1Validator:
             if actual is None:
                 mismatches.append(f"{key}: missing from pod readback, contract={expected!r}")
                 continue
-            if isinstance(expected, str):
+            if isinstance(expected, list):
+                if [int(item) for item in actual] != [int(item) for item in expected]:
+                    mismatches.append(f"{key}: pod={actual!r}, contract={expected!r}")
+            elif isinstance(expected, str):
                 if str(actual) != expected:
                     mismatches.append(f"{key}: pod={actual!r}, contract={expected!r}")
             elif float(actual) != float(expected):
                 mismatches.append(f"{key}: pod={actual!r}, contract={expected!r}")
+        # A written profile that the drivers have not picked up yet is NOT the
+        # flashed configuration: the NVS record and the live sensors disagree.
+        if readback.get("pending_reboot"):
+            mismatches.append("pending_reboot: profile written but not applied: reboot the band")
         return self._gate(
             "flashed_config_matches_contract",
             not mismatches,
