@@ -14,6 +14,14 @@ config SYNAPSE_HARDWARE_VERSION
     help
         Hardware version (PCB revision) reported via Device Information Service.
 
+config SYNAPSE_BUILD_VARIANT
+    string "Build variant reported in the boot log"
+    default "band-full"
+    help
+        Set by sdkconfig.defaults.<variant>. The boot log must name the image
+        that was actually built: a bench operator who sees [band-core] while
+        flashing a different profile is reading a lie.
+
 endmenu
 
 menu "Synapse Band Features"

@@ -80,10 +80,10 @@ Remove-Item firmware\esp32_band\sdkconfig.old -ErrorAction SilentlyContinue
 
 Perché: un `sdkconfig` vecchio conserva valori vecchi (ad esempio il gain). È la trappola più comune.
 
-2. Fai il flash della versione `band-core`:
+2. Fai il flash della versione `band-bench` (è `band-core` con la shell di fabbrica già accesa: non devi usare `menuconfig`):
 
 ```powershell
-uv run python scripts/build_and_flash_firmware.py --variant band-core --port COM3 --clean monitor
+uv run python scripts/build_and_flash_firmware.py --variant band-bench --port COM3 --clean monitor
 ```
 
 3. Nel log devi vedere, nell'ordine:
@@ -92,7 +92,7 @@ uv run python scripts/build_and_flash_firmware.py --variant band-core --port COM
    - `research service registered`
    - `Entering main loop`
 
-4. Abilita la modalità factory (`CONFIG_SYNAPSE_FACTORY_MODE=y`) con `idf.py menuconfig`, riflasha e poi chiedi alla banda il suo record:
+4. Chiedi alla banda il suo record (la modalità factory è già attiva in `band-bench`):
 
 ```powershell
 uv run python scripts/factory_calibrate.py --port COM3 --dump
@@ -108,11 +108,19 @@ Il factory test (`FACTORY RESULT: PASS`) deve durare circa 13 secondi e non most
 
 Ci sono tre livelli. Non confonderli:
 
-- **Default di fabbrica**: i valori compilati nel firmware (gain 1100, LED `1F,1F`, IMU 8 g / 500 dps).
-- **Record di calibrazione**: un piccolo archivio dentro la banda, con i valori misurati davvero per quella unità.
-- **Contratto**: `config/hardware.yaml`, il riferimento che nessuno deve cambiare a mano durante una prova.
+- **Contratto**: `config/hardware.yaml` fissa rate, range, ODR, pin e UUID. Questi valori sono compilati nel firmware e **non** si cambiano da USB o BLE durante una prova.
+- **Default di fabbrica**: i valori compilati per i campi per-unità (gain 1100, LED `1F,1F`, IMU 8 g / 500 dps).
+- **Profilo per unità**: il record dentro la banda con i valori misurati davvero per quella unità: gain, correnti LED, bias IMU e capacità della cella.
 
-La regola è: **si misura, si scrive nel record, si verifica che la banda legga lo stesso valore**.
+La regola è: **si misura, si scrive nel record, si verifica che la banda legga lo stesso valore**. Un solo comando fa scrittura e verifica in modo atomico:
+
+```powershell
+uv run python scripts/device_profile.py example
+uv run python scripts/device_profile.py configure SYN-A1B2C3D4E5F6 --address AA:BB:CC:DD:EE:FF --profile profilo.json
+uv run python scripts/device_profile.py verify SYN-A1B2C3D4E5F6 --address AA:BB:CC:DD:EE:FF
+```
+
+`configure` rifiuta la scrittura se anche un solo campo letto indietro non corrisponde; dopo la scrittura la banda deve essere **riavviata** prima di registrare (`pending_reboot: 1` nel readback). `verify` controlla il profilo e i campi del contratto.
 
 ### 4.1 Gain ECG
 
@@ -157,7 +165,7 @@ Ogni volta che salvi, ricontrolla:
 uv run python scripts/factory_calibrate.py --port COM3 --dump
 ```
 
-**Criterio:** seriale corretto (derivato dal MAC, non scritto a mano), data, operatore, strumento (`--instrument`), versione firmware (`--fw`), incertezza del gain (`--uncertainty 5` = ±5 %) e rumore ECG (`--noise-uv`). Il file finisce in `data/calibration/<seriale>.json`, fuori da Git.
+**Criterio:** seriale corretto (derivato dal MAC, non scritto a mano), data, operatore, strumento (`--instrument`), versione firmware (`--fw`), incertezza del gain (`--uncertainty 5` = ±5 %), rumore ECG (`--noise-uv`) e capacità reale della cella (`--battery 1000`). Il file finisce in `data/calibration/<seriale>.json`, fuori da Git. La capacità deve corrispondere a `hardware_bringup.yaml`: se la cella è diversa, il gate di configurazione va in FAIL, non va "aggiustato" il contratto a mano.
 
 ---
 
@@ -167,17 +175,18 @@ Ogni test ha un ID. Quando lo esegui, salva l'esito in `evidence/<ID>.json`.
 
 | ID | Test | Comando / azione | Criterio di passaggio |
 |---|---|---|---|
-| T01 | Controllo kit | Tabella del paragrafo 2 | Tutte le righe OK |
-| T02 | Factory self-test | `FACTORY RESULT` nel log | Nessun `[FAIL]` |
-| T03 | I²C scan | Log di avvio / factory dump | Rispondono 0x57, 0x68, 0x40 |
-| T04 | Configurazione flashed | Readback device-config | Ogni campo uguale al contratto; un campo mancante è FAIL |
-| T05 | Streaming 60 s | `validate_phase1_entry.py --live-hardware --duration 60` | Zero frame persi, XDF valido |
+| T01 | Controllo kit | `bench_suite.py incoming` + tabella del paragrafo 2 | Tutte le righe OK |
+| T02 | Identità e record | `bench_suite.py factory --port COM3` | Seriale `SYN-` + 12 hex, uguale al log |
+| T03 | I²C scan | `bench_suite.py sensors --port COM3 --log boot.log` | Il log contiene 0x57, 0x68, 0x40 |
+| T04 | Configurazione flashed | `validate_phase1_entry.py --live-hardware …` | Ogni campo uguale al contratto; un campo mancante è FAIL |
+| T05 | Streaming 60 s | `bench_suite.py stream --live --manifest <bench.json>` | Report fresco, zero frame persi, XDF valido |
 | T06 | Qualità PPG | Stesso run | SQI ≥ 0,3 e MAP ≤ 0,5 per oltre 30 s |
-| T07 | Frequenza cardiaca | Conteggio manuale del polso per 30 s | Errore medio ≤ 2 bpm |
+| T07 | Frequenza cardiaca | Run con manifest **umano** + conteggio del polso | Errore medio ≤ 2 bpm |
 | T08 | RMSSD | Confronto con reference NeuroKit2 | Errore medio < 5 ms |
 | T09 | Potenza INA219 | Carico noto da 100 Ω | Corrente entro ±5 % del valore atteso |
-| T10 | Sync a due pod | Due devkit accoppiati | Deriva residua ≤ 10 ms su 30 min |
-| T11 | Soak 6 ore | `--soak` con LabRecorderCLI | Zero drop, XDF monotono, batteria sufficiente |
+| T10 | Sync a due pod | `bench_suite.py sync --pods a.xdf b.xdf` | Correlazione ≥ 0,7 e residuo ≤ 10 ms su 30 min |
+| T11 | Gate report | `bench_suite.py g1-report --live --manifest <manifest.json>` | Report fresco, `rehearsal: false`, PASS/FAIL esplicito |
+| T12 | Soak 6 ore | `bench_suite.py soak --live --manifest <manifest.json>` con LabRecorderCLI | Zero drop, XDF monotono, batteria sufficiente |
 
 I campi manuali (T07, T09) li compili tu; io li verifico e aggiungo `verified_by` nel report.
 
@@ -186,7 +195,7 @@ I campi manuali (T07, T09) li compili tu; io li verifico e aggiungo `verified_by
 ## 6. Registrare una sessione con una persona
 
 1. Chiedi il consenso e assegna un codice: `S001`, `S002`, ... Non scrivere mai il nome vero.
-2. Compila `data/sessions/<data>/manifest.json` con: codice soggetto, consenso, condizione (seduto / in movimento), seriale banda, firmware, operatore.
+2. Compila `data/sessions/<data>/manifest.json` con `"kind": "human"`, codice soggetto (`S001`…), `"consent": true`, condizione (seduto / in movimento), seriale banda, firmware, operatore, data. Senza `kind` il manifest è comunque umano, ma scriverlo esplicitamente evita errori.
 3. Collega gli elettrodi: RA vicino al gomito, LA vicino al polso, RL su una parte ossea. Pelle pulita e asciutta.
 4. **Stacca l'USB.**
 5. Avvia:
@@ -205,6 +214,26 @@ Se il soggetto si sente a disagio o la pelle si arrossa: fermati, togli gli elet
 
 ---
 
+## 6b. Prove da banco (senza persona)
+
+Le righe di calibrazione e il controllo INA219 si fanno con elettrodi cortocircuitati o un carico noto: **non c'è nessun soggetto e nessun consenso da dichiarare**. Usa un manifest dedicato:
+
+```json
+{
+  "kind": "bench",
+  "condition": "shorted input, off body",
+  "device_serial": "SYN-A1B2C3D4E5F6",
+  "operator": "nome operatore",
+  "date": "2026-11-27"
+}
+```
+
+Salvalo in `data/bench/manifest.json` e passalo a `bench_suite.py stream --live --manifest data/bench/manifest.json`. I file XDF finiscono in `data/bench/`, mai nell'albero delle sessioni umane. I gate T07/T08 (che richiedono un riferimento umano) risultano `N/A` dichiarato: non è un pass gratuito, ma non può nemmeno far fallire una prova tecnica.
+
+Se durante la prova misuri a mano corrente a riposo o corrente media, scrivi un file JSON con `{"idle_current_ma": 83.2}` e passalo con `--bench-values <file>` insieme a `--verified-by "nome verificatore"`. Il validatore rifiuta il comando se manca il verificatore, e il valore resta nello storico del run.
+
+---
+
 ## 7. Il soak di 6 ore
 
 Serve per provare il clock, la radio e la batteria per davvero.
@@ -219,7 +248,7 @@ uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/s
 
 Con 4-6 ore a settimana non puoi stare presente per sei ore di fila: fai l'avvio insieme a me, poi fissiamo un controllo a metà e la verifica finale. **Non** usare `--soak-rehearsal` come prova: è solo una prova del meccanismo e il suo report è marcato `rehearsal: true`.
 
-**Criterio:** zero frame persi, XDF con timestamp monotone, batteria ancora sufficiente alla fine.
+**Criterio:** zero frame persi, XDF con timestamp monotone, batteria ancora sufficiente alla fine. Usa `bench_suite.py soak --live --manifest ... --duration 21600`: l'evidenza T12 richiede un report fresco con `rehearsal: false`.
 
 ---
 

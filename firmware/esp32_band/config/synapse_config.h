@@ -197,13 +197,9 @@ void synapse_config_mark_clean(void);
  */
 esp_err_t synapse_config_expand_env(const char *input, char *output, size_t output_size);
 
-/**
- * @brief Update config from BLE Device Config characteristic
- * @param data Protobuf-encoded config payload
- * @param len Payload length
- * @return ESP_OK on success
- */
-esp_err_t synapse_config_update_from_ble(const uint8_t *data, uint16_t len);
+/* Device-config writes are handled by the GATT server's whitelist parser:
+ * it owns the wire format and the factory-mode authorisation. There is no
+ * second (stub) config entry point here. */
 
 #ifdef __cplusplus
 }

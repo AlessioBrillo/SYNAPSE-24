@@ -1,0 +1,13 @@
+# Band-bench profile: the smoke-kit firmware with the factory shell enabled.
+# Apply AFTER sdkconfig.defaults.core (later files win):
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults"
+#
+# A bench operator must not have to run menuconfig before calibrating a unit.
+# This is the ONLY non-product profile that enables factory mode; it is never
+# used for a recording with a person (see BRINGUP_SOP.md safety rules).
+CONFIG_SYNAPSE_BUILD_VARIANT="band-bench"
+CONFIG_SYNAPSE_FACTORY_MODE=y
+
+# Keep the bring-up diagnostics from the core profile.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y

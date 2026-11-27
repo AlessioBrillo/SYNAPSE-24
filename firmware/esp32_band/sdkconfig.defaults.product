@@ -3,6 +3,7 @@
 # CONFIG_SYNAPSE_PRODUCT_MODE guard in ble_gatt_server.c), so a stale
 # SYNAPSE_FEATURE_RESEARCH_SERVICE=y in an sdkconfig cannot reopen the dataset
 # path on a shipped band. Factory-only commands are off as well.
+CONFIG_SYNAPSE_BUILD_VARIANT="band-product"
 CONFIG_SYNAPSE_PRODUCT_MODE=y
 CONFIG_SYNAPSE_FACTORY_MODE=n
 CONFIG_SYNAPSE_FEATURE_PROVISIONING=n

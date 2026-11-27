@@ -16,13 +16,11 @@ bringup:
   firmware:
     project_dir: "firmware/esp32_band"
     build_variant: "band-core"
-    path: "firmware/esp32_band/build/synapse-band.bin"  # Built by the CI firmware-build job
     port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"
     baud: 921600
-    flash_mode: "dio"
-    flash_freq: "80m"
-    flash_size: "8MB"  # DevKitC-1 N8R8 (see docs/hardware/PROCUREMENT.md G1)
     verify_after_flash: true
+    # flash_mode/flash_freq/flash_size are build properties: they live in
+    # sdkconfig.defaults (QIO / 80 MHz / 8 MB), never in this runtime config.
 
   # BLE connection overrides for live hardware.
   # UUIDs are the Synapse Research Service (raw samples + sync), declared in
@@ -146,6 +144,9 @@ bringup:
     immobility_hold_s: 15
     movement_threshold_g: 1.5
     xdf_output_dir: "data/processed/live_validation"
+    # Off-body bench captures (kind: bench manifests) have no subject and must
+    # not be mixed with human sessions in the export tree.
+    bench_xdf_output_dir: "data/bench"
     xdf_filename_template: "synapse_live_{timestamp}.xdf"
     ground_truth_ecg_path: null  # .npz with key `r_peaks` (indices at the ECG rate)
     manual_hr_bpm: null  # manual pulse count for the G1 HR gate; required on live runs
@@ -168,6 +169,19 @@ bringup:
         - flashed_config_matches_contract
         - hr_accuracy
         - rmssd_accuracy
+        - ppg_sqi
+        - ppg_map
+      # Bench runs are live hardware but have no human subject: HR/RMSSD
+      # against a manual pulse count or a NeuroKit2 reference are N/A, never
+      # a free PASS. Every other G1 measurement still applies.
+      bench:
+        - xdf_zero_drop
+        - research_stream_zero_loss
+        - tier0_sync_10ms
+        - ppg_completeness
+        - sample_rate_accuracy
+        - power_telemetry_measured
+        - flashed_config_matches_contract
         - ppg_sqi
         - ppg_map
       synthetic:

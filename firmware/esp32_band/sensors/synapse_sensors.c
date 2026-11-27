@@ -295,8 +295,23 @@ esp_err_t synapse_sensors_init(void) {
         if (s_calibration.ppg_led_ir > 0u) {
             hw_cfg.ppg_led_current_ir = s_calibration.ppg_led_ir;
         }
+        if (s_calibration.battery_capacity_mah > 0u) {
+            hw_cfg.hub_battery_mah = (float)s_calibration.battery_capacity_mah;
+        }
         ESP_LOGI(TAG, "Applied calibration for %s (source=%s)",
                  s_calibration.serial, synapse_calibration_state());
+    }
+    // Remember exactly what this boot applied. Both the USB shell and the
+    // BLE whitelist write NVS; the readback compares this CRC with the stored
+    // record so a profile cannot look applied before a reboot.
+    synapse_calibration_mark_applied(&s_calibration);
+    // Publish the effective values through the config manager: the power
+    // module and the device-config readback both read it, so neither can keep
+    // reporting Kconfig defaults after a per-unit profile was applied. This
+    // updates RAM only (the config manager is never saved here).
+    esp_err_t set_err = synapse_config_set(&hw_cfg);
+    if (set_err != ESP_OK) {
+        ESP_LOGW(TAG, "Effective calibration config not published: %s", esp_err_to_name(set_err));
     }
     populate_sensor_configs(&hw_cfg);
 
@@ -414,8 +429,9 @@ esp_err_t synapse_sensors_init(void) {
     ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz, Temp)",
              (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
 #else
-    ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz) [band-core]",
-             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz);
+    ESP_LOGI(TAG, "Sensors initialized (ECG:500Hz, PPG:%dHz, IMU:%dHz) [%s]",
+             (int)synapse_ppg_rate_hz(hw_cfg.ppg_sample_rate), hw_cfg.imu_accel_odr_hz,
+             CONFIG_SYNAPSE_BUILD_VARIANT);
 #endif
     return ESP_OK;
 }

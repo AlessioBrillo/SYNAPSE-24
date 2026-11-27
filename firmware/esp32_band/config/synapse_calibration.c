@@ -19,6 +19,9 @@ static const char *TAG = "SYNAPSE_CAL";
 #define CAL_VERSION_KEY "cal_version"
 
 static const char *s_state = "defaults";
+/* What the sensor layer applied at boot. A USB `cal save` and a BLE profile
+ * write both change NVS; comparing CRCs is the only guard that covers both. */
+static uint32_t s_applied_crc = 0;
 
 /* The CRC-32 of the record is computed here rather than through esp_crc32 so
  * the same code can be compiled by the host tests that check the wire layout. */
@@ -160,4 +163,16 @@ esp_err_t synapse_calibration_erase(void) {
 
 const char *synapse_calibration_state(void) {
     return s_state;
+}
+
+uint32_t synapse_calibration_crc(const synapse_calibration_t *cal) {
+    return cal == NULL ? 0u : record_crc(cal);
+}
+
+void synapse_calibration_mark_applied(const synapse_calibration_t *cal) {
+    s_applied_crc = synapse_calibration_crc(cal);
+}
+
+uint32_t synapse_calibration_applied_crc(void) {
+    return s_applied_crc;
 }

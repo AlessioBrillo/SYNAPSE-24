@@ -2,7 +2,7 @@
 
 > **Software ready for the first bench day — nothing verified on hardware**
 >
-> The signal processing, edge AI, firmware (acquisition → BLE) and host pipeline are built and tested against public datasets, recorded signals and simulated pods. **No board, sensor, radio or phone has ever run this code**: read `docs/hardware/STATUS.md` for the authoritative state and `docs/increments/MVP2_6_READINESS_GOVERNANCE.md` for what is proven and what is not. Phase 0 baseline claims are still `partial`.
+> The signal processing, edge AI, firmware (acquisition → BLE) and host pipeline are built and tested against public datasets, recorded signals and simulated pods. **No board, sensor, radio or phone has ever run this code**: read `docs/hardware/STATUS.md` for the authoritative state and `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md` for what is proven and what is not. Phase 0 baseline claims are still `partial`.
 
 [![License: AGPL-3.0-or-later / Commercial](https://img.shields.io/badge/license-AGPL--3.0--or--later%20%2F%20Commercial-blue.svg)](compliance/LICENSING.md)
 [![CI gate: Woodpecker](https://img.shields.io/badge/CI-Woodpecker-blue)](.woodpecker/ci.yml)

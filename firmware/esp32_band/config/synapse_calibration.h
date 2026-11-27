@@ -20,7 +20,10 @@
 extern "C" {
 #endif
 
-#define SYNAPSE_CALIBRATION_VERSION 2u
+/* 3: the fitted cell capacity is part of the per-unit record. A cloned NVS
+ * blob with another band's capacity would make the battery percentage wrong,
+ * so the field is serial-bound like the gain and the LED currents. */
+#define SYNAPSE_CALIBRATION_VERSION 3u
 #define SYNAPSE_CAL_SERIAL_MAX 20u
 #define SYNAPSE_CAL_DATE_MAX 16u
 #define SYNAPSE_CAL_OPERATOR_MAX 16u
@@ -43,6 +46,7 @@ typedef struct {
     char fw_version[SYNAPSE_CAL_FW_MAX];          /* firmware the measurement was made with */
     uint16_t gain_uncertainty_pct_x100;          /* 500 = +/-5.00 % */
     int16_t noise_std_uv_x10;                    /* shorted-input ECG noise, 0 = not measured */
+    uint16_t battery_capacity_mah;               /* fitted cell, 0 = use the Kconfig default */
 } synapse_calibration_t;
 
 /** Fill @p cal with the "no override" record. */
@@ -65,6 +69,15 @@ esp_err_t synapse_calibration_erase(void);
 
 /** Where the last load came from: "defaults", "nvs" or "invalid". */
 const char *synapse_calibration_state(void);
+
+/** CRC of a record, with the CRC field itself zeroed. */
+uint32_t synapse_calibration_crc(const synapse_calibration_t *cal);
+
+/** Remember the record the sensor layer actually applied at boot. */
+void synapse_calibration_mark_applied(const synapse_calibration_t *cal);
+
+/** CRC of the applied record; compare with the stored one to see a pending reboot. */
+uint32_t synapse_calibration_applied_crc(void);
 
 #ifdef __cplusplus
 }

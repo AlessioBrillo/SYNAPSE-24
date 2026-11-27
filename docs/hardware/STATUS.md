@@ -4,10 +4,10 @@ This file is the authoritative status of the project. README, Roadmap,
 AGENTS.md, CONTRIBUTING.md and the compliance documents point here instead of
 keeping their own copy. If a number below changes, change it here first.
 
-**Latest increment:** MVP-2.6 (hardware-readiness governance), merged on the
-final tree of the 2026-11-26 work. **Last gate:** see the increment document
-`docs/increments/MVP2_6_READINESS_GOVERNANCE.md` for the exact command sequence
-and result.
+**Latest increment:** MVP-2.7 (first device onboarding). **Last gate:** see
+`docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md` for the exact command
+sequence and result. The previous increment (MVP-2.6, readiness governance) is
+recorded in `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
 
 ## Gate status
 
@@ -23,7 +23,9 @@ and result.
 
 - Contract enforcement: `tools/check_contract.py`, `generate_contracts --check`,
   `check_interfaces`; flashed config is now read back in full and compared
-  1:1 with `config/hardware.yaml`.
+  1:1 with `config/hardware.yaml`. Bench evidence now derives its verdict from
+  the measurement (a fresh gate report, a parsed boot log), not from an exit
+  code; per-unit profiles are written and verified by one command.
 - Firmware: band-full, band-core, band-full+RR and band-product build in CI.
   The product image does **not** register the raw research service.
 - Host path: raw-frame parity, research service, XDF/FIT conformance, SDK and
@@ -56,5 +58,6 @@ and result.
 - `docs/hardware/FIRST_HARDWARE_DAY.md` — what to do before the box arrives.
 - `docs/hardware/SENSOR_CONFIG.md` — generated sensor matrix.
 - `docs/testing/G1_TEST_MATRIX.md` — reproducible test IDs and criteria.
+- `docs/product/DECISIONS.md` — open product risks, deliberately not implemented.
 - `docs/onboarding/TESTER_PLAYBOOK.md` — the tester's step-by-step manual.
 - `compliance/COMPLIANCE.md`, `compliance/PRIVACY.md` — regulatory position.

@@ -502,9 +502,6 @@ esp_err_t synapse_config_expand_env(const char *input, char *output, size_t outp
     return ESP_OK;
 }
 
-esp_err_t synapse_config_update_from_ble(const uint8_t *data, uint16_t len) {
-    if (!data || len == 0) return ESP_ERR_INVALID_ARG;
-    // MVP: log receipt; full Protobuf DeviceConfig parsing wired in Phase 2 (SDK spec).
-    ESP_LOGI(TAG, "BLE config update received (%d bytes), queued for validation", len);
-    return ESP_OK;
-}
+/* Device-config writes live in the GATT server (one whitelist parser, one
+ * authorisation check). The former stub here accepted bytes and applied
+ * nothing, which made a rejected write look successful to a caller. */

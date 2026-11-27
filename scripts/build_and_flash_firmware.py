@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Build and flash ESP32-S3 Tier 0 firmware for SYNAPSE-24 Phase 1 bringup.
+"""Build and flash the ESP32-S3 band firmware for SYNAPSE-24 bringup.
 
-This script automates the ESP-IDF build process and flashing for the
-forearm hub (ECG+PPG+IMU) firmware with embedded triage INT8 model.
+The Triaged INT8 model is currently OFF in every profile (the interpreter
+arena bug is open); this script builds and flashes the raw research path,
+not an on-device classifier. Flash settings come from the bringup config;
+flash mode/size/frequency belong to sdkconfig and are deliberately absent.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -50,14 +53,18 @@ def _idf_cmd() -> list[str]:
 class FirmwareBuilder:
     """Manages ESP-IDF build and flash for SYNAPSE-24 firmware."""
 
-    # Build variant -> sdkconfig.defaults suffix (None = base defaults only).
-    # "band-core" is the smoke-kit rig and needs its profile appended AFTER
-    # the base file, hence the explicit mapping (the file is
-    # sdkconfig.defaults.core, NOT sdkconfig.defaults.band-core).
-    VARIANT_SDKCONFIG_SUFFIX = {
-        "band-core": "core",
-        "band-full": None,
-        "band-product": "product",
+    # Build variant -> ordered SDKCONFIG_DEFAULTS files. ESP-IDF applies them
+    # left to right, so later files override earlier ones. Every invocation
+    # that can regenerate sdkconfig must receive the same list.
+    VARIANT_DEFAULTS = {
+        "band-core": ["sdkconfig.defaults.core", "sdkconfig.defaults"],
+        "band-bench": [
+            "sdkconfig.defaults.core",
+            "sdkconfig.defaults.bench",
+            "sdkconfig.defaults",
+        ],
+        "band-full": [],
+        "band-product": ["sdkconfig.defaults.product", "sdkconfig.defaults"],
     }
 
     def __init__(
@@ -98,27 +105,24 @@ class FirmwareBuilder:
     def _variant_env(self) -> dict[str, str]:
         """Environment carrying the variant's SDKCONFIG_DEFAULTS.
 
-        The variant selects sdkconfig.defaults.<suffix> in addition to the
-        base defaults. Passing SDKCONFIG_DEFAULTS replaces ESP-IDF's default
-        list, so both files must be named explicitly. Every idf.py invocation
-        that can (re)generate sdkconfig must receive this environment —
-        set-target included, or its regenerated sdkconfig would later win.
+        Passing SDKCONFIG_DEFAULTS replaces ESP-IDF's default list, so every
+        file must be named explicitly, in order. Every idf.py invocation that
+        can (re)generate sdkconfig must receive this environment — set-target
+        included, or its regenerated sdkconfig would later win.
         """
-        variant_suffix = self.VARIANT_SDKCONFIG_SUFFIX.get(self.build_variant, "")
-        if self.build_variant not in self.VARIANT_SDKCONFIG_SUFFIX:
+        if self.build_variant not in self.VARIANT_DEFAULTS:
             raise ValueError(
                 f"unknown build variant {self.build_variant!r}; "
-                f"expected one of {sorted(self.VARIANT_SDKCONFIG_SUFFIX)}"
+                f"expected one of {sorted(self.VARIANT_DEFAULTS)}"
             )
+        files = self.VARIANT_DEFAULTS[self.build_variant]
+        for name in files:
+            if not (self.firmware_dir / name).is_file():
+                raise FileNotFoundError(f"variant defaults not found: {name}")
         env = os.environ.copy()
-        if variant_suffix:
-            variant_file = self.firmware_dir / f"sdkconfig.defaults.{variant_suffix}"
-            if not variant_file.is_file():
-                raise FileNotFoundError(f"variant defaults not found: {variant_file}")
-            env["SDKCONFIG_DEFAULTS"] = f"sdkconfig.defaults.{variant_suffix};sdkconfig.defaults"
-            logger.info(
-                "Build variant: %s (%s)", self.build_variant, f"sdkconfig.defaults.{variant_suffix}"
-            )
+        if files:
+            env["SDKCONFIG_DEFAULTS"] = ";".join(files)
+            logger.info("Build variant: %s (%s)", self.build_variant, ", ".join(files))
         else:
             env.pop("SDKCONFIG_DEFAULTS", None)
             logger.info("Build variant: %s (base sdkconfig.defaults only)", self.build_variant)
@@ -209,6 +213,21 @@ class FirmwareBuilder:
 
         return True
 
+    def _sdkconfig_flags(self) -> dict[str, str]:
+        """The options ESP-IDF really wrote into sdkconfig after this build."""
+        path = self.firmware_dir / "sdkconfig"
+        flags: dict[str, str] = {}
+        if not path.is_file():
+            return flags
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if line.startswith("CONFIG_") and "=" in line:
+                name, value = line.split("=", 1)
+                flags[name.strip()] = value.strip()
+            elif line.startswith("# CONFIG_") and line.endswith(" is not set"):
+                flags[line[len("# ") : -len(" is not set")].strip()] = "n"
+        return flags
+
     def _generate_metadata(self, bin_size: int, build_time: float) -> None:
         """Generate firmware metadata JSON from the hardware contract.
 
@@ -229,7 +248,15 @@ class FirmwareBuilder:
         )
         rates = pod.get("sampling_rate", {})
         i2c = pod.get("metadata", {}).get("i2c", {})
-        full = self.build_variant == "band-full"
+        # Derive the feature list from the sdkconfig that was actually built,
+        # not from the variant name. band-product compiles the research service
+        # but never registers it; claiming raw streaming there was a false
+        # metadata row used by device binding.
+        flags = self._sdkconfig_flags()
+        enabled = lambda name: flags.get(name) == "y"  # noqa: E731
+        raw_registered = enabled("CONFIG_SYNAPSE_FEATURE_RESEARCH_SERVICE") and not enabled(
+            "CONFIG_SYNAPSE_PRODUCT_MODE"
+        )
 
         metadata = {
             "firmware": "synapse_band",
@@ -246,17 +273,17 @@ class FirmwareBuilder:
                 "ecg_ad8232": True,
                 "ppg_max30102": True,
                 "imu_icm20948": True,
-                "research_service_raw": True,
+                "research_service_raw": raw_registered,
+                "research_service_registered": raw_registered,
                 "feature_stream_consumer": True,
-                # The TFLM interpreter/arena bug is open in both variants
-                # (sdkconfig.defaults.core; see the Kconfig help).
-                "triage_int8": False,
-                "power_monitor": True,
-                "gps_max_m10s": full,
-                "temperature_tmp117": full,
-                "fit_storage": full,
-                "provisioning": full,
-                "ota": full,
+                "triage_int8": enabled("CONFIG_SYNAPSE_FEATURE_EDGE_AI"),
+                "power_monitor": enabled("CONFIG_SYNAPSE_FEATURE_POWER_MONITOR"),
+                "gps_max_m10s": enabled("CONFIG_SYNAPSE_FEATURE_GPS"),
+                "temperature_tmp117": enabled("CONFIG_SYNAPSE_FEATURE_TEMPERATURE"),
+                "fit_storage": enabled("CONFIG_SYNAPSE_FEATURE_FIT_STORAGE"),
+                "provisioning": enabled("CONFIG_SYNAPSE_FEATURE_PROVISIONING"),
+                "ota": enabled("CONFIG_SYNAPSE_FEATURE_OTA"),
+                "factory_mode": enabled("CONFIG_SYNAPSE_FACTORY_MODE"),
             },
             "sampling_rates": {
                 "ecg_hz": rates["ecg"],
@@ -264,7 +291,7 @@ class FirmwareBuilder:
                 "imu_hz": rates["imu"],
             },
             "i2c": {"sda_gpio": i2c["sda_gpio"], "scl_gpio": i2c["scl_gpio"]},
-            "power_profile": hw.get("power_budget", {}).get("profile", "system") if full else "kit",
+            "power_profile": ("kit" if enabled("CONFIG_SYNAPSE_POWER_PROFILE_KIT") else "system"),
         }
 
         with open(self.metadata_path, "w") as f:
@@ -367,13 +394,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--variant",
-        default="band-core",
-        choices=["band-core", "band-full"],
-        help="Build variant: band-core (smoke kit) or band-full (product)",
+        default=None,
+        choices=sorted(FirmwareBuilder.VARIANT_DEFAULTS),
+        help="Build variant (default: bringup config, normally band-core)",
     )
     parser.add_argument("--target", default="esp32s3", help="Target chip")
-    parser.add_argument("--port", default="COM3", help="Serial port for flash/monitor")
-    parser.add_argument("--baud", type=int, default=921600, help="Baud rate")
+    parser.add_argument("--port", help="Serial port (default: bringup config / COM3)")
+    parser.add_argument("--baud", type=int, help="Baud rate (default: bringup config)")
     parser.add_argument("--clean", action="store_true", help="Clean build")
     parser.add_argument("--verbose", action="store_true", help="Verbose build output")
     parser.add_argument("--erase-flash", action="store_true", help="Erase flash before programming")
@@ -385,7 +412,18 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    builder = FirmwareBuilder(args.firmware_dir, target=args.target, build_variant=args.variant)
+    # The bringup config owns flash settings; flash mode/size/frequency stay
+    # in sdkconfig (they are build properties, not per-session choices).
+    bringup = yaml.safe_load(
+        (ROOT / "config" / "hardware_bringup.yaml").read_text(encoding="utf-8")
+    )["bringup"]["firmware"]
+    variant = args.variant or bringup.get("build_variant", "band-core")
+    port = args.port or os.environ.get("SYNAPSE_FOREARM_SERIAL") or bringup.get("port") or "COM3"
+    port = re.sub(r"\$\{[^}]*:-?([^}]*)\}", r"\1", str(port)) or "COM3"
+    baud = args.baud or int(bringup.get("baud", 921600))
+    verify = bool(bringup.get("verify_after_flash", True)) and not args.no_verify
+
+    builder = FirmwareBuilder(args.firmware_dir, target=args.target, build_variant=variant)
 
     # Check ESP-IDF
     if not builder.check_esp_idf():
@@ -401,16 +439,16 @@ def main() -> int:
     # Flash
     if not args.build_only:
         if not builder.flash(
-            port=args.port,
-            baud=args.baud,
-            verify=not args.no_verify,
+            port=port,
+            baud=baud,
+            verify=verify,
             erase_flash=args.erase_flash,
         ):
             return 1
 
     # Monitor
     if args.monitor:
-        builder.monitor(port=args.port, baud=args.baud, duration=args.monitor_duration)
+        builder.monitor(port=port, baud=baud, duration=args.monitor_duration)
 
     logger.info("Done!")
     return 0

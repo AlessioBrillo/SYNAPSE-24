@@ -65,6 +65,13 @@ steps:
       # prove it is the core profile: GPS and FIT storage are off there and on in band-full
       - grep -q "^# CONFIG_SYNAPSE_FEATURE_GPS is not set" sdkconfig
       - grep -q "^# CONFIG_SYNAPSE_FEATURE_FIT_STORAGE is not set" sdkconfig
+      # bench image: the smoke-kit profile with the factory shell enabled, so
+      # no operator has to run menuconfig before calibrating a unit.
+      - idf.py fullclean
+      - rm -f sdkconfig
+      - SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults" idf.py build
+      - grep -q "^CONFIG_SYNAPSE_FACTORY_MODE=y" sdkconfig
+      - grep -q "^# CONFIG_SYNAPSE_FEATURE_PROVISIONING is not set" sdkconfig
       # band-full with the RR feature on: the code behind the flag must keep compiling while it is off
       - idf.py fullclean
       - rm -f sdkconfig

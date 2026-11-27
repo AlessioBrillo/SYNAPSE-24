@@ -450,7 +450,14 @@ def test_the_factory_mode_is_off_everywhere_it_could_be_forced_on() -> None:
     assert block, "SYNAPSE_FACTORY_MODE is not declared"
     assert "default n" in block.group(1)
     for defaults in BAND.glob("sdkconfig.defaults*"):
-        assert "CONFIG_SYNAPSE_FACTORY_MODE=y" not in _text(defaults), defaults.name
+        text = _text(defaults)
+        if defaults.name == "sdkconfig.defaults.bench":
+            # The only profile allowed to enable the factory shell: a bench
+            # image, never a product or default image.
+            assert "CONFIG_SYNAPSE_FACTORY_MODE=y" in text
+            assert 'CONFIG_SYNAPSE_BUILD_VARIANT="band-bench"' in text
+            continue
+        assert "CONFIG_SYNAPSE_FACTORY_MODE=y" not in text, defaults.name
     main = _text(BAND / "main" / "app_main.c")
     hook = main.index("synapse_factory_run()")
     assert "#if defined(CONFIG_SYNAPSE_FACTORY_MODE)" in main[max(0, hook - 80) : hook]

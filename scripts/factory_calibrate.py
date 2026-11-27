@@ -58,6 +58,7 @@ class FakeTransport:
                 "fw_version": "",
                 "gain_uncertainty_pct_x100": 0,
                 "noise_std_uv_x10": 0,
+                "battery_capacity_mah": 0,
             }
         parts = line.strip().split()
         if not parts:
@@ -93,6 +94,8 @@ class FakeTransport:
             self.record["gain_uncertainty_pct_x100"] = int(values[0])
         elif key == "noise":
             self.record["noise_std_uv_x10"] = int(values[0])
+        elif key == "battery":
+            self.record["battery_capacity_mah"] = int(values[0])
         elif key == "date":
             self.record["date"] = values[0]
         elif key == "operator":
@@ -165,6 +168,9 @@ def build_commands(args: argparse.Namespace) -> list[str]:
         commands.append(f"cal uncertainty {int(round(float(args.uncertainty) * 100))}")
     if args.noise_uv is not None:
         commands.append(f"cal noise {int(round(float(args.noise_uv) * 10))}")
+    battery = getattr(args, "battery", None)
+    if battery is not None:
+        commands.append(f"cal battery {int(battery)}")
     if args.date:
         commands.append(f"cal date {args.date}")
     elif not args.dry_run:
@@ -214,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fw", help="firmware version used for the measurement")
     parser.add_argument("--uncertainty", type=float, help="gain uncertainty in percent")
     parser.add_argument("--noise-uv", type=float, help="shorted-input ECG noise in uV")
+    parser.add_argument("--battery", type=int, help="fitted cell capacity in mAh")
     parser.add_argument("--date", help="YYYY-MM-DD")
     parser.add_argument("--operator", help="who performed the calibration")
     parser.add_argument("--dump", action="store_true", help="only print the current record")
