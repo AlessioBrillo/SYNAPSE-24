@@ -33,9 +33,11 @@ import numpy as np
 from synapse24.config.loader import load_hardware_config_from_path
 from synapse24.contracts_generated import UUIDS as CONTRACT_UUIDS
 
-# Add src to path
+# Add src and the repo root to path (the latter for scripts.calibration_record).
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.calibration_record import canonical_record  # noqa: E402
 from synapse24.acquisition.clock_sync import MultiPodClockSync, SyncConfig, TierSyncBudget
 from synapse24.acquisition.coordinator import SensorPodCoordinator
 from synapse24.acquisition.immobility import ImmobilityDetector
@@ -1227,22 +1229,18 @@ class Phase1Validator:
             "cal_uncertainty_pct_x100": 0,
             "cal_noise_std_uv_x10": 0,
         }
-        # The consumer feature rate is a session setting, but the contract's
-        # declared rate is the only trusted host-side expectation for a
-        # validator run. Config writes may apply a different rate for a later
-        # session; this comparison is about the flashed contract profile.
-        # The v2 consumer contract is authoritative; the retired v1 feature
-        # stream carries the same default but is not the setting we just wrote.
-        v2_cfg = bring.get("ble", {}).get("consumer_v2", {})
-        if "feature_rate_hz" in v2_cfg:
-            result["feature_rate_hz"] = int(v2_cfg["feature_rate_hz"])
+        # feature_rate_hz is deliberately NOT here: it is a session-only
+        # setting (control point / config write), not a flashed per-unit
+        # truth. A legitimate session-rate change must not fail T04.
         # A calibrated unit is authoritative over the nominal manifest gain.
         # The local manufacturing record must describe THIS device; the readback
         # gate below compares the serial and the state too.
         cal_source = self._calibration_source()
         if cal_source:
             try:
-                record = json.loads((ROOT / cal_source).read_text(encoding="utf-8"))
+                record = canonical_record(
+                    json.loads((ROOT / cal_source).read_text(encoding="utf-8"))
+                )
                 for key in ("ecg_gain_x100", "ppg_led_red", "ppg_led_ir"):
                     if record.get(key):
                         result[key] = int(record[key])
@@ -1255,17 +1253,17 @@ class Phase1Validator:
                 for key in ("accel_bias_mg", "gyro_bias_mdps"):
                     if record.get(key) is not None:
                         result[key] = [int(value) for value in record[key]]
-                for host_key, key in (
-                    ("instrument", "cal_instrument"),
-                    ("fw_version", "cal_fw_version"),
-                    ("gain_uncertainty_pct_x100", "cal_uncertainty_pct_x100"),
-                    ("noise_std_uv_x10", "cal_noise_std_uv_x10"),
+                for key in (
+                    "cal_instrument",
+                    "cal_fw_version",
+                    "cal_uncertainty_pct_x100",
+                    "cal_noise_std_uv_x10",
                 ):
-                    if record.get(host_key) is not None:
+                    if record.get(key) is not None:
                         result[key] = (
-                            str(record[host_key])
+                            str(record[key])
                             if key in ("cal_instrument", "cal_fw_version")
-                            else int(record[host_key])
+                            else int(record[key])
                         )
             except Exception:  # noqa: BLE001 - a bad record is reported by the gate below
                 self.logger.warning("Calibration record unreadable", exc_info=True)

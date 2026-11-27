@@ -132,8 +132,9 @@ band before recording, or `device_profile.py verify` fails. The resulting
 `data/calibration/<serial>.json` is manufacturing data and is not committed.
 Writing per-unit values over BLE is allowed **only when a USB-factory-calibrated
 record with complete provenance already exists** for that serial (operator,
-instrument, firmware version, gain uncertainty); BLE applies the measured
-record, it never invents one. `feature_rate_hz` is **session-only**: it is not
+instrument, firmware version, gain uncertainty); BLE may then edit only that
+provenance-bearing record — it cannot create a new calibrations from scratch,
+and it must not be used to overwrite values that were not measured. `feature_rate_hz` is **session-only**: it is not
 persisted into the record or the band's NVS.
 The ECG mid-rail is **not** forced at boot: the driver re-measures it after
 lead-off, and a stale stored DC offset would be worse than none.

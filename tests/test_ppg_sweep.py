@@ -38,6 +38,9 @@ def test_analyse_a_capture(tmp_path: Path) -> None:
     )
     result = ps.analyse_capture(path)
     assert result["samples"] > 0
+    # Exactly 30 s of samples at 50 Hz must qualify: a last-minus-first
+    # timestamp would be 29.98 s and wrongly fail the duration floor.
+    assert result["duration_s"] == pytest.approx(30.0)
     assert 0.0 <= result["sqi"] <= 1.0
     assert result["perfusion_index"] > 0
 

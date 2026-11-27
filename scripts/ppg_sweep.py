@@ -53,7 +53,10 @@ def analyse_capture(path: Path, *, window_s: float = 30.0) -> dict[str, Any]:
         raise ValueError(f"{path}: red channel mean is not positive")
     return {
         "samples": int(red.size),
-        "duration_s": float(stamps[-1] - stamps[0]) if stamps.size > 1 else 0.0,
+        # The last timestamp minus the first is one sample period short of a
+        # 30 s window at 50 Hz; the gate is about how many samples were
+        # acquired, so derive the duration from the sample count and rate.
+        "duration_s": float(red.size) / float(rate) if rate > 0 else 0.0,
         "sqi": float(compute_ppg_sqi(red, rate)),
         "perfusion_index": float(np.std(red) / mean),
     }

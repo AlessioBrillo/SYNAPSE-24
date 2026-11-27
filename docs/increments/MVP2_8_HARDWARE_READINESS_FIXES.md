@@ -76,7 +76,15 @@ Commands run on this host (2026-11-27) against the final tree:
 Two failures found by the gate and fixed before this record: the shared parser
 header initially lived in `tests/` (moved into the firmware tree), and the
 new reboot command needed an `esp_system.h` host stub plus a corrected
-`consumer_v2` lookup in the flashed-config expectation.
+`consumer_v2` lookup in the flashed-config expectation. The PR review then
+found three more real blockers, also fixed here: the USB factory record wrote
+`battery_capacity_mah`/`instrument`/... while `verify` expected
+`battery_mah`/`cal_instrument`/... (now one canonical mapping in
+`scripts/calibration_record.py`); a 30 s PPG capture was measured as 29.98 s and
+could never pass the sweep; and `feature_rate_hz` was still compared in T04
+despite being session-only. The sensor-effective CRC now also ignores the
+midrail metadata, and the standalone `device_config_write` CLI no longer
+commits the host record before a reboot.
 
 Hardware evidence remains open: no board, sensor, radio, long BLE read or
 human session has been exercised. Status stays in `docs/hardware/STATUS.md`.

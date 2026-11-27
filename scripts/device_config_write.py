@@ -26,24 +26,17 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from scripts.calibration_record import (  # noqa: E402
+    PROFILE_KEYS,
+    PROVENANCE_KEYS,
+    canonical_record,
+)
 
 # Wire keys must stay in sync with the whitelist in ble_gatt_server.c.
-PROFILE_KEYS = (
-    "ecg_gain_x100",
-    "ppg_led_red",
-    "ppg_led_ir",
-    "accel_bias_mg",
-    "gyro_bias_mdps",
-    "battery_mah",
-)
-# Measurement provenance is manufacturing data too: it travels in the
-# readback and must survive into the host record alongside the profile.
-PROVENANCE_KEYS = (
-    "cal_instrument",
-    "cal_fw_version",
-    "cal_uncertainty_pct_x100",
-    "cal_noise_std_uv_x10",
-)
+# PROFILE_KEYS / PROVENANCE_KEYS come from scripts.calibration_record so the
+# USB factory write, this BLE write and the validator use the same names.
 SERIAL_RE = re.compile(r"SYN-[0-9A-F]{12}")
 
 
@@ -146,7 +139,7 @@ def update_local_record(
     sink = write or (
         lambda p, text: (p.parent.mkdir(parents=True, exist_ok=True), p.write_text(text))
     )
-    sink(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    sink(path, json.dumps(canonical_record(record), indent=2, sort_keys=True) + "\n")
     return path
 
 
@@ -193,8 +186,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         readback = asyncio.run(_write(args.address, payload))
         verify_readback(readback, expected_from_payload(payload), serial)
-        path = update_local_record(readback, serial)
-        print(f"profile applied and host record updated: {path}")
+        # Match device_profile.configure: the NVS record is written here, but
+        # the host manufacturing record is committed only after the reboot by
+        # `device_profile.py verify`, which proves the drivers applied it.
+        print(
+            "profile written to NVS; after reboot run "
+            f"'device_profile.py verify {serial} --address {args.address}' "
+            "to commit the host record"
+        )
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"device config write failed: {exc}", file=sys.stderr)
         return 1

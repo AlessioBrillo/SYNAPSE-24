@@ -257,15 +257,17 @@ class TestFlashedConfig:
         assert gate.status == "FAIL"
         assert "accel_bias_mg" in str(gate.value)
 
-    def test_stale_feature_rate_fails(self) -> None:
+    def test_session_feature_rate_is_not_a_flashed_config_gate(self) -> None:
+        # feature_rate_hz is a session setting (control point / config write),
+        # not a flashed per-unit truth: a legitimate 5 Hz session must not turn
+        # T04 red while the contract-owned fields still match.
         validator = _validator()
         validator.live_hardware = True
         readback = dict(_FULL_READBACK)
         readback["feature_rate_hz"] = 5
         validator.device_config_readback = readback
         gate = validator._flashed_config_gate()
-        assert gate.status == "FAIL"
-        assert "feature_rate_hz" in str(gate.value)
+        assert gate.status == "PASS"
 
     def test_pending_reboot_fails(self) -> None:
         validator = _validator()

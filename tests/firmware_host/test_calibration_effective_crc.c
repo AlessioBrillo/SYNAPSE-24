@@ -57,6 +57,7 @@ int calibration_effective_host_run_all(void) {
     strcpy(edited.fw_version, "1.2.3");
     edited.gain_uncertainty_pct_x100 = 700;
     edited.noise_std_uv_x10 = 55;
+    edited.ecg_midrail_mv = -1234;  /* metadata only: the driver re-measures it */
     synapse_calibration_seal(&edited);
     CHECK(synapse_calibration_valid(&edited), "metadata-only record still valid");
     CHECK(synapse_calibration_crc(&edited) != full, "full CRC follows metadata");

@@ -58,6 +58,7 @@ static uint32_t effective_record_crc(const synapse_calibration_t *cal) {
     memset(copy.operator, 0, sizeof(copy.operator));
     memset(copy.instrument, 0, sizeof(copy.instrument));
     memset(copy.fw_version, 0, sizeof(copy.fw_version));
+    copy.ecg_midrail_mv = 0;  /* metadata only: the driver re-measures the DC bias */
     copy.gain_uncertainty_pct_x100 = 0u;
     copy.noise_std_uv_x10 = 0;
     copy.version = 0u;

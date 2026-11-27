@@ -25,6 +25,9 @@ from pathlib import Path
 from typing import Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.calibration_record import canonical_record  # noqa: E402
+
 CAL_DIR = ROOT / "data" / "calibration"
 SERIAL_RE = re.compile(r"^SYN-[0-9A-F]{12}$")
 
@@ -220,7 +223,9 @@ def write_record(record: dict[str, object]) -> Path:
     path = CAL_DIR / f"{record['serial']}.json"
     serial_port = path.open("w", encoding="utf-8")
     with serial_port as handle:
-        json.dump(record, handle, indent=2, sort_keys=True)
+        # The band dumps `battery_capacity_mah`/`instrument`/...; the host
+        # record must use the canonical names device_profile.verify expects.
+        json.dump(canonical_record(record), handle, indent=2, sort_keys=True)
         handle.write("\n")
     return path
 
