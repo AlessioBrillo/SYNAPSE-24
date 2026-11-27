@@ -50,15 +50,15 @@ Commands run on this host (2026-11-27) against the final tree:
 - `check_contract` (167 checks), `generate_contracts --check`,
   `check_interfaces`, `check_baseline_claim`, phase1 dry-run and format
   conformance: green.
-- Full suite with coverage over `src`, `worker`, `backend`: **83.72 %**,
-  1418 passed / 108 skipped. The C host sources compiled; many runtime-only
-  C assertions skipped because Windows Application Control intermittently
-  blocks loading freshly built DLLs. A Linux replay is still required to call
-  those assertions proven (zero skips).
-- SDK suite: **89.41 %**, 70 passed.
-- C host gate subset: 161 passed, 16 Windows-policy skips. The new factory
-  profile's JSON whitelist helpers were additionally compiled standalone with
-  `-Wall -Wextra -Werror` and exercised on a sample profile.
+- `bash scripts/run_gate_locally.sh` (the same command sequence as
+  `.woodpecker/ci.yml`): **GATE SEQUENCE: ALL GREEN** on the final tree,
+  including the full suite with coverage over `src`, `worker`, `backend`
+  (**83.72 %**, above the 80 % gate) and the SDK suite (**89.41 %**, 70 passed).
+- Linux replay of the C host gate in `python:3.12` with `uv sync --dev --frozen`:
+  **177 passed, zero skips**. This is the evidence for the runtime-only C
+  assertions that Windows Application Control can only compile here.
+- The new factory-mode JSON whitelist helpers were additionally compiled
+  standalone with `-Wall -Wextra -Werror` and exercised on a sample profile.
 - Firmware builds: **not run on this host** — ESP-IDF is not available here.
   The new `band-bench` target is in `.woodpecker/ci.yml` and must be green on
   the Woodpecker `firmware-band` step before this increment is called merged.
