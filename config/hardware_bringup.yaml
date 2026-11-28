@@ -149,6 +149,9 @@ bringup:
     # not be mixed with human sessions in the export tree.
     bench_xdf_output_dir: "data/bench"
     xdf_filename_template: "synapse_live_{timestamp}.xdf"
+    # Human references are hand measurements: leave these null in the tracked
+    # contract and supply them via --session-overrides
+    # (data/sessions/<date>/session_overrides.yaml, gitignored, allowlisted).
     ground_truth_ecg_path: null  # .npz with key `r_peaks` (indices at the ECG rate)
     manual_hr_bpm: null  # manual pulse count for the G1 HR gate; required on live runs
     hr_mae_max_bpm: 2.0  # PROCUREMENT.md measurement SOP row 5

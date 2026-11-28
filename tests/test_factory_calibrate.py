@@ -216,6 +216,122 @@ def test_the_host_record_uses_the_keys_device_profile_verify_expects(
     assert record["cal_noise_std_uv_x10"] == 12
 
 
+def test_text_provenance_is_bounded_by_the_firmware_buffers() -> None:
+    """A 17-char fw value is silently truncated by the band, so refuse it here."""
+    with pytest.raises(ValueError, match="fw must be at most 16"):
+        fc.build_commands(_args(fw="band-bench@abcdef", dry_run=True))
+    with pytest.raises(ValueError, match="operator must be at most 16"):
+        fc.build_commands(_args(operator="A very long operator name", dry_run=True))
+    assert fc.build_commands(_args(fw="v1.0.0", dry_run=True))
+
+
+def test_provenance_accepts_a_non_empty_numeric_string() -> None:
+    """cal_has_provenance() checks a non-empty first byte, not human_plausibility."""
+    record = {
+        "serial": "SYN-A1B2C3D4E5F6",
+        "date": "2026-11-28",
+        "operator": "0",
+        "instrument": "GEN-42",
+        "fw_version": "0",
+        "gain_uncertainty_pct_x100": 500,
+    }
+    assert fc.missing_provenance(record) == []
+
+
+def test_missing_provenance_mirrors_the_firmware_whitelist() -> None:
+    complete = {
+        "serial": "SYN-A1B2C3D4E5F6",
+        "date": "2026-11-28",
+        "operator": "A. Brillo",
+        "instrument": "GEN-42",
+        "fw_version": "band-bench@abc",
+        "gain_uncertainty_pct_x100": 500,
+    }
+    assert fc.missing_provenance(complete) == []
+    assert fc.missing_provenance({}) == list(fc.PROVENANCE_DUMP_KEYS)
+    partial = dict(complete, instrument="", gain_uncertainty_pct_x100=0)
+    assert fc.missing_provenance(partial) == ["instrument", "gain_uncertainty_pct_x100"]
+
+
+def _port_with_record(record: dict[str, object]) -> type:
+    class Port:
+        def __init__(self, port: str, baud: int = 115200, timeout: float = 2.0) -> None:
+            self.inner = fc.FakeTransport(record=dict(record))
+
+        def send(self, line: str) -> str:
+            return self.inner.send(line)
+
+        def close(self) -> None:
+            return None
+
+    return Port
+
+
+def test_first_write_without_provenance_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A record missing instrument/fw/uncertainty would block every later BLE write."""
+    monkeypatch.setattr(
+        fc,
+        "SerialTransport",
+        _port_with_record({"serial": "SYN-A1B2C3D4E5F6", "ecg_gain_x100": 110000}),
+    )
+    monkeypatch.setattr(fc, "CAL_DIR", tmp_path / "calibration")
+    assert (
+        fc.main(
+            [
+                "--port",
+                "COM9",
+                "--led",
+                "1F,1F",
+                "--operator",
+                "A. Brillo",
+                "--uncertainty",
+                "5",
+            ]
+        )
+        == 1
+    )
+    assert "complete provenance" in capsys.readouterr().err
+    assert not (tmp_path / "calibration").exists()
+
+
+def test_first_write_with_full_provenance_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        fc,
+        "SerialTransport",
+        _port_with_record({"serial": "SYN-A1B2C3D4E5F6", "ecg_gain_x100": 110000}),
+    )
+    monkeypatch.setattr(fc, "CAL_DIR", tmp_path / "calibration")
+    monkeypatch.setattr(fc, "ROOT", tmp_path)
+    assert (
+        fc.main(
+            [
+                "--port",
+                "COM9",
+                "--led",
+                "1F,1F",
+                "--operator",
+                "A. Brillo",
+                "--instrument",
+                "GEN-42",
+                "--fw",
+                "band-bench@abc",
+                "--uncertainty",
+                "5",
+                "--battery",
+                "1000",
+            ]
+        )
+        == 0
+    )
+    record = json.loads((tmp_path / "calibration" / "SYN-A1B2C3D4E5F6.json").read_text())
+    assert record["cal_instrument"] == "GEN-42"
+    assert record["cal_uncertainty_pct_x100"] == 500
+
+
 def test_a_real_port_dump_emits_json_and_writes_no_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

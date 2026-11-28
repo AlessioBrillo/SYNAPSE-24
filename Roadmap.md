@@ -182,6 +182,8 @@ Every row below is "closed" in the sense of *merged and tested on the host*; **n
 | MVP-2.8 | Hardware-readiness review fixes: µV truth, provenance-bound writes, usable bench tooling | `docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md` |
 | MVP-2.9 | First-device readiness: ODR readback truth, factory-mode image, fail-closed gates and evidence | `docs/increments/MVP2_9_DEVICE_READY_HARDENING.md` |
 | MVP-2.10 | Real-device onboarding truth: BLE subscribe, readback keys, provenance, XDF units/anchor and fail-closed host-C gate | `docs/increments/MVP2_10_DEVICE_ONBOARDING_TRUTH.md` |
+| MVP-2.11 | Host onboarding fixes: allowlisted session overlay, USB provenance guard, canonical FIT anchor, 13-module gate count | `docs/increments/MVP2_11_HOST_ONBOARDING_FIXES.md` |
+| MVP-2.12 | IMU AD0 address as a sixth CI-built firmware variant, contract-enforced | `docs/increments/MVP2_12_IMU_ADDRESS_VARIANT.md` |
 | **Next** | The first bench day (`docs/hardware/FIRST_HARDWARE_DAY.md`); a BLE dongle (MVP-1.7 radio); a Mac (iOS) | |
 
 **Honest reality check:** 24/7 dry-electrode EEG at good signal quality is an unsolved problem even for funded labs; fNIRS DIY is genuinely hard analog/optical work; and long-term wearability/power are their own multi-month efforts. A solo, part-time researcher should treat the ECG+PPG+IMU+consumer-EEG stack as the achievable near-term win and treat dense dry-EEG and DIY-fNIRS as ambitious research spikes, not deliverables on a fixed schedule.

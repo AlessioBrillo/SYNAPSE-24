@@ -13,7 +13,7 @@ it is not validated by `tools/check_contract.py` until hardware exists.
 - rates (Hz): {"ecg": 500, "imu": 50, "ppg": 50}
 - `ecg_config`: {"adc_channel": 0, "adc_gpio": 1, "format": "s16", "gain": 1100.0, "gain_measured": null, "gpio_lead_off": 15, "lead_off_minus": null, "lead_off_plus": 15, "lsl_stream": "SYNAPSE_ECG_T0", "midrail_source": "auto"}
 - `ppg_config`: {"adc_range_reg": 3, "effective_rate_hz": 50, "fifo_average": 1, "format": "s32", "gpio_int": 5, "i2c_addr": 87, "led_current_ir": 31, "led_current_red": 31, "lsl_stream": "SYNAPSE_PPG_T0", "pulse_width_reg": 3, "sample_rate_reg": 0}
-- `imu_config`: {"accel_dlpf_reg": 32, "accel_poll_hz": 50, "accel_range_g": 8, "accel_sensor_odr_hz": 102, "format": "s16", "gpio_int": 6, "gyro_dlpf_reg": 40, "gyro_poll_hz": 50, "gyro_range_dps": 500, "gyro_sensor_odr_hz": 100, "i2c_addr": 104, "lsl_streams": {"accel": "SYNAPSE_ACC_T0", "gyro": "SYNAPSE_GYRO_T0", "mag": "SYNAPSE_MAG_T0"}, "sensor_oversample": 2}
+- `imu_config`: {"accel_dlpf_reg": 32, "accel_poll_hz": 50, "accel_range_g": 8, "accel_sensor_odr_hz": 102, "allowed_i2c_addrs": [104, 105], "format": "s16", "gpio_int": 6, "gyro_dlpf_reg": 40, "gyro_poll_hz": 50, "gyro_range_dps": 500, "gyro_sensor_odr_hz": 100, "i2c_addr": 104, "lsl_streams": {"accel": "SYNAPSE_ACC_T0", "gyro": "SYNAPSE_GYRO_T0", "mag": "SYNAPSE_MAG_T0"}, "sensor_oversample": 2}
 - `i2c`: {"port": 0, "scl_gpio": 9, "sda_gpio": 8}
 - `temp_config`: {"conversion_cycle_ms": 1000, "gpio_alert": 7, "i2c_addr": 72}
 - `ina219_config`: {"i2c_addr": 64, "max_current_ma": 2000, "shunt_mohm": 100}

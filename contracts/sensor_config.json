@@ -46,6 +46,10 @@
           "accel_poll_hz": 50,
           "accel_range_g": 8,
           "accel_sensor_odr_hz": 102,
+          "allowed_i2c_addrs": [
+            104,
+            105
+          ],
           "format": "s16",
           "gpio_int": 6,
           "gyro_dlpf_reg": 40,

@@ -96,7 +96,12 @@ pods:
         format: "s32"                  # 18-bit ADC, needs 32-bit codes
         lsl_stream: "SYNAPSE_PPG_T0"
       imu_config:
-        i2c_addr: 0x68
+        i2c_addr: 0x68                # default: AD0 tied low
+        # The ICM-20948 answers at 0x69 when AD0 is tied high. Both addresses
+        # are supported by a *build variant*, not by a per-unit calibration:
+        # the address is a property of the wiring, frozen in the schematic.
+        # check_contract.py verifies that every allowed address has a profile.
+        allowed_i2c_addrs: [0x68, 0x69]
         gpio_int: 6
         accel_range_g: 8
         gyro_range_dps: 500

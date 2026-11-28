@@ -2,6 +2,11 @@
 
 Generates physiologically plausible signals for:
 - Forearm Hub (Tier 0): ECG 500Hz, PPG 64Hz (red+IR), IMU 100Hz (9-axis)
+
+These rates are the historic Phase-0 fixture rates, deliberately kept frozen:
+the Phase-0 exit gate tests the XDF/clock-sync machinery, not the G1 hardware
+contract. The normative G1 rates (ECG 500 / PPG 50 / IMU 50) live only in
+`config/hardware.yaml` and are enforced by `tools/check_contract.py`.
 - Head Pod (Tier 1): EEG 8ch 500Hz, fNIRS 10Hz (HbO/HbR), ACC 100Hz (3-axis)
 - In-Ear Satellite (Tier 0): EEG 2ch 250Hz, IMU 100Hz (3-axis)
 
@@ -29,7 +34,7 @@ class PodSignalSpec:
     clock_drift_ppm: float = 0.0  # Parts per million relative to hub clock
 
 
-# Default specifications matching config/hardware.yaml
+# Historic Phase-0 fixture rates (see module docstring); not the G1 contract.
 DEFAULT_POD_SPECS = [
     PodSignalSpec(
         pod_id="forearm_hub",

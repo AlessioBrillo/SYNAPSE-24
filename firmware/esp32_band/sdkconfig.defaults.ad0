@@ -1,0 +1,14 @@
+# ICM-20948 AD0 tied high: the part answers at 0x69 instead of the Kconfig
+# default 0x68. This is a wiring property of the assembled rig, not a
+# per-unit calibration, so it is selected by a build profile and flashed by
+# the maintainer (the tester never edits Kconfig).
+#
+# Apply AFTER the core and bench profiles (later files win):
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults.ad0;sdkconfig.defaults"
+CONFIG_SYNAPSE_BUILD_VARIANT="band-bench-ad0"
+CONFIG_SYNAPSE_FACTORY_MODE=y
+CONFIG_SYNAPSE_IMU_I2C_ADDR=0x69
+
+# Keep the bring-up diagnostics from the core/bench profiles.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y

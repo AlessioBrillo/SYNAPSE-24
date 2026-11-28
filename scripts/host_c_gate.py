@@ -13,7 +13,7 @@ test was skipped or failed. The human-readable ``-rs`` output is forwarded
 unchanged so the reason for every skip stays visible in the CI log.
 
 Usage:
-    uv run python scripts/host_c_gate.py                 # the 12 host-C modules
+    uv run python scripts/host_c_gate.py                 # the 13 host-C modules
     uv run python scripts/host_c_gate.py --group parser  # per-unit JSON parser
 """
 
@@ -174,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         "--group",
         choices=sorted(GROUPS),
         default="host-c",
-        help="which pytest step to run (default: the 12 host-C modules)",
+        help="which pytest step to run (default: the 13 host-C modules)",
     )
     return run(parser.parse_args(argv).group)
 
