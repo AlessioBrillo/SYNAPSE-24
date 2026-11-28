@@ -103,9 +103,15 @@ Final tree (2026-11-28):
   parser` on this Windows host exited 1 with the OS-policy skip reason, as
   intended. Replay in `ghcr.io/astral-sh/uv:python3.12-bookworm`: **204 passed,
   zero skips** across 13 modules (including the compiled factory-CLI parser)
-  plus 2 parser-step tests. The gate is expected RED on this Windows host;
-  the server `firmware-band` result is still required before G1 can be called
-  green.
+  plus 2 parser-step tests. The gate is expected RED on this Windows host.
+- `firmware-band`: the exact five-configuration command sequence was replayed
+  in `espressif/idf:v5.5.5` against a copy of the committed tree (band-full,
+  band-core, band-bench, band-full+RR, band-product), including the
+  `sdkconfig` assertions: **BAND_ALL_OK**. Attempts through a Windows bind
+  mount failed with `No space left on device` in the managed TFLite-Micro
+  component; copying the archive into the container filesystem fixed it. The
+  server Woodpecker run is still the authoritative gate evidence, but no
+  code-level blocker remains from this replay.
 
 Hardware evidence remains open: no board, sensor, radio, long BLE read, INA219
 known-load check, six-hour soak or human session was exercised. Status stays
