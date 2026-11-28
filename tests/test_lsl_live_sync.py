@@ -109,6 +109,37 @@ class TestLiveToXdfZeroDrop:
         assert xdf_proof["n_streams"] == 3
 
 
+class TestLiveProofIsSelfDescribingAndFailClosed:
+    """The XDF proof carries metadata; the Tier-1 1 ms budget gates the verdict."""
+
+    def test_xdf_proof_carries_channel_names_units_tier_and_source_id(self, tmp_path: Path) -> None:
+        import pyxdf
+
+        xdf_path = tmp_path / "proof.xdf"
+        _run_live_or_skip(duration_s=1.0, seed=42, xdf_path=xdf_path)
+        streams, _ = pyxdf.load_xdf(str(xdf_path))
+        by_name = {s["info"]["name"][0]: s for s in streams}
+        assert set(by_name) == {"SYNAPSE_ECG_T0", "SYNAPSE_PPG_T0", "SYNAPSE_ACC_T0"}
+
+        ecg = by_name["SYNAPSE_ECG_T0"]
+        desc = ecg["info"]["desc"][0]
+        labels = [str((c.get("label") or [""])[0]) for c in desc["channels"][0]["channel"]]
+        units = [str((c.get("unit") or [""])[0]) for c in desc["channels"][0]["channel"]]
+        assert labels == ["ECG"]
+        assert units == ["mV"]
+        assert str(desc["acquisition"][0]["tier"][0]) == "0"
+        assert str(ecg["info"]["source_id"][0]).startswith("synapse24_live_")
+
+    def test_overall_pass_requires_tier1_marker(self) -> None:
+        from synapse24.acquisition.live_lsl_sync import _overall_pass
+
+        good_stream = {"residual": {"within_10ms_pct": 100.0}}
+        good_xdf = {"all_streams_valid": True}
+        assert _overall_pass(10, 10, [good_stream], {"within_1ms_pct": 100.0}, good_xdf) is True
+        assert _overall_pass(10, 10, [good_stream], {"within_1ms_pct": 99.9}, good_xdf) is False
+        assert _overall_pass(10, 9, [good_stream], {"within_1ms_pct": 100.0}, good_xdf) is False
+
+
 class TestLiveScriptFlag:
     """scripts/validate_sync.py exposes the live 2-pod gate (CI contract)."""
 

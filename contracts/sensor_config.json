@@ -1,7 +1,7 @@
 {
   "pods": [
     {
-      "ble_address": "${SYNAPSE_FOREARM_BLE}",
+      "ble_address": "${SYNAPSE_FOREARM_BLE:-auto}",
       "board_type": "ESP32_BAND",
       "build_variant": "band-bench",
       "channels": {

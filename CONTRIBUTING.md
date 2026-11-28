@@ -35,7 +35,7 @@ uv run mypy --package synapse24
 
 ## Licensing of Contributions
 
-SYNAPSE-24 is [dual-licensed](LICENSING.md) (AGPL-3.0-or-later and a commercial licence). That only works if the maintainer may relicense every contribution, so by submitting a contribution you agree that:
+SYNAPSE-24 is [dual-licensed](compliance/LICENSING.md) (AGPL-3.0-or-later and a commercial licence). That only works if the maintainer may relicense every contribution, so by submitting a contribution you agree that:
 
 1. **Origin** - you certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/). Sign off every commit with `git commit -s`, which appends `Signed-off-by: Your Name <you@example.com>`.
 2. **Open-source licence** - your contribution is licensed to the project and its users under `AGPL-3.0-or-later`.
@@ -191,8 +191,8 @@ uv run pytest -m "not slow and not integration"
 - **Never commit secrets** (API keys, tokens, passwords)
 - Use environment variables for configuration
 - Report security vulnerabilities privately, following the [Security Policy](SECURITY.md)
-- Do not commit personal or health data; see [PRIVACY.md](PRIVACY.md)
-- Do not add dependencies licensed under GPL/LGPL/AGPL without maintainer approval, and update [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) when `uv.lock` changes
+- Do not commit personal or health data; see [PRIVACY.md](compliance/PRIVACY.md)
+- Do not add dependencies licensed under GPL/LGPL/AGPL without maintainer approval, and update [THIRD-PARTY-LICENSES.md](compliance/THIRD-PARTY-LICENSES.md) when `uv.lock` changes
 
 ## Coding Standards
 
@@ -236,10 +236,13 @@ from synapse24.signal_quality import QualityThresholds
 
 ## Release Process
 
-Releases are automated via GitHub Actions on tag push:
+GitHub Actions is **notice-only** here (`.github/workflows/ci.yml`); the gate
+is the Woodpecker pipeline `.woodpecker/ci.yml` (`ci/woodpecker/push/ci`,
+locally `ci-local` or `bash scripts/run_gate_locally.sh`). Tagging does **not**
+publish a release: a maintainer publishes it only after that gate is green.
 
 ```bash
-# Create release (maintainers only)
+# Tag a candidate (maintainers only); the release itself is a manual step
 git tag -a v0.2.0 -m "Release v0.2.0: Add fNIRS ingestion pipeline"
 git push origin v0.2.0
 ```

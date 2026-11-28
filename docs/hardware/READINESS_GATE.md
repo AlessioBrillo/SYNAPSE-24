@@ -5,14 +5,17 @@ before I spend money on sensors?*
 
 **Verdict as of this writing:** the software is ready to absorb hardware, and
 the firmware now compiles: G0 closed on the dev host on 2026-10-12 (ESP-IDF
-v5.5.5, both build variants). The next physical step is the smoke kit (G1).
+v5.5.5; `band-core` and `band-full` compiled locally at the time, and the
+`firmware-band` CI step now builds all five configurations). The next physical
+step is the smoke kit (G1).
 
 ## Where the project was
 
-Phase 0 (software + public data) was genuinely complete: 440+ tests green,
-baseline gates closed on MIT-BIH and WESAD, LSL/XDF and clock-sync models
-validated on synthetic and replayed data. The gap was everything on the other
-side of the wire:
+Phase 0 (software + public data) was **not** genuinely complete: 440+ tests
+green and the MIT-BIH baseline gate closed, but the WESAD baseline is
+⚠️ PARTIAL (local data missing, issue #45 — `docs/hardware/STATUS.md` is the
+authoritative state); LSL/XDF and clock-sync models were validated on synthetic
+and replayed data. The gap was everything on the other side of the wire:
 
 1. **The firmware had never been compiled.** ~50k lines of C/C++ across four
    parallel ESP32 projects, none through a compiler, and no CI job that could
@@ -87,7 +90,7 @@ side of the wire:
 
 | Gate | Blocker | Cost to clear | State (2026-10-15; G1 revised 2026-11-02 after the 2026-10-29 audit) |
 |---|---|---|---|
-| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY (with the environment activated; on this machine it reports BLOCKED until `export.bat`/`export.ps1` ran — see the note below), `band-core` and `band-full` both compile locally. CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
+| **G0** | ESP-IDF not installed; firmware never compiled | €0, ~2 h | ✅ **CLOSED on the dev host** — ESP-IDF v5.5.5 installed, `tools/check_toolchain.py` READY (with the environment activated; on this machine it reports BLOCKED until `export.bat`/`export.ps1` ran — see the note below), `band-core` and `band-full` compiled locally at closure; CI's `firmware-band` step now builds all five configurations (`band-core`, `band-bench`, `band-full`, `band-full+RR`, `band-product`). CI pins v5.5.5. The first compile found three real defects (see the commit history of `feat/firmware-g0-local-build`); all fixed. |
 | **G1** | Smoke kit not bought/measured | ~€140 + a weekend | ⛔ **Software side CLOSED after the "verifiable loop" increment (2026-10-20)** — the SOP is executable end to end, the research service now *transmits* (it did not: three independent preconditions were dead), the wire convention matches the host codec (it did not: multi-channel frames decoded at 1/channels), the research service is registered **before** the NimBLE host starts (it was not: the registration raced the host task and could abort the boot), the advertising packet fits the 31-byte limit (it did not: 39 bytes, with the error ignored), the loss is visible to the host (the sequence number is now consumed when the frame is *built*, and the header carries a `dropped` counter), the formats are read by third-party parsers (`fitdecode` for FIT, `pyxdf` for XDF), the device-side PPG SQI actually produces a value (it never did: `ppg_sqi_init()` wiped the window on every sample) and no longer rewards noise, the tier transitions are really performed (they were only flagged) and the motion gate is fed with the measured quality, the live validator spools to disk (a 6-hour session no longer needs a gigabyte of RAM), and the Data Plane API confines every client-supplied path. **The physical kit and the bench measurements remain, and the firmware has never run on a board.** The audit of 2026-10-29 found defects that kept the band from booting or streaming at all (a NULL task handle at the first sensor registration, no sensor tasks created, ADC1 opened twice, GATT value handles that were error codes, an IMU configured so its magnetometer was unreachable, a PPG FIFO never enabled, signals on flash/PSRAM pins): the host gate stubbed exactly those parts. They are fixed in code (MVP-1.3, PRs #56-#58) and covered by host tests and static guards, **not by a run**: read G1's software side as *ready for hardware*, not as verified. See "Pre-hardware closure" below and `docs/increments/MVP1_VERIFIABLE_LOOP.md`. |
 | **G2** | Cerelog order | ~€350, after G1 | ⛔ Not started |
 
@@ -139,8 +142,8 @@ the baseline script scores the (empty/partial) data instead of failing
 loudly on unverified input. MIT-BIH (integral) passes every gate.
 
 This does not touch the G1 critical path (the raw streaming path), but it
-does contradict the README's "Phase 0 COMPLETE / WESAD ≥80%" claim on this
-machine.
+contradicts any "Phase 0 COMPLETE / WESAD ≥80%" claim: the authoritative state
+is ⚠️ PARTIAL (`docs/hardware/STATUS.md`), not a closed WESAD baseline.
 
 **Update 2026-11-12.** The fail-closed half is done: `validate_baseline.py`
 calls `require_verified_datasets` and exits 2 on unverified input
@@ -160,7 +163,7 @@ gated in CI rather than asserted in prose:
 
 - **Rate drift removed** — the 64/100 Hz literals are gone from the host
   adapter, the pod coordinator, the validator's gates and the tests; every
-  rate comes from `config/hardware.yaml`, and `check_contract.py` (now 83
+  rate comes from `config/hardware.yaml`, and `check_contract.py` (now 167
   checks) fails if they return.
 - **One clock domain** — the pod's raw stamps are mapped into
   `pylsl.local_clock()` through a `PodClockModel` estimated from the SYNC

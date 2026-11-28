@@ -11,7 +11,7 @@ The IDs match `docs/onboarding/TESTER_PLAYBOOK.md`.
 |---|---|---|---|---|
 | T01 | Kit and toolchain are usable | `bench_suite.py incoming --verified-by "<name>"` | Toolchain READY and contract green; five manual rows checked and `--verified-by` recorded (FAIL without it) | `evidence/T01_*.json` |
 | T02 | The band has an identity and a factory record | `bench_suite.py factory --port COM3 --address <ble-addr>` | DIS/calibration serial `SYN-` + 12 hex, matching the boot log **and the DIS characteristic `2A25` read over BLE** | `evidence/T02_*.json` |
-| T03 | Sensors answer on the I²C bus | `bench_suite.py sensors --port COM3 --log boot.log` | **Fresh** boot/factory log with `answers` lines for 0x57 PPG, 0x68 IMU, 0x40 INA219 | `evidence/T03_*.json` |
+| T03 | Sensors answer on the I²C bus | `bench_suite.py sensors --port COM3 --log boot.log` | **Fresh** boot/factory log with `answers` lines for 0x57 PPG, 0x68 **or 0x69** IMU (AD0 low/high), 0x40 INA219 | `evidence/T03_*.json` |
 | T04 | The flashed config is the contract | `validate_phase1_entry.py --live-hardware …` + gate report | Every readback field matches the **contract + bringup overrides** (`config/hardware.yaml` and `config/hardware_bringup.yaml`); a missing field is FAIL | `data/live_validation/gate_report.json` |
 | T05 | 60 s of raw streaming without loss | `bench_suite.py stream --live --duration 60 --manifest <bench.json>` | Fresh gate report, zero sequence gaps, zero `dropped` bytes, valid XDF | `evidence/T05_*.json` |
 | T06 | PPG quality is sustained | Same run as T05 | SQI ≥ 0.3 and MAP ≤ 0.5 for > 30 s | `gate_report.json` |
@@ -19,8 +19,8 @@ The IDs match `docs/onboarding/TESTER_PLAYBOOK.md`.
 | T08 | RMSSD agrees with NeuroKit2 | Same run + reference `.npz` | MAE < 5 ms | `gate_report.json` |
 | T09 | INA219 reads a known load | `validate_phase1_entry.py --live-hardware …` + multimeter, hand value via `--bench-values` with `--verified-by` | `g1_measure.py` has **no INA219 subcommand**: use the validator's `measured_tier0_current_ma` and check it against the multimeter/known load, within ±5 % of `V/R` | `gate_report.json` |
 | T10 | Two pods stay aligned | `bench_suite.py sync --pods a.xdf b.xdf` | **≥30 min overlap**, correlated ACC windows and `residual_ms` ≤ 10 ms from `sync.tier_budgets.T0.max_residual_drift_ms` in `config/hardware.yaml` | `evidence/T10_*.json` |
-| T11 | The SOP gate report exists | `bench_suite.py g1-report --live --manifest <manifest.json>` | Fresh report, `rehearsal: false`, overall PASS/FAIL recorded; without `--manifest` a FAIL evidence is written, the command does not crash | `evidence/T11_*.json` |
-| T12 | Six-hour soak | `bench_suite.py soak --live --manifest <manifest.json> --duration 21600` | Fresh report with `duration_s == 21600` and the artifact **source = LabRecorderCLI** (not a rehearsal spool), zero drops, monotonic XDF, battery sufficient | `data/live_validation/gate_report.json` |
+| T11 | The SOP gate report exists | `bench_suite.py g1-report --live --manifest <manifest.json>` (after a soak add `--duration 21600`) | Fresh report, `rehearsal: false`, overall PASS/FAIL recorded, and the requested `duration` matches the report (a soak report needs `--duration 21600`, otherwise the evidence is FAIL); without `--manifest` a FAIL evidence is written, the command does not crash | `evidence/T11_*.json` |
+| T12 | Six-hour soak | `bench_suite.py soak --live --manifest <manifest.json> --duration 21600` | Fresh report (`run_id` changed), `rehearsal: false`, `duration_s == 21600` **and measured `elapsed_s >= 21600`**, artifact **source = LabRecorderCLI** (not a rehearsal spool), zero drops, monotonic XDF | `evidence/T12_*.json`, `data/live_validation/gate_report.json` |
 
 ## Rules
 

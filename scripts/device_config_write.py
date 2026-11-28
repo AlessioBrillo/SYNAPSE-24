@@ -194,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
             f"'device_profile.py verify {serial} --address {args.address}' "
             "to commit the host record"
         )
-    except (ValueError, OSError, RuntimeError) as exc:
+        if readback.get("pending_reboot"):
+            print(
+                "WARNING: the band has not applied the new profile yet: "
+                "reboot before recording (the flashed-config gate refuses pending_reboot)",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: bleak raises its own hierarchy
         print(f"device config write failed: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -67,7 +67,19 @@ def biases(
     # Put the band flat with that axis up and tell the tool which one it is.
     expected = np.zeros(3)
     if gravity_axis != "none":
-        expected["xyz".index(gravity_axis)] = 1.0
+        axis = "xyz".index(gravity_axis)
+        mean_g = np.mean(accel_g, axis=0)
+        others = [abs(float(mean_g[i])) for i in range(3) if i != axis]
+        # A band resting on its side would otherwise bake +-1 g into the bias
+        # and permanently skew the motion gate. Require the declared axis to
+        # carry gravity and be clearly dominant.
+        if abs(float(mean_g[axis])) < 0.8 or max(others) > abs(float(mean_g[axis])) / 2.0:
+            raise ValueError(
+                f"the declared gravity axis '{gravity_axis}' does not carry a "
+                f"dominant 1 g ({mean_g.round(3).tolist()} g): lay the band flat "
+                "with that axis up and pass the correct --gravity-axis"
+            )
+        expected[axis] = 1.0
     accel_bias_mg = (np.mean(accel_g, axis=0) - expected) * 1000.0
 
     return {

@@ -4,11 +4,12 @@ Architecture.md §23-31 (decoupled pod/hub), §33-43 (tiered acquisition),
 §92 (multi-node clock drift); Roadmap.md §138 (Phase 1 entry: live
 ECG+PPG+IMU streaming, synchronized in LSL) + §151 (LSL/XDF from day one).
 
-Unlike the simulated scenario in ``scripts/validate_sync.py`` (injected
-timestamps, always routable), this module pushes synthetic Tier-0 payloads
-at normative rates through real liblsl outlets and pulls them back through
-inlets: resolve failures or dropped samples fail loudly instead of biasing
-downstream fusion windows.
+**This is a loopback/rehearsal gate, not a live BLE sync gate.** It pushes
+synthetic Tier-0 payloads at normative rates through real liblsl outlets on
+the *host* and pulls them back through inlets; no BLE radio or device clock is
+involved. It proves the LSL/XDF path and the sync math, not that a real pod
+was ever connected. Resolve failures or dropped samples fail loudly instead
+of biasing downstream fusion windows.
 
 Normative rates are read from config/hardware.yaml (pod ``forearm_hub``)
 at call time — single source of truth, no resampling.
@@ -64,7 +65,7 @@ def _unique_source_id(run_id: str, name: str) -> str:
 
 def _jsonable(mapping: dict[str, Any]) -> dict[str, Any]:
     """Convert numpy scalars to plain floats for JSON serialization."""
-    return {k: float(v) if isinstance(v, (int, float)) else v for k, v in mapping.items()}
+    return {k: float(v) if isinstance(v, int | float) else v for k, v in mapping.items()}
 
 
 def _build_specs(config: LiveTwoPodConfig, run_id: str) -> tuple[list[Any], list[dict[str, Any]]]:
@@ -74,25 +75,39 @@ def _build_specs(config: LiveTwoPodConfig, run_id: str) -> tuple[list[Any], list
     from synapse24.hardware.esp32_tier0 import create_synthetic_tier0_data
 
     data = create_synthetic_tier0_data(duration_s=config.duration_s, seed=config.seed)
+    # Channel labels/units/tier travel with the payload so the XDF proof file
+    # is self-describing: a stream whose desc says nothing cannot be analysed
+    # or compared across pods later.
     payloads = [
-        ("SYNAPSE_ECG_T0", "ECG", np.asarray(data["ecg"]).reshape(-1, 1), config.ecg_fs),
+        (
+            "SYNAPSE_ECG_T0",
+            "ECG",
+            np.asarray(data["ecg"]).reshape(-1, 1),
+            config.ecg_fs,
+            ["ECG"],
+            ["mV"],
+        ),
         (
             "SYNAPSE_PPG_T0",
             "PPG",
             np.column_stack([data["ppg_red"], data["ppg_ir"]]),
             config.ppg_fs,
+            ["PPG_RED", "PPG_IR"],
+            ["a.u.", "a.u."],
         ),
         (
             "SYNAPSE_ACC_T0",
             "ACC",
             np.column_stack([data["acc_x"], data["acc_y"], data["acc_z"]]),
             config.imu_fs,
+            ["ACC_X", "ACC_Y", "ACC_Z"],
+            ["g", "g", "g"],
         ),
     ]
 
     outlets = []
     specs: list[dict[str, Any]] = []
-    for name, stream_type, arr, fs in payloads:
+    for name, stream_type, arr, fs, channel_names, channel_units in payloads:
         source_id = _unique_source_id(run_id, name)
         info = StreamInfo(name, stream_type, arr.shape[1], float(fs), "float32", source_id)
         outlets.append(StreamOutlet(info, chunk_size=32, max_buffered=360))
@@ -106,6 +121,9 @@ def _build_specs(config: LiveTwoPodConfig, run_id: str) -> tuple[list[Any], list
                 "pushed_ts": pushed_ts,
                 "sampling_rate": float(fs),
                 "source_id": source_id,
+                "channel_names": channel_names,
+                "channel_units": channel_units,
+                "tier": 0,
                 "expected": int(arr.shape[0]),
             }
         )
@@ -168,6 +186,24 @@ def _wire_residual(
         np.asarray(pushed_ts, dtype=np.float64) + 1.0,
         tier=tier,
         config=SyncConfig(),
+    )
+
+
+def _overall_pass(
+    total_expected: int,
+    total_recovered: int,
+    per_stream: list[dict[str, Any]],
+    tier1_marker: dict[str, Any],
+    xdf_proof: dict[str, Any],
+) -> bool:
+    """The single fail-closed verdict: every criterion must hold, including Tier 1."""
+    all_t0_within = all(s["residual"].get("within_10ms_pct", 0.0) == 100.0 for s in per_stream)
+    tier1_ok = tier1_marker.get("within_1ms_pct", 0.0) == 100.0
+    return bool(
+        total_expected - total_recovered == 0
+        and all_t0_within
+        and tier1_ok
+        and xdf_proof["all_streams_valid"]
     )
 
 
@@ -251,15 +287,21 @@ def run_live_2pod_sync(config: LiveTwoPodConfig) -> dict[str, Any]:
                 "data": np.asarray(specs[i]["data"][: s["recovered"]]),
                 "timestamps": np.asarray(specs[i]["pushed_ts"][: s["recovered"]]),
                 "sampling_rate": s["sampling_rate"],
+                "channel_names": specs[i]["channel_names"],
+                "channel_units": specs[i]["channel_units"],
+                "tier": specs[i]["tier"],
+                "source_id": specs[i]["source_id"],
             }
             for i, s in enumerate(per_stream)
         ],
         Path(xdf_path),
     )
 
-    all_t0_within = all(s["residual"].get("within_10ms_pct", 0.0) == 100.0 for s in per_stream)
-    overall_pass = bool(
-        total_expected - total_recovered == 0 and all_t0_within and xdf_proof["all_streams_valid"]
+    # Tier-1 is not informational decoration: the whole gate fails when the
+    # BLE-critical 1 ms marker budget is missed, so it can never be read as a
+    # passing "live" gate with an unmet 1 ms number.
+    overall_pass = _overall_pass(
+        total_expected, total_recovered, per_stream, tier1_marker, xdf_proof
     )
     return {
         "run_id": run_id,

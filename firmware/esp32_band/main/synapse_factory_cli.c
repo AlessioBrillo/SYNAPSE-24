@@ -38,6 +38,7 @@ static void print_help(void) {
         "  cal operator <name>               who calibrated it\r\n"
         "  cal instrument <id>               serial of the generator / meter\r\n"
         "  cal fw <version>                  firmware used for the measurement\r\n"
+        "  text fields take a quoted value: cal operator \"A. Brillo\"\r\n"
         "  cal uncertainty <pct_x100>        gain uncertainty, e.g. 500 = 5 %%\r\n"
         "  cal noise <uv_x10>                shorted-input ECG noise, 0 = not measured\r\n"
         "  cal battery <mah>                 fitted cell capacity (0 = Kconfig default)\r\n"
@@ -76,8 +77,89 @@ static int parse_int(const char *text, bool hex, int *out) {
     return 0;
 }
 
+static bool is_cal_space(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+/** Split off one whitespace-delimited token, NUL-terminating it in place.
+ *  Quotes are ordinary characters here: only the text fields interpret them. */
+static char *next_arg(char **cursor) {
+    char *p = *cursor;
+    while (is_cal_space(*p)) {
+        p++;
+    }
+    if (*p == '\0') {
+        *cursor = p;
+        return NULL;
+    }
+    char *start = p;
+    while (*p != '\0' && !is_cal_space(*p)) {
+        p++;
+    }
+    if (*p != '\0') {
+        *p = '\0';
+        p++;
+    }
+    *cursor = p;
+    return start;
+}
+
+/** Extract a single text-field value from the rest of a `cal` line.
+ *
+ *  A double-quoted value is copied verbatim, spaces included, so provenance
+ *  like `cal operator "A. Brillo"` is stored whole. An unquoted value keeps
+ *  the legacy first-token behaviour. Returns the value length on success;
+ *  negative values mean: -1 no/empty value, -2 unterminated quote,
+ *  -3 characters after the closing quote, -4 longer than out_size,
+ *  -5 a stray quote in an unquoted value (it would corrupt the JSON dump).
+ *
+ *  External linkage on purpose: the host-C gate compiles this exact function
+ *  (not a Python reimplementation) to prove the quoted round trip.
+ */
+int synapse_factory_parse_text_arg(char *tail, char *out, size_t out_size);
+int synapse_factory_parse_text_arg(char *tail, char *out, size_t out_size) {
+    while (is_cal_space(*tail)) {
+        tail++;
+    }
+    if (*tail == '\0') {
+        return -1;
+    }
+    const char *start;
+    if (*tail == '"') {
+        start = ++tail;
+        const char *end = strchr(tail, '"');
+        if (end == NULL) {
+            return -2;
+        }
+        const char *after = end + 1;
+        while (is_cal_space(*after)) {
+            after++;
+        }
+        if (*after != '\0') {
+            return -3;
+        }
+        tail = (char *)end;  /* the closing quote itself is not part of the value */
+    } else {
+        start = tail;
+        while (*tail != '\0' && !is_cal_space(*tail)) {
+            tail++;
+        }
+        if (memchr(start, '"', (size_t)(tail - start)) != NULL) {
+            return -5;
+        }
+    }
+    const size_t len = (size_t)(tail - start);
+    if (len == 0 || len >= out_size) {
+        return -4;
+    }
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return (int)len;
+}
+
 static void handle_cal(char *args) {
-    char *cmd = strtok(args, " \t\r\n");
+    char *cursor = args;
+    char *cmd = next_arg(&cursor);
     if (cmd == NULL) {
         print_help();
         return;
@@ -115,8 +197,47 @@ static void handle_cal(char *args) {
         return;
     }
 
+    /* Provenance fields carry human text, so they get the quote-aware parser.
+     * Everything numeric keeps the original whitespace-only tokenisation. */
+    if (strcmp(cmd, "operator") == 0 || strcmp(cmd, "instrument") == 0 ||
+        strcmp(cmd, "fw") == 0 || strcmp(cmd, "date") == 0) {
+        char value[SYNAPSE_CAL_INSTRUMENT_MAX];
+        const int len = synapse_factory_parse_text_arg(cursor, value, sizeof(value));
+        if (len < 0) {
+            const char *why = len == -2   ? "unterminated quote"
+                              : len == -3 ? "characters after closing quote"
+                              : len == -4 ? "value too long"
+                              : len == -5 ? "quote in unquoted value"
+                                          : "missing value";
+            printf("ERR bad %s value: %s\r\n", cmd, why);
+            return;
+        }
+        char *field;
+        size_t cap;
+        if (strcmp(cmd, "operator") == 0) {
+            field = s_cal.operator;
+            cap = sizeof(s_cal.operator);
+        } else if (strcmp(cmd, "instrument") == 0) {
+            field = s_cal.instrument;
+            cap = sizeof(s_cal.instrument);
+        } else if (strcmp(cmd, "fw") == 0) {
+            field = s_cal.fw_version;
+            cap = sizeof(s_cal.fw_version);
+        } else {
+            field = s_cal.date;
+            cap = sizeof(s_cal.date);
+        }
+        if ((size_t)len >= cap) {
+            printf("ERR bad %s value: value too long\r\n", cmd);
+            return;
+        }
+        snprintf(field, cap, "%s", value);
+        printf("OK %s\r\n", cmd);
+        return;
+    }
+
     int a = 0, b = 0, c = 0;
-    char *p1 = strtok(NULL, " \t\r\n");
+    char *p1 = next_arg(&cursor);
     char *p2 = NULL;
     char *p3 = NULL;
     if (strcmp(cmd, "gain") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
@@ -125,27 +246,22 @@ static void handle_cal(char *args) {
     } else if (strcmp(cmd, "midrail") == 0 && p1 && parse_int(p1, false, &a) == 0) {
         s_cal.ecg_midrail_mv = a;
     } else if (strcmp(cmd, "led") == 0 && p1 && parse_int(p1, true, &a) == 0 &&
-               (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, true, &b) == 0 &&
+               (p2 = next_arg(&cursor)) != NULL && parse_int(p2, true, &b) == 0 &&
                a >= 1 && a <= 255 && b >= 1 && b <= 255) {
         s_cal.ppg_led_red = (uint8_t)a;
         s_cal.ppg_led_ir = (uint8_t)b;
     } else if (strcmp(cmd, "accel_bias") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
-               (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, false, &b) == 0 &&
-               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0 && a >= -2000 && a <= 2000 && b >= -2000 && b <= 2000 && c >= -2000 && c <= 2000) {
+               (p2 = next_arg(&cursor)) != NULL && parse_int(p2, false, &b) == 0 &&
+               (p3 = next_arg(&cursor)) != NULL && parse_int(p3, false, &c) == 0 && a >= -2000 && a <= 2000 && b >= -2000 && b <= 2000 && c >= -2000 && c <= 2000) {
         s_cal.accel_bias_mg[0] = (int16_t)a;
         s_cal.accel_bias_mg[1] = (int16_t)b;
         s_cal.accel_bias_mg[2] = (int16_t)c;
     } else if (strcmp(cmd, "gyro_bias") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
-               (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, false, &b) == 0 &&
-               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0 && a >= -20000 && a <= 20000 && b >= -20000 && b <= 20000 && c >= -20000 && c <= 20000) {
+               (p2 = next_arg(&cursor)) != NULL && parse_int(p2, false, &b) == 0 &&
+               (p3 = next_arg(&cursor)) != NULL && parse_int(p3, false, &c) == 0 && a >= -20000 && a <= 20000 && b >= -20000 && b <= 20000 && c >= -20000 && c <= 20000) {
         s_cal.gyro_bias_mdps[0] = (int16_t)a;
         s_cal.gyro_bias_mdps[1] = (int16_t)b;
         s_cal.gyro_bias_mdps[2] = (int16_t)c;
-    } else if (strcmp(cmd, "instrument") == 0 && p1 &&
-               strlen(p1) < sizeof(s_cal.instrument)) {
-        snprintf(s_cal.instrument, sizeof(s_cal.instrument), "%s", p1);
-    } else if (strcmp(cmd, "fw") == 0 && p1 && strlen(p1) < sizeof(s_cal.fw_version)) {
-        snprintf(s_cal.fw_version, sizeof(s_cal.fw_version), "%s", p1);
     } else if (strcmp(cmd, "uncertainty") == 0 && p1 &&
                parse_int(p1, false, &a) == 0 && a >= 0 && a <= 10000) {
         s_cal.gain_uncertainty_pct_x100 = (uint16_t)a;
@@ -155,10 +271,6 @@ static void handle_cal(char *args) {
     } else if (strcmp(cmd, "battery") == 0 && p1 &&
                parse_int(p1, false, &a) == 0 && a >= 100 && a <= 10000) {
         s_cal.battery_capacity_mah = (uint16_t)a;
-    } else if (strcmp(cmd, "date") == 0 && p1 && strlen(p1) < sizeof(s_cal.date)) {
-        snprintf(s_cal.date, sizeof(s_cal.date), "%s", p1);
-    } else if (strcmp(cmd, "operator") == 0 && p1 && strlen(p1) < sizeof(s_cal.operator)) {
-        snprintf(s_cal.operator, sizeof(s_cal.operator), "%s", p1);
     } else {
         printf("ERR bad command or arguments: %s\r\n", cmd);
         return;

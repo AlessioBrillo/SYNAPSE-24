@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
-Live 2-Pod BLE LSL Sync Validation
+Loopback rehearsal of the 2-pod LSL sync gate (NOT a live BLE sync gate).
 
-Phase 1 Entry Gate: Real-wire validation of Tier 0 acquisition over BLE.
+This script pushes synthetic Tier-0 payloads through local liblsl outlets on
+the host and pulls them back. It exercises the LSL wire, the per-tier residual
+math and the XDF zero-drop proof, but it does **not** connect to a BLE radio,
+a device clock or a real pod. A pass here is a rehearsal pass; live BLE
+onboarding evidence must come from a real-device path (see the phase-1 entry
+runbook), never from this script.
 
 Architecture.md §23-31: Decoupled pod/hub, Tier 0 continuous
 Architecture.md §92: Multi-node clock drift (markers + ACC cross-corr)
 Roadmap.md §138: Live ECG+PPG+IMU streaming, synchronized in LSL
 
-Tests:
-1. BLE connection establishment
-2. Real-time streaming at the normative config/hardware.yaml rates
-3. Per-tier sync validation (T0=10ms, T1=1ms marker channel)
-4. XDF zero-drop round-trip proof
-5. Power budget projection
+Checks:
+1. Local LSL outlet/inlet resolution at the normative config/hardware.yaml rates
+2. Per-tier sync validation (T0=10ms, T1=1ms marker channel)
+3. XDF zero-drop round-trip proof
+4. Power budget projection (informational)
 """
 
 from __future__ import annotations
@@ -56,7 +60,8 @@ def _build_config(args: argparse.Namespace) -> LiveTwoPodConfig:
 def _print_header(args: argparse.Namespace) -> None:
     """Print test header."""
     print("=" * 70)
-    print("SYNAPSE-24 Phase 1 Entry Gate: Live 2-Pod BLE LSL Sync Validation")
+    print("SYNAPSE-24 LSL 2-Pod Sync: LOOPBACK REHEARSAL (synthetic payloads)")
+    print("NOT a live BLE sync gate: no radio, device clock or real pod is used.")
     print("=" * 70)
     print(f"Duration: {args.duration}s")
     print(f"Rates: ECG={args.ecg_fs}Hz, PPG={args.ppg_fs}Hz, IMU={args.imu_fs}Hz")
@@ -96,9 +101,10 @@ def _print_xdf_results(result: dict) -> None:
     xdf_pass = "✓" if xdf["all_streams_valid"] and xdf["total_dropped"] == 0 else "✗"
     print("\n[4/5] XDF zero-drop round-trip:")
     print(f"  {xdf_pass} Streams: {xdf['n_streams']}, Total dropped: {xdf['total_dropped']}")
-    for stream in xdf["streams"]:
+    # verify_xdf_roundtrip reports per_stream (expected/recovered), not "streams".
+    for stream in xdf["per_stream"]:
         print(
-            f"    {stream['name']}: {stream['n_samples']} samples, "
+            f"    {stream['name']}: {stream['recovered']}/{stream['expected']} samples, "
             f"dropped={stream['dropped']}, valid={stream['valid']}"
         )
 
@@ -127,8 +133,8 @@ def _save_report(args: argparse.Namespace, result: dict, xdf: dict) -> None:
         return
 
     report = {
-        "test": "live_2pod_ble_lsl_sync",
-        "phase": "phase1_entry_gate",
+        "test": "lsl_2pod_loopback_rehearsal",
+        "phase": "loopback_rehearsal_not_live_ble",
         "config": {
             "duration_s": args.duration,
             "ecg_fs": args.ecg_fs,
@@ -170,7 +176,9 @@ def _handle_unexpected_error(e: Exception, verbose: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SYNAPSE-24 Live 2-Pod BLE LSL Sync Validation")
+    parser = argparse.ArgumentParser(
+        description="SYNAPSE-24 2-pod LSL sync LOOPBACK REHEARSAL (not a live BLE gate)"
+    )
     parser.add_argument(
         "--duration", type=float, default=30.0, help="Test duration in seconds (default: 30)"
     )

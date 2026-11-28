@@ -91,9 +91,11 @@ def test_the_noise_floor_is_restated_at_the_electrodes_when_gain_is_known() -> N
     shorted = rng.normal(0, 3.0, 30_000)
     result = g1.noise_floor_uv(shorted, configured_gain=550.0)
     assert result["std_uv"] == pytest.approx(3.0, rel=0.03)
-    # A band running at half the nominal gain shows half the wire noise; the
-    # corrected figure restores the 3 µV at the electrodes (SOP §4a.1).
-    assert result["true_noise_uv"] == pytest.approx(6.0, rel=0.03)
+    # The firmware already divides the ADC reading by the configured gain and
+    # the raw frame carries uV, so the wire std IS the electrode-referred
+    # figure. Scaling by nominal/actual here would double-correct a calibrated
+    # band (SOP §4a.1).
+    assert result["true_noise_uv"] == pytest.approx(3.0, rel=0.03)
     assert result["configured_gain"] == 550.0
 
 

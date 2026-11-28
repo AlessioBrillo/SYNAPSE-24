@@ -31,6 +31,47 @@ from scripts.calibration_record import canonical_record  # noqa: E402
 CAL_DIR = ROOT / "data" / "calibration"
 SERIAL_RE = re.compile(r"^SYN-[0-9A-F]{12}$")
 
+# The firmware treats these four `cal` subcommands as text; every other value
+# is numeric and must stay an unquoted token.
+TEXT_FIELDS = {
+    "operator": "operator",
+    "instrument": "instrument",
+    "fw": "fw_version",
+    "date": "date",
+}
+
+
+def shell_quote(value: str) -> str:
+    """Quote a provenance value so the USB shell stores it whole.
+
+    A quoted token is copied verbatim by the firmware; an unquoted token is
+    cut at the first whitespace (which used to turn "A. Brillo" into "A.").
+    Literal quotes and newlines cannot be expressed in that grammar and are
+    refused here rather than silently corrupting the record.
+    """
+    if '"' in value or "\n" in value or "\r" in value:
+        raise ValueError(f"provenance value cannot contain quotes or newlines: {value!r}")
+    return f'"{value}"'
+
+
+def parse_text_value(tail: str) -> str | None:
+    """Mirror the firmware's text parser: quoted -> whole, unquoted -> first token.
+
+    Malformed quoting (unterminated quote, junk after the closing quote, a
+    stray quote in an unquoted token) maps to None, which both the fake
+    transport and the tests treat as an ERR reply.
+    """
+    tail = tail.lstrip(" \t\r\n")
+    if not tail:
+        return None
+    if tail.startswith('"'):
+        end = tail.find('"', 1)
+        if end < 0 or tail[end + 1 :].strip(" \t\r\n"):
+            return None
+        return tail[1:end] or None
+    value = tail.split()[0]
+    return None if '"' in value else value
+
 
 class Transport(Protocol):
     def send(self, line: str) -> str:
@@ -44,7 +85,7 @@ class FakeTransport:
     record: dict[str, object] | None = None
     replies: list[str] | None = None
 
-    def send(self, line: str) -> str:  # noqa: PLR0911 - a command shell is a dispatch table
+    def send(self, line: str) -> str:  # noqa: PLR0911, PLR0912 - a command shell is a dispatch table
         if self.record is None:
             self.record = {
                 "serial": "SYN-000000000000",
@@ -63,48 +104,55 @@ class FakeTransport:
                 "noise_std_uv_x10": 0,
                 "battery_capacity_mah": 0,
             }
-        parts = line.strip().split()
-        if not parts:
+        # Keep the tail intact: a quoted provenance value spans several words.
+        words = line.strip().split(None, 2)
+        if not words:
             return "ERR empty"
-        if parts == ["help"]:
+        if words == ["help"]:
             return "SYNAPSE factory calibration"
-        if parts[:2] != ["cal", "dump"] and parts[0] != "cal":
-            return f"ERR unknown command: {parts[0]}"
-        if parts[1] == "dump":
+        if words[0] != "cal":
+            return f"ERR unknown command: {words[0]}"
+        if len(words) < 2:
+            return "ERR bad command or arguments: cal"
+        key = words[1]
+        tail = words[2] if len(words) > 2 else ""
+        if key == "dump":
             return json.dumps(self.record)
-        if parts[1] == "erase":
+        if key == "erase":
             return "OK erased"
-        if parts[1] == "save":
+        if key == "save":
             return "OK saved"
-        key = parts[1]
-        values = parts[2:]
-        if key == "gain":
-            self.record["ecg_gain_x100"] = int(values[0])
-        elif key == "midrail":
-            self.record["ecg_midrail_mv"] = int(values[0])
-        elif key == "led":
-            self.record["ppg_led_red"] = int(values[0], 16)
-            self.record["ppg_led_ir"] = int(values[1], 16)
-        elif key == "accel_bias":
-            self.record["accel_bias_mg"] = [int(v) for v in values]
-        elif key == "gyro_bias":
-            self.record["gyro_bias_mdps"] = [int(v) for v in values]
-        elif key == "instrument":
-            self.record["instrument"] = values[0]
-        elif key == "fw":
-            self.record["fw_version"] = values[0]
-        elif key == "uncertainty":
-            self.record["gain_uncertainty_pct_x100"] = int(values[0])
-        elif key == "noise":
-            self.record["noise_std_uv_x10"] = int(values[0])
-        elif key == "battery":
-            self.record["battery_capacity_mah"] = int(values[0])
-        elif key == "date":
-            self.record["date"] = values[0]
-        elif key == "operator":
-            self.record["operator"] = " ".join(values)
-        else:
-            return f"ERR bad command: {key}"
+        if key == "reboot":
+            return "OK reboot"
+        if key in TEXT_FIELDS:
+            value = parse_text_value(tail)
+            if value is None:
+                return f"ERR bad {key} value"
+            self.record[TEXT_FIELDS[key]] = value
+            return f"OK {key}"
+        values = tail.split()
+        try:
+            if key == "gain":
+                self.record["ecg_gain_x100"] = int(values[0])
+            elif key == "midrail":
+                self.record["ecg_midrail_mv"] = int(values[0])
+            elif key == "led":
+                self.record["ppg_led_red"] = int(values[0], 16)
+                self.record["ppg_led_ir"] = int(values[1], 16)
+            elif key == "accel_bias":
+                self.record["accel_bias_mg"] = [int(v) for v in values]
+            elif key == "gyro_bias":
+                self.record["gyro_bias_mdps"] = [int(v) for v in values]
+            elif key == "uncertainty":
+                self.record["gain_uncertainty_pct_x100"] = int(values[0])
+            elif key == "noise":
+                self.record["noise_std_uv_x10"] = int(values[0])
+            elif key == "battery":
+                self.record["battery_capacity_mah"] = int(values[0])
+            else:
+                return f"ERR bad command: {key}"
+        except (IndexError, ValueError):
+            return f"ERR bad command or arguments: {key}"
         return f"OK {key}"
 
 
@@ -134,12 +182,13 @@ class SerialTransport:
                 break
         return "\n".join(chunks)
 
-    def reboot(self) -> None:
-        """Restart the band so a written per-unit profile is actually applied.
+    def reboot(self, timeout: float = 20.0) -> None:
+        """Restart the band and wait until its shell answers ``cal dump`` again.
 
-        The firmware answers ``OK reboot`` and then calls ``esp_restart()``.
-        Reopen the port afterwards so the next calibration command reaches the
-        shell of the booted band, not the dead handle of the previous one.
+        A fixed sleep raced the boot: the next command could land on the dead
+        handle of the old connection. Poll with a bounded deadline instead and
+        fail loudly if the band never comes back. The dry-run path never makes
+        a SerialTransport, so it is unaffected.
         """
         import time  # noqa: PLC0415 - only when a real reboot is requested
 
@@ -148,9 +197,30 @@ class SerialTransport:
         reply = self.send("cal reboot")
         if not reply.startswith("OK"):
             raise RuntimeError(f"cal reboot refused: {reply!r}")
-        time.sleep(2.0)
         self._conn.close()
-        self._conn = serial.Serial(self._port, baudrate=self._baud, timeout=self._timeout)
+
+        deadline = time.monotonic() + timeout
+        last_error: Exception | None = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                self._conn = serial.Serial(
+                    self._port, baudrate=self._baud, timeout=min(self._timeout, remaining)
+                )
+                # A valid record is the proof that the booted shell is live.
+                parse_dump(self.send("cal dump"))
+                return
+            except (OSError, ValueError) as exc:
+                last_error = exc
+                self._conn.close()
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(0.25, remaining))
+        raise RuntimeError(
+            f"band did not answer `cal dump` within {timeout:g}s after reboot: {last_error}"
+        )
 
     def close(self) -> None:
         self._conn.close()
@@ -198,9 +268,9 @@ def build_commands(args: argparse.Namespace) -> list[str]:  # noqa: PLR0915 - fl
         commands.append("cal accel_bias " + " ".join(str(int(v)) for v in accel))
         commands.append("cal gyro_bias " + " ".join(str(int(v)) for v in gyro))
     if args.instrument:
-        commands.append(f"cal instrument {args.instrument}")
+        commands.append(f"cal instrument {shell_quote(args.instrument)}")
     if args.fw:
-        commands.append(f"cal fw {args.fw}")
+        commands.append(f"cal fw {shell_quote(args.fw)}")
     if args.uncertainty is not None:
         commands.append(f"cal uncertainty {int(round(float(args.uncertainty) * 100))}")
     if args.noise_uv is not None:
@@ -213,11 +283,11 @@ def build_commands(args: argparse.Namespace) -> list[str]:  # noqa: PLR0915 - fl
             raise ValueError(f"battery must be 100..10000 mAh, got {battery}")
         commands.append(f"cal battery {int(battery)}")
     if args.date:
-        commands.append(f"cal date {args.date}")
+        commands.append(f"cal date {shell_quote(args.date)}")
     elif not args.dry_run:
-        commands.append(f"cal date {datetime.now(UTC).date().isoformat()}")
+        commands.append(f"cal date {shell_quote(datetime.now(UTC).date().isoformat())}")
     if args.operator:
-        commands.append(f"cal operator {args.operator}")
+        commands.append(f"cal operator {shell_quote(args.operator)}")
     if commands:
         commands.append("cal save")
     commands.append("cal dump")
@@ -313,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915 - CLI argument 
             path = write_record(record)
             print(f"calibration written to {path.relative_to(ROOT)}")
         return 0
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         print(f"factory calibration failed: {exc}", file=sys.stderr)
         return 1
     finally:

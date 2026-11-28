@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
     resolve_byprop = None
     local_clock = None
 
+from synapse24.acquisition.stream_spool import SpoolManager
 from synapse24.signal_quality import QualityThresholds, Tier
 from synapse24.utils import (
     StreamConfig,
@@ -26,6 +27,12 @@ from synapse24.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Every configured stream must connect: a partial live session is a failure,
+#: not a usable recording with one fewer modality.
+EXPECTED_STREAMS: tuple[str, ...] = ("ecg", "ppg", "acc")
+#: A stream delivering less than 90% of its nominal rate is incomplete.
+_COMPLETENESS_TOLERANCE = 0.10
 
 
 @dataclass
@@ -63,6 +70,8 @@ class LiveTier0Validator:
         self._inlets: dict[str, StreamInlet] = {}
         self._thresholds = QualityThresholds.for_tier(self.config.tier)
         self._running = False
+        # The full session lives on disk, not in the analysis tail buffers.
+        self.spool = SpoolManager()
 
         # Buffers for quality computation
         self._ecg_buffer: list[float] = []
@@ -119,12 +128,18 @@ class LiveTier0Validator:
         except Exception:
             results["acc"] = False
 
+        for name in self._inlets:
+            self.spool.spool(name)
         return results
 
     def run(self, duration_s: float | None = None) -> dict[str, Any]:
         """Run validation loop for specified duration."""
-        if not self._inlets:
-            raise RuntimeError("No streams connected. Call connect() first.")
+        missing = [name for name in EXPECTED_STREAMS if name not in self._inlets]
+        if missing:
+            raise RuntimeError(
+                "Every configured stream must connect for a live gate; missing: "
+                f"{', '.join(missing)}. Call connect() first."
+            )
 
         self._running = True
         self._start_time = local_clock() if local_clock else time.time()
@@ -168,6 +183,7 @@ class LiveTier0Validator:
             if sample is not None:
                 self._ecg_buffer.append(sample[0])
                 self._ecg_timestamps.append(timestamp)
+                self.spool.append("ecg", [sample[0]], timestamp)
                 sample_counts["ecg"] += 1
 
                 # Check ECG quality window
@@ -178,9 +194,12 @@ class LiveTier0Validator:
         if "ppg" in self._inlets:
             sample, timestamp = self._inlets["ppg"].pull_sample(timeout=0.01)
             if sample is not None:
-                self._ppg_red_buffer.append(sample[0])
-                self._ppg_ir_buffer.append(sample[1] if len(sample) > 1 else 0.0)
+                red = float(sample[0])
+                ir = float(sample[1]) if len(sample) > 1 else 0.0
+                self._ppg_red_buffer.append(red)
+                self._ppg_ir_buffer.append(ir)
                 self._ppg_timestamps.append(timestamp)
+                self.spool.append("ppg", [red, ir], timestamp)
                 sample_counts["ppg"] += 1
 
                 # Check PPG quality window
@@ -194,6 +213,7 @@ class LiveTier0Validator:
                 acc_mag = np.sqrt(sum(s**2 for s in sample[:3]))
                 self._acc_mag_buffer.append(acc_mag)
                 self._acc_timestamps.append(timestamp)
+                self.spool.append("acc", [acc_mag], timestamp)
                 sample_counts["acc"] += 1
 
     def _get_ecg_fs(self) -> int:
@@ -236,7 +256,8 @@ class LiveTier0Validator:
             f"PPV={evals.get('r_peak_ppv', 'N/A')}"
         )
 
-        # Keep overlap for continuity
+        # Trim only the in-memory *analysis* window. The whole session stays
+        # in the spool and is written to XDF by _finalize().
         keep_samples = int(fs * 5)  # 5 seconds overlap
         self._ecg_buffer = self._ecg_buffer[-keep_samples:]
         self._ecg_timestamps = self._ecg_timestamps[-keep_samples:]
@@ -274,7 +295,7 @@ class LiveTier0Validator:
             f"MAP={quality.get('motion_artifact_prob', 'N/A'):.3f}"
         )
 
-        # Keep overlap
+        # Trim only the analysis window; the spool keeps the full session.
         keep_samples = int(fs * 10)
         self._ppg_red_buffer = self._ppg_red_buffer[-keep_samples:]
         self._ppg_ir_buffer = self._ppg_ir_buffer[-keep_samples:]
@@ -286,7 +307,8 @@ class LiveTier0Validator:
     def latest_motion_quality(self) -> tuple[float | None, float | None]:
         """Latest (ppg_sqi, motion_artifact_prob) for the promotion gate.
 
-        Returns (None, None) when no PPG assessment has run yet (fail-open).
+        ``(None, None)`` means no PPG assessment has run; the caller MUST treat
+        that as a failed gate, not as permission to promote.
         """
         for result in reversed(self._quality_results):
             if result.get("modality") == "ppg":
@@ -297,109 +319,116 @@ class LiveTier0Validator:
                 )
         return None, None
 
+    def _completeness_gate(self, sample_counts: dict[str, int], elapsed_s: float) -> dict[str, Any]:
+        """Per-stream rate/completeness verdicts for the whole session.
+
+        Written to every report: a stream that connected but delivered far
+        fewer samples than its nominal rate is a FAIL, not a quiet omission.
+        """
+        specs = (
+            ("ecg", self._get_ecg_fs()),
+            ("ppg", self._get_ppg_fs()),
+            ("acc", self._get_imu_fs()),
+        )
+        streams: dict[str, Any] = {}
+        all_ok = True
+        for name, nominal_fs in specs:
+            recovered = int(sample_counts.get(name, 0))
+            observed_fs = recovered / elapsed_s if elapsed_s > 0 else 0.0
+            expected = int(nominal_fs * elapsed_s) if nominal_fs > 0 else 0
+            complete = nominal_fs <= 0 or recovered >= expected * (1 - _COMPLETENESS_TOLERANCE)
+            on_rate = nominal_fs <= 0 or observed_fs >= nominal_fs * (1 - _COMPLETENESS_TOLERANCE)
+            ok = bool(complete and on_rate)
+            all_ok = all_ok and ok
+            streams[name] = {
+                "nominal_rate_hz": float(nominal_fs),
+                "observed_rate_hz": float(observed_fs),
+                "samples": recovered,
+                "expected_samples": expected,
+                "complete": complete,
+                "on_rate": on_rate,
+                "pass": ok,
+            }
+        return {"streams": streams, "overall_pass": bool(all_ok)}
+
     def _finalize(self) -> dict[str, Any]:
-        """Finalize validation, export XDF and JSON."""
+        """Finalize validation, export the FULL session to XDF and write JSON."""
         elapsed = (local_clock() if local_clock else time.time()) - self._start_time
+        # The spool holds every sample of the session; the in-memory buffers
+        # are only the rolling analysis windows. Counts and XDF come from the
+        # spool so a 300 s run yields a 300 s file, not the 5 s tail.
+        sample_counts = self.spool.counts()
+        completeness = self._completeness_gate(sample_counts, elapsed)
+        all_connected = all(name in self._inlets for name in EXPECTED_STREAMS)
+        overall_pass = bool(all_connected and completeness["overall_pass"])
 
-        # Prepare streams for XDF
-        streams = []
-
-        if self._ecg_buffer and self.config.save_xdf:
-            ecg_data = np.array(self._ecg_buffer, dtype=np.float64).reshape(-1, 1)
-            ecg_ts = np.array(self._ecg_timestamps, dtype=np.float64)
-            ecg_info = create_stream_info(
-                StreamConfig(
-                    name=self.config.ecg_stream_name,
-                    stream_type="ECG_T0",
-                    channel_count=1,
-                    sampling_rate=self._get_ecg_fs(),
-                    channel_names=["ECG"],
-                    channel_units=["µV"],
-                    tier=self.config.tier.value,
+        streams: list[dict[str, Any]] = []
+        if self.config.save_xdf:
+            specs = (
+                (
+                    "ecg",
+                    self.config.ecg_stream_name,
+                    "ECG_T0",
+                    ["ECG"],
+                    ["µV"],
+                    self._get_ecg_fs(),
+                ),
+                (
+                    "ppg",
+                    self.config.ppg_stream_name,
+                    "PPG_T0",
+                    ["PPG_RED", "PPG_IR"],
+                    ["a.u.", "a.u."],
+                    self._get_ppg_fs(),
+                ),
+                (
+                    "acc",
+                    self.config.acc_stream_name,
+                    "ACC_T0",
+                    ["ACC_MAG"],
+                    ["g"],
+                    self._get_imu_fs(),
+                ),
+            )
+            for key, name, stream_type, names, units, fs in specs:
+                rows, stamps = self.spool.read_all(key)
+                if rows.size == 0:
+                    continue
+                if rows.ndim == 1:
+                    rows = rows.reshape(-1, 1)
+                info = create_stream_info(
+                    StreamConfig(
+                        name=name,
+                        stream_type=stream_type,
+                        channel_count=rows.shape[1],
+                        sampling_rate=fs,
+                        channel_names=names,
+                        channel_units=units,
+                        tier=self.config.tier.value,
+                    )
                 )
-            )
-            streams.append(
-                {
-                    "info": ecg_info,
-                    "data": ecg_data,
-                    "timestamps": ecg_ts,
-                }
-            )
-
-        if self._ppg_red_buffer and self.config.save_xdf:
-            ppg_data = np.column_stack(
-                [
-                    np.array(self._ppg_red_buffer, dtype=np.float64),
-                    np.array(self._ppg_ir_buffer, dtype=np.float64),
-                ]
-            )
-            ppg_ts = np.array(self._ppg_timestamps, dtype=np.float64)
-            ppg_info = create_stream_info(
-                StreamConfig(
-                    name=self.config.ppg_stream_name,
-                    stream_type="PPG_T0",
-                    channel_count=2,
-                    sampling_rate=self._get_ppg_fs(),
-                    channel_names=["PPG_RED", "PPG_IR"],
-                    channel_units=["a.u.", "a.u."],
-                    tier=self.config.tier.value,
-                )
-            )
-            streams.append(
-                {
-                    "info": ppg_info,
-                    "data": ppg_data,
-                    "timestamps": ppg_ts,
-                }
-            )
-
-        if self._acc_mag_buffer and self.config.save_xdf:
-            acc_data = np.array(self._acc_mag_buffer, dtype=np.float64).reshape(-1, 1)
-            acc_ts = np.array(self._acc_timestamps, dtype=np.float64)
-            acc_info = create_stream_info(
-                StreamConfig(
-                    name=self.config.acc_stream_name,
-                    stream_type="ACC_T0",
-                    channel_count=1,
-                    sampling_rate=self._get_imu_fs(),
-                    channel_names=["ACC_MAG"],
-                    channel_units=["g"],
-                    tier=self.config.tier.value,
-                )
-            )
-            streams.append(
-                {
-                    "info": acc_info,
-                    "data": acc_data,
-                    "timestamps": acc_ts,
-                }
-            )
+                streams.append({"info": info, "data": rows, "timestamps": stamps})
 
         # Quality metadata stream
         if self._quality_results and self.config.save_xdf:
             from synapse24.utils import create_quality_metadata_stream
 
-            # Aggregate all quality results
             agg_quality = {
                 "session_duration_s": elapsed,
                 "ecg_assessments": [r for r in self._quality_results if r["modality"] == "ecg"],
                 "ppg_assessments": [r for r in self._quality_results if r["modality"] == "ppg"],
                 "thresholds": self._thresholds.to_dict(),
             }
-            quality_stream = create_quality_metadata_stream(
-                agg_quality,
-                stream_name="SYNAPSE_Quality_T0",
+            streams.append(
+                create_quality_metadata_stream(agg_quality, stream_name="SYNAPSE_Quality_T0")
             )
-            streams.append(quality_stream)
 
-        # Export XDF
         xdf_path = None
         if streams and self.config.save_xdf:
             xdf_path = self.config.output_dir / f"live_tier0_{int(self._start_time)}.xdf"
             write_xdf(xdf_path, streams)
             logger.info(f"XDF saved to: {xdf_path}")
 
-        # Export JSON summary
         json_path = None
         if self.config.save_json:
             json_path = self.config.output_dir / f"live_tier0_{int(self._start_time)}.json"
@@ -408,22 +437,26 @@ class LiveTier0Validator:
                     "start_time": self._start_time,
                     "duration_s": elapsed,
                     "tier": self.config.tier.value,
-                    "sample_counts": {
-                        "ecg": len(self._ecg_buffer),
-                        "ppg": len(self._ppg_red_buffer),
-                        "acc": len(self._acc_mag_buffer),
-                    },
+                    "sample_counts": dict(sample_counts),
                 },
                 "quality_results": self._quality_results,
+                "completeness": completeness,
+                "all_streams_connected": all_connected,
+                "overall_pass": overall_pass,
                 "xdf_path": str(xdf_path) if xdf_path else None,
             }
             with open(json_path, "w") as f:
                 json.dump(summary, f, indent=2, default=str)
             logger.info(f"JSON summary saved to: {json_path}")
 
+        self.spool.cleanup()
         return {
             "session_duration_s": elapsed,
+            "sample_counts": dict(sample_counts),
             "quality_assessments": len(self._quality_results),
+            "completeness": completeness,
+            "all_streams_connected": all_connected,
+            "overall_pass": overall_pass,
             "xdf_path": str(xdf_path) if xdf_path else None,
             "json_path": str(json_path) if json_path else None,
         }
@@ -458,7 +491,11 @@ def run_live_validation(
     connected = validator.connect()
 
     logger.info(f"Connected streams: {connected}")
-    if not any(connected.values()):
-        raise RuntimeError("No LSL streams found. Ensure ESP32 is streaming.")
+    missing = [name for name in EXPECTED_STREAMS if not connected.get(name)]
+    if missing:
+        raise RuntimeError(
+            "Every configured stream must connect for a live validation; "
+            f"missing: {', '.join(missing)}. Ensure the ESP32 is streaming all modalities."
+        )
 
     return validator.run(duration_s=duration_s)

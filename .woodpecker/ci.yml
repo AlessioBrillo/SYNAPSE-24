@@ -1,6 +1,7 @@
 # CI gate (was GitHub ci.yml): ruff, mypy, hardware contract, interface
-# contract, phase 1 dry-run, tests cov>=80, SDK tests, format conformance,
-# firmware host gate and ESP-IDF band build. Not included: baseline-validation
+# contract, phase 1 dry-run, tests cov>=80, onboarding cov>=80, SDK tests,
+# format conformance, fail-on-skip firmware host gate and ESP-IDF band build.
+# Not included: baseline-validation
 # (downloads datasets), triage-model, PyPI release, firmware-ci.yml matrix.
 # Local: `ci-local`.
 when:
@@ -48,10 +49,22 @@ steps:
       # --no-sync: the environment is already synced, and a test step must not
       # reach the network.
       - uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
+      # Second coverage gate, over the device-onboarding tooling only. Measured
+      # total is ~84 % (bench_suite 87, device_profile 93, device_config_write
+      # 77, factory_calibrate 76, g1_measure 91, calibration_record 94); 80 %
+      # leaves headroom without being a rubber stamp. pyproject.toml omits the
+      # other, manually invoked scripts so they cannot dilute this number; the
+      # validator has its own dry-run and suite gates.
+      - uv run --no-sync pytest tests/test_device_profile.py tests/test_bench_suite_truthfulness.py tests/test_g1_measure.py tests/test_factory_calibrate.py tests/test_device_config_write.py tests/test_bench_suite.py --cov=scripts --cov-fail-under=80 --cov-report=term-missing -v
       - uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
-      - uv run --no-sync pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py tests/test_consumer_v2_parity.py tests/test_firmware_s3_time_and_loss.py tests/test_firmware_calibration_host.py tests/test_ina219_host.py -v -rs --no-cov -p no:cacheprovider
+      # Fail closed: a skip of a host-C test (e.g. an OS policy refusing to
+      # load the freshly built DLL) must turn the gate red. The wrapper runs
+      # the same pytest command with -rs and --json-report, and prints every
+      # skip reason before failing.
+      - uv run --no-sync python scripts/host_c_gate.py
       # Host-side test of the compiled per-unit configuration JSON parser.
-      - uv run --no-sync pytest tests/test_firmware_config_parser_host.py -v --no-cov -p no:cacheprovider
+      # Same fail-on-skip rule as the 12-module host-C step above.
+      - uv run --no-sync python scripts/host_c_gate.py --group parser
 
   - name: firmware-band
     image: espressif/idf:v5.5.5

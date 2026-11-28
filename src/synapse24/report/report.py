@@ -107,6 +107,10 @@ def build_session_report(
             "sampling_rate_hz": s.sampling_rate_hz,
             "n_samples": s.n_samples,
             "unit": _unit_for(s.type, s.channel_units),
+            "channel_names": list(s.channel_names),
+            "channel_units": list(s.channel_units),
+            "tier": s.tier,
+            "source_id": s.source_id,
         }
         for s in record.streams
     ]

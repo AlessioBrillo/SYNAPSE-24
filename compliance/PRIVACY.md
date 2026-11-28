@@ -10,7 +10,7 @@ This project operates no service and receives no data from you. Whoever deploys 
 
 | Capability | Status in this repository |
 |------------|---------------------------|
-| On-device processing / edge triage (data minimisation by design) | Implemented in firmware tiers and described in [Architecture.md](Architecture.md); not independently audited |
+| On-device processing / edge triage (data minimisation by design) | The firmware path exists in source and is described in [Architecture.md](../Architecture.md), but it is **not enabled in any shipped build**: `CONFIG_SYNAPSE_FEATURE_EDGE_AI` is unset in `../firmware/esp32_band/sdkconfig.defaults.core` (TFLM interpreter issue, MVP-1.9 debt). Not independently audited |
 | Encryption of recorded data at rest (XDF files) | **Not implemented** (plain files) |
 | Encryption of LSL streams on the network | **Not implemented** (LSL is unencrypted) |
 | Pseudonymisation of subject identifiers | **Not implemented** in `src/synapse24`; subject IDs are whatever the operator supplies |

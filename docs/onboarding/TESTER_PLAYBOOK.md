@@ -83,7 +83,7 @@ Perché: un `sdkconfig` vecchio conserva valori vecchi (ad esempio il gain). È 
 2. Fai il flash della versione `band-bench` (è `band-core` con la shell di fabbrica già accesa: non devi usare `menuconfig`):
 
 ```powershell
-uv run python scripts/build_and_flash_firmware.py --variant band-bench --port COM3 --clean monitor
+uv run python scripts/build_and_flash_firmware.py --variant band-bench --port COM3 --clean --monitor
 ```
 
 3. Nel log devi vedere, nell'ordine:
@@ -119,7 +119,12 @@ La regola è: **si misura, si scrive nel record, si verifica che la banda legga 
 ```powershell
 # 1. Scrittura USB: crea il record host con provenance completa (prima di ogni scrittura BLE)
 uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/live_validation/gain.json --led 1F,1F --operator "A. Brillo" --instrument "GEN-42" --fw "band-bench@<hash>" --uncertainty 2 --battery 1000 --reboot
-# 2. Profilo BLE: ammesso solo su unita gia calibrata via USB
+```
+
+**Prima di scrivere via BLE, associa la banda nel sistema operativo** (impostazioni Bluetooth del PC → "Pair"/"Aggiungi dispositivo"). La characteristic del device-config è marcata `WRITE_ENC`: senza pairing il client BLE non può scriverla. Il firmware usa Just Works (`sm_mitm = 0`) e **nessun bonding** (`sm_bonding = 0`, nessun key store): l'associazione vale per quella connessione, quindi ripetila su ogni host o adapter che scrive il profilo. Protegge da un ascoltatore passivo, ma non è protezione MITM: non descrivere questa configurazione come una postura di sicurezza definitiva (vedi `../../compliance/PRIVACY.md`).
+
+```powershell
+# 2. Profilo BLE: ammesso solo su unita gia calibrata via USB, dopo il pairing dell'OS
 uv run python scripts/device_profile.py example
 uv run python scripts/device_profile.py configure SYN-A1B2C3D4E5F6 --address AA:BB:CC:DD:EE:FF --profile profilo.json
 # riavvia la banda, poi:
@@ -163,11 +168,11 @@ uv run python scripts/factory_calibrate.py --port COM3 --led 1F,1F --operator "I
 
 ### 4.3 Bias IMU
 
-1. Metti la banda su un tavolo fermo, senza muoverla, per 10 secondi.
-2. Esegui `uv run python scripts/calibrate_imu.py <xdf> --duration 10 > imu.json`.
+1. Metti la banda **piatta su un tavolo fermo, con l'asse Z verso l'alto**, senza muoverla, per 10 secondi. L'orientamento conta: `calibrate_imu.py` sottrae 1 g sull'asse di gravità (`--gravity-axis`, predefinito `z`), quindi se la banda è su un lato il bias calcolato è sbagliato.
+2. Esegui `uv run python scripts/calibrate_imu.py <xdf> --duration 10 --gravity-axis z > imu.json`.
 3. Scrivi i valori nel record con `factory_calibrate.py --imu-json imu.json`.
 
-**Criterio:** la banda ferma deve leggere circa 1 g sull'asse Z e valori prossimi a zero sugli altri assi.
+**Criterio:** la banda ferma e piatta deve leggere circa 1 g sull'asse Z (prima della sottrazione) e valori prossimi a zero sugli altri assi; il JSON risultante ha `accel_bias_mg` vicino a `[0, 0, 0]`.
 
 ### 4.4 Chiusura della calibrazione
 
@@ -189,7 +194,7 @@ Ogni test ha un ID. Quando lo esegui, salva l'esito in `evidence/<ID>.json`. T05
 |---|---|---|---|
 | T01 | Controllo kit | `bench_suite.py incoming --verified-by "nome verificatore"` + tabella del paragrafo 2 | Tutte le righe OK, **cinque righe manuali verificate con `--verified-by`** (senza verificatore T01 è FAIL) |
 | T02 | Identità e record | `bench_suite.py factory --port COM3 --address AA:BB:CC:DD:EE:FF` | Seriale `SYN-` + 12 hex, uguale al log **e alla characteristic DIS `2A25` letta via BLE** |
-| T03 | I²C scan | `bench_suite.py sensors --port COM3 --log boot.log` | **Log fresco** con righe `answers` per 0x57, 0x68, 0x40 |
+| T03 | I²C scan | `bench_suite.py sensors --port COM3 --log boot.log` | **Log fresco** con righe `answers` per 0x57, **0x68 o 0x69** (IMU, AD0 basso/alto), 0x40 |
 | T04 | Configurazione flashed | `validate_phase1_entry.py --live-hardware …` | Ogni campo uguale al contratto; un campo mancante è FAIL |
 | T05 | Streaming 60 s | `bench_suite.py stream --live --manifest <bench.json>` | Report fresco, zero frame persi, XDF valido; se passi `--bench-values`, serve anche `--verified-by` |
 | T06 | Qualità PPG | Stesso run | SQI ≥ 0,3 e MAP ≤ 0,5 per oltre 30 s |
@@ -197,8 +202,8 @@ Ogni test ha un ID. Quando lo esegui, salva l'esito in `evidence/<ID>.json`. T05
 | T08 | RMSSD | Confronto con reference NeuroKit2 | Errore medio < 5 ms |
 | T09 | Potenza INA219 | Carico noto da 100 Ω | Corrente entro ±5 % del valore atteso |
 | T10 | Sync a due pod | `bench_suite.py sync --pods a.xdf b.xdf` | **Almeno 30 min di sovrapposizione**, correlazione ≥ 0,7 e residuo ≤ 10 ms (soglia da `sync.tier_budgets.T0`) |
-| T11 | Gate report | `bench_suite.py g1-report --live --manifest <manifest.json>` | Report fresco, `rehearsal: false`, PASS/FAIL esplicito; **senza `--manifest` scrive un'evidenza FAIL, non si arresta** |
-| T12 | Soak 6 ore | `bench_suite.py soak --live --manifest <manifest.json> --duration 21600` con LabRecorderCLI | Zero drop, XDF monotono, batteria sufficiente |
+| T11 | Gate report | `bench_suite.py g1-report --live --manifest <manifest.json>` (dopo un soak aggiungi `--duration 21600`) | Report fresco, `rehearsal: false`, PASS/FAIL esplicito, `duration` richiesta uguale a quella del report; **senza `--manifest` scrive un'evidenza FAIL, non si arresta** |
+| T12 | Soak 6 ore | `bench_suite.py soak --live --manifest <manifest.json> --duration 21600` con LabRecorderCLI | Report fresco, `rehearsal: false`, `duration_s == 21600` e **`elapsed_s >= 21600`** misurato, artifact da **LabRecorderCLI**, zero drop, XDF monotono |
 
 Le cinque righe manuali di T01 e le righe misurate a mano (T07, T09, `--bench-values`) le compili tu; io le verifico e aggiungo `--verified-by` nel report: il nome del verificatore resta nello storico del run.
 
@@ -274,7 +279,7 @@ uv run python scripts/bench_suite.py soak --live --manifest data/sessions/<data>
 
 Con 4-6 ore a settimana non puoi stare presente per sei ore di fila: fai l'avvio insieme a me, poi fissiamo un controllo a metà e la verifica finale. **Non** usare `--soak-rehearsal` come prova: è solo una prova del meccanismo e il suo report è marcato `rehearsal: true`.
 
-**Criterio:** zero frame persi, XDF con timestamp monotone, batteria ancora sufficiente alla fine. Usa `bench_suite.py soak --live --manifest ... --duration 21600`: l'evidenza T12 richiede un report fresco con `rehearsal: false`, **`duration_s == 21600`** e come sorgente dell'artifact **LabRecorderCLI** (non lo spool sintetico, non un XDF ricostruito dal recorder interno).
+**Criterio:** zero frame persi, XDF con timestamp monotone. Usa `bench_suite.py soak --live --manifest ... --duration 21600`: l'evidenza T12 richiede un report fresco (`run_id` diverso da quello precedente), `rehearsal: false`, **`duration_s == 21600`** e **`elapsed_s >= 21600`** misurato dal validatore (non solo la durata richiesta), e come sorgente dell'artifact **LabRecorderCLI** (non lo spool sintetico, non un XDF ricostruito dal recorder interno). La batteria va dimensionata *prima* della corsa (cella 1000+ mAh): il controllo non verifica un "batteria sufficiente" a fine prova, quindi non dichiararlo come gate.
 
 ---
 

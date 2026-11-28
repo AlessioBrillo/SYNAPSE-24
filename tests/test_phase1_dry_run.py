@@ -157,8 +157,16 @@ class TestPhase1DryRun:
         validator = Phase1Validator(config_path, logger)
         validator._create_lsl_outlets()
 
-        # Create minimal stream data for XDF verification
+        # Create minimal stream data for XDF verification. The PPG rate comes
+        # from the manifest: a literal here used to pin the test to 64 Hz long
+        # after the contract moved to 50 Hz.
         import numpy as np
+        import yaml
+
+        manifest = yaml.safe_load(Path("config/hardware.yaml").read_text(encoding="utf-8"))
+        pod = next(p for p in manifest["pods"] if p["pod_id"] == "forearm_hub")
+        # forearm_hub_normative_rates: the contract rate, not a stale literal.
+        ppg_rate = float(pod["sampling_rate"]["ppg"])
 
         streams_for_xdf = [
             {
@@ -173,8 +181,8 @@ class TestPhase1DryRun:
                 "name": "SYNAPSE_PPG_T0",
                 "type": "PPG",
                 "data": np.random.randn(100, 2).astype(np.float64),
-                "timestamps": np.arange(100, dtype=np.float64) / 64.0,
-                "sampling_rate": 64.0,
+                "timestamps": np.arange(100, dtype=np.float64) / ppg_rate,
+                "sampling_rate": ppg_rate,
                 "tier": 0,
             },
         ]

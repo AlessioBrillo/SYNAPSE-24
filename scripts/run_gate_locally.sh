@@ -10,6 +10,14 @@ cd "$(dirname "$0")/.."
 # `uv run` must use the committed lock as it is, like the server's `uv sync --frozen`:
 # without this it may re-resolve and edit uv.lock in the middle of a gate.
 export UV_FROZEN=1
+# Same numerical-stack environment as .woodpecker/ci.yml: without these the
+# local run can spawn thread pools / loky workers the 2-core CI runner never
+# sees, so a green local gate tells us nothing about the server run.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export JOBLIB_START_METHOD=fork
 fail=0
 step() {
   echo ""
@@ -35,9 +43,12 @@ step uv run python scripts/validate_phase1_entry.py --config config/hardware_bri
 step uv run python -m pytest tests/test_phase1_dry_run.py -v --no-cov
 step uv run python -m pytest tests/test_format_conformance.py -v --no-cov
 step uv run python -m pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
+step uv run python -m pytest tests/test_device_profile.py tests/test_bench_suite_truthfulness.py tests/test_g1_measure.py tests/test_factory_calibrate.py tests/test_device_config_write.py tests/test_bench_suite.py --cov=scripts --cov-fail-under=80 --cov-report=term-missing -v
 step uv run python -m pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
-step uv run python -m pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py tests/test_consumer_v2_parity.py tests/test_firmware_s3_time_and_loss.py tests/test_firmware_calibration_host.py tests/test_ina219_host.py -v -rs --no-cov -p no:cacheprovider
-step uv run python -m pytest tests/test_firmware_config_parser_host.py -v --no-cov -p no:cacheprovider
+# Fail-on-skip wrappers (see .woodpecker/ci.yml): a skipped host-C test is a
+# red gate, not a green one. Both keep -rs so the skip reasons stay visible.
+step uv run python scripts/host_c_gate.py
+step uv run python scripts/host_c_gate.py --group parser
 
 # Local-only extra (not in .woodpecker/ci.yml; tests/test_gate_parity.py
 # declares it): the local host compiles with zig cc (clang), the server with

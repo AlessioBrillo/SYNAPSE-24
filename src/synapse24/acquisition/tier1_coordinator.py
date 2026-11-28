@@ -114,9 +114,21 @@ class Tier1Coordinator:
         sync_config: SyncConfig | None = None,
         motion_gate: MotionGateConfig | None = None,
         clock_fn: Callable[[], float] | None = None,
+        *,
+        synthetic_inear_transport: bool = False,
     ) -> None:
+        """Create the coordinator.
+
+        ``synthetic_inear_transport`` must be set **explicitly** (and only for
+        rehearsals/CI) to let the in-ear pod push generated samples. In
+        production the default is ``False``: generated EEG is never allowed to
+        masquerade as samples from a live device.
+        """
         self.registry = registry or DeviceRegistry()
         self.clock_fn = clock_fn
+        self.synthetic_inear_transport = bool(synthetic_inear_transport)
+        #: pod_id -> reason for the last failed ``push_lsl_data`` call.
+        self.last_push_failures: dict[str, str] = {}
 
         # Multi-pod clock sync with per-tier budget (Architecture.md §92)
         self.sync_config = sync_config or SyncConfig()
@@ -298,21 +310,30 @@ class Tier1Coordinator:
         """Connect all registered pods."""
         results = {}
 
+        # Every registered pod gets a verdict: a missing key would make
+        # ``all(results.values())`` succeed vacuously when a pod failed before
+        # it ever reached the success assignment.
+        self.last_push_failures.clear()
+
         # Connect Tier 1 pods (Cerelog)
         for pod_id, state in self._tier1_pods.items():
+            results[pod_id] = False
+            if state.cerelog_manager is None:
+                state.error_count += 1
+                logger.error("Tier 1 pod %s not properly registered", pod_id)
+                continue
             try:
-                assert state.cerelog_manager is not None, (
-                    f"Tier 1 pod {pod_id} not properly registered"
-                )
                 state.cerelog_manager.prepare()
                 state.impedance_checked = False
                 state.quality_passed = False
                 results[pod_id] = True
             except Exception:
+                state.error_count += 1
                 logger.exception("Failed to connect Tier 1 pod %s", pod_id)
 
         # Connect Tier 0 pods (forearm hubs)
         for pod_id, state_t0 in self._tier0_pods.items():
+            results[pod_id] = False
             try:
                 board_config = state_t0.config.to_board_config()
                 manager = BoardManager(board_config)
@@ -321,16 +342,22 @@ class Tier1Coordinator:
                 state_t0.error_count = 0
                 results[pod_id] = True
             except Exception:
+                state_t0.error_count += 1
                 logger.exception("Failed to connect Tier 0 pod %s", pod_id)
 
         # Connect In-Ear pods (Tier 0 continuity)
         for pod_id, state_ear in self._inear_pods.items():
+            results[pod_id] = False
+            if state_ear.firmware is None:
+                state_ear.error_count += 1
+                logger.error("In-Ear pod %s not properly registered", pod_id)
+                continue
             try:
-                if state_ear.firmware:
-                    state_ear.firmware.setup_lsl_streams()
-                    state_ear.error_count = 0
-                    results[pod_id] = True
+                state_ear.firmware.setup_lsl_streams()
+                state_ear.error_count = 0
+                results[pod_id] = True
             except Exception:
+                state_ear.error_count += 1
                 logger.exception("Failed to connect In-Ear pod %s", pod_id)
 
         return results
@@ -351,40 +378,55 @@ class Tier1Coordinator:
         """Start streaming on all connected pods."""
         results = {}
 
+        # A pod that cannot start must appear as a failure; omitting it would
+        # let a caller's all(results.values()) pass on an empty result set.
         # Start Tier 1 pods
         for pod_id, state in self._tier1_pods.items():
-            if state.cerelog_manager:
-                try:
-                    state.cerelog_manager.start_streaming()
-                    state.is_streaming = True
-                    state.last_data_time = time.time()
-                    results[pod_id] = True
-                except Exception:
-                    logger.exception("Failed to start Tier 1 pod %s", pod_id)
+            results[pod_id] = False
+            if state.cerelog_manager is None:
+                state.error_count += 1
+                logger.error("Tier 1 pod %s not prepared", pod_id)
+                continue
+            try:
+                state.cerelog_manager.start_streaming()
+                state.is_streaming = True
+                state.last_data_time = time.time()
+                results[pod_id] = True
+            except Exception:
+                state.error_count += 1
+                logger.exception("Failed to start Tier 1 pod %s", pod_id)
 
         # Start Tier 0 pods (forearm hubs)
         for pod_id, state_t0 in self._tier0_pods.items():
-            if state_t0.manager and state_t0.manager.state.name == "CONNECTED":
-                try:
-                    state_t0.manager.start_stream()
-                    state_t0.is_streaming = True
-                    state_t0.last_data_time = time.time()
-                    results[pod_id] = True
-                except Exception:
-                    state_t0.error_count += 1
-                    results[pod_id] = False
+            results[pod_id] = False
+            if state_t0.manager is None or state_t0.manager.state.name != "CONNECTED":
+                state_t0.error_count += 1
+                logger.error("Tier 0 pod %s not connected", pod_id)
+                continue
+            try:
+                state_t0.manager.start_stream()
+                state_t0.is_streaming = True
+                state_t0.last_data_time = time.time()
+                results[pod_id] = True
+            except Exception:
+                state_t0.error_count += 1
+                logger.exception("Failed to start Tier 0 pod %s", pod_id)
 
         # Start In-Ear pods (Tier 0 continuity - always streaming)
         for pod_id, state_ear in self._inear_pods.items():
-            if state_ear.firmware:
-                try:
-                    state_ear.firmware.start_streaming()
-                    state_ear.is_streaming = True
-                    state_ear.last_data_time = time.time()
-                    results[pod_id] = True
-                except Exception:
-                    state_ear.error_count += 1
-                    results[pod_id] = False
+            results[pod_id] = False
+            if state_ear.firmware is None:
+                state_ear.error_count += 1
+                logger.error("In-Ear pod %s not prepared", pod_id)
+                continue
+            try:
+                state_ear.firmware.start_streaming()
+                state_ear.is_streaming = True
+                state_ear.last_data_time = time.time()
+                results[pod_id] = True
+            except Exception:
+                state_ear.error_count += 1
+                logger.exception("Failed to start In-Ear pod %s", pod_id)
 
         # Reset sync timers
         self._last_tier1_sync = self.clock_fn() if self.clock_fn else time.time()
@@ -439,6 +481,7 @@ class Tier1Coordinator:
         """
         results: dict[str, int] = {}
         current_time = self.clock_fn() if self.clock_fn else time.time()
+        self.last_push_failures = {}
 
         self._push_tier1_data(results, current_time)
         self._push_tier0_data(results, current_time)
@@ -446,102 +489,163 @@ class Tier1Coordinator:
 
         return results
 
+    @staticmethod
+    def _map_device_timestamps(manager: BoardManager, timestamps: np.ndarray) -> np.ndarray | None:
+        """Map raw device timestamps into the LSL domain, or refuse them.
+
+        Host arrival time is *not* a device timestamp: substituting it changes
+        the inter-sample spacing and destroys cross-pod drift analysis. When a
+        board exposes a clock model, every stamp must map through it; a model
+        that cannot map (uncalibrated/None result) is a hard failure.
+        """
+        values = np.asarray(timestamps, dtype=np.float64).ravel()
+        clock_model = getattr(manager, "clock_model", None)
+        mapper = getattr(clock_model, "to_lsl_seconds", None)
+        if mapper is not None:
+            mapped = [mapper(float(stamp)) for stamp in values]
+            if any(value is None or not np.isfinite(value) for value in mapped):
+                return None
+            values = np.asarray(mapped, dtype=np.float64)
+        if not np.all(np.isfinite(values)):
+            return None
+        return values
+
     def _push_tier1_data(self, results: dict[str, int], current_time: float) -> None:
         """Push Tier 1 (head) pod data to LSL."""
         for pod_id, state in self._tier1_pods.items():
-            if state.cerelog_manager and state.is_streaming:
-                try:
-                    n_pushed = state.cerelog_manager.push_lsl_chunk()
-                    results[pod_id] = n_pushed
-                    if n_pushed > 0:
-                        state.last_data_time = current_time
-                except Exception:
-                    logger.exception("Error pushing Tier 1 pod %s data", pod_id)
+            results.setdefault(pod_id, 0)
+            if state.cerelog_manager is None or not state.is_streaming:
+                continue
+            try:
+                n_pushed = state.cerelog_manager.push_lsl_chunk()
+                results[pod_id] = n_pushed
+                if n_pushed > 0:
+                    state.last_data_time = current_time
+            except Exception:
+                state.error_count += 1
+                self.last_push_failures[pod_id] = "exception while pushing Tier 1 device samples"
+                logger.exception("Error pushing Tier 1 pod %s data", pod_id)
 
     def _push_tier0_data(self, results: dict[str, int], current_time: float) -> None:
-        """Push Tier 0 (forearm hub) pod data to LSL."""
+        """Push Tier 0 (forearm hub) pod data to LSL.
+
+        A chunk whose device timestamps are missing/unmappable is **dropped**:
+        inventing host-clock stamps would put two clock domains in one XDF and
+        make the drift estimate fiction.
+        """
         for pod_id, state_t0 in self._tier0_pods.items():
-            if state_t0.manager and state_t0.is_streaming:
-                try:
-                    data = state_t0.manager.get_board_data()
-                    if data.size > 0:
-                        n_samples = data.shape[1]
-                        timestamps = state_t0.manager.get_board_timestamp()
-                        if len(timestamps) != n_samples:
-                            timestamps = np.linspace(
-                                current_time, current_time + n_samples / 100, n_samples
-                            )
+            results.setdefault(pod_id, 0)
+            if state_t0.manager is None or not state_t0.is_streaming:
+                continue
+            try:
+                data = state_t0.manager.get_board_data()
+                if data.size == 0:
+                    continue
+                n_samples = data.shape[1]
+                raw_timestamps = state_t0.manager.get_board_timestamp()
+                timestamps = self._map_device_timestamps(state_t0.manager, raw_timestamps)
+                if timestamps is None or timestamps.size != n_samples:
+                    reason = (
+                        "device clock model cannot map device timestamps"
+                        if timestamps is None
+                        else f"device timestamps missing ({timestamps.size} for {n_samples} samples)"
+                    )
+                    state_t0.error_count += 1
+                    self.last_push_failures[pod_id] = reason
+                    logger.error("Dropping Tier 0 pod %s chunk: %s", pod_id, reason)
+                    continue
 
-                        state_t0.last_data_time = current_time
-                        results[pod_id] = n_samples
+                # The host time only records *arrival* for staleness checks; it
+                # is never used as a sample timestamp.
+                state_t0.last_data_time = current_time
+                results[pod_id] = n_samples
 
-                        # Update clock sync with hub ACC (reference)
-                        if "acc" in state_t0.config.modalities:
-                            acc_channels: int = 3
-                            if isinstance(state_t0.config.channels, dict):
-                                acc_channels = state_t0.config.channels.get("acc", 3)
-                            elif isinstance(state_t0.config.channels, int):
-                                acc_channels = min(3, state_t0.config.channels)
-                            if data.shape[0] >= acc_channels:
-                                acc_data = data[-acc_channels:, :]
-                                acc_mag = np.linalg.norm(acc_data, axis=0)
-                                self.clock_sync.add_hub_acc(
-                                    float(np.mean(acc_mag)), float(timestamps[-1])
-                                )
+                # Update clock sync with hub ACC (reference)
+                if "acc" in state_t0.config.modalities:
+                    acc_channels: int = 3
+                    if isinstance(state_t0.config.channels, dict):
+                        acc_channels = state_t0.config.channels.get("acc", 3)
+                    elif isinstance(state_t0.config.channels, int):
+                        acc_channels = min(3, state_t0.config.channels)
+                    if data.shape[0] >= acc_channels:
+                        acc_data = data[-acc_channels:, :]
+                        acc_mag = np.linalg.norm(acc_data, axis=0)
+                        self.clock_sync.add_hub_acc(float(np.mean(acc_mag)), float(timestamps[-1]))
 
-                except Exception:
-                    logger.exception("Error pushing Tier 0 pod %s data", pod_id)
+            except Exception:
+                state_t0.error_count += 1
+                self.last_push_failures[pod_id] = "exception while reading device samples"
+                logger.exception("Error pushing Tier 0 pod %s data", pod_id)
 
     def _push_inear_data(self, results: dict[str, int], current_time: float) -> None:
-        """Push In-Ear (Tier 0 continuity) pod data to LSL."""
-        from synapse24.hardware.inear_eeg import create_synthetic_inear_eeg_data
+        """Push In-Ear (Tier 0 continuity) pod data to LSL.
 
+        Generated samples are pushed **only** when the coordinator was
+        explicitly constructed with ``synthetic_inear_transport=True`` (a
+        rehearsal/CI mode). On real hardware there is no synthetic path: the
+        pod stays silent and the failure is reported instead of filling the
+        stream with a plausible-looking signal.
+        """
         for pod_id, state_ear in self._inear_pods.items():
-            if state_ear.firmware and state_ear.is_streaming:
-                try:
-                    sr = state_ear.config.sampling_rate
-                    ch = state_ear.config.channels
-                    eeg_fs = sr.get("eeg", 256) if isinstance(sr, dict) else 256
-                    imu_fs = sr.get("imu", 50) if isinstance(sr, dict) else 50
-                    eeg_channels = ch.get("eeg", 2) if isinstance(ch, dict) else 2
+            results.setdefault(pod_id, 0)
+            if state_ear.firmware is None or not state_ear.is_streaming:
+                continue
+            if not self.synthetic_inear_transport:
+                reason = (
+                    "no real in-ear sample source: synthetic transport is not enabled "
+                    "(pass synthetic_inear_transport=True only for a rehearsal)"
+                )
+                state_ear.error_count += 1
+                self.last_push_failures[pod_id] = reason
+                logger.error("In-Ear pod %s: %s", pod_id, reason)
+                continue
 
-                    synthetic = create_synthetic_inear_eeg_data(
-                        duration_s=1.0,  # 1 second chunks
-                        eeg_fs=eeg_fs,
-                        imu_fs=imu_fs,
-                        eeg_channels=eeg_channels,
+            from synapse24.hardware.inear_eeg import create_synthetic_inear_eeg_data
+
+            try:
+                sr = state_ear.config.sampling_rate
+                ch = state_ear.config.channels
+                eeg_fs = sr.get("eeg", 256) if isinstance(sr, dict) else 256
+                imu_fs = sr.get("imu", 50) if isinstance(sr, dict) else 50
+                eeg_channels = ch.get("eeg", 2) if isinstance(ch, dict) else 2
+
+                synthetic = create_synthetic_inear_eeg_data(
+                    duration_s=1.0,  # 1 second chunks
+                    eeg_fs=eeg_fs,
+                    imu_fs=imu_fs,
+                    eeg_channels=eeg_channels,
+                )
+
+                # Push EEG to LSL
+                if state_ear.firmware._eeg_outlet:
+                    state_ear.firmware.push_eeg_sample(synthetic["eeg"])
+
+                # Push ACC to LSL
+                if state_ear.firmware._acc_outlet:
+                    acc_data = np.column_stack(
+                        [
+                            synthetic["acc_x"],
+                            synthetic["acc_y"],
+                            synthetic["acc_z"],
+                        ]
+                    ).T  # Shape (3, n_samples)
+                    for i in range(acc_data.shape[1]):
+                        state_ear.firmware.push_acc_sample(acc_data[:, i])
+
+                state_ear.last_data_time = current_time
+                results[pod_id] = len(synthetic["t_eeg"])
+
+                # Update clock sync with in-ear ACC (rehearsal only)
+                if "acc" in state_ear.config.modalities:
+                    acc_mag = np.sqrt(
+                        synthetic["acc_x"] ** 2 + synthetic["acc_y"] ** 2 + synthetic["acc_z"] ** 2
                     )
+                    self.clock_sync.add_hub_acc(float(np.mean(acc_mag)), current_time)
 
-                    # Push EEG to LSL
-                    if state_ear.firmware._eeg_outlet:
-                        state_ear.firmware.push_eeg_sample(synthetic["eeg"])
-
-                    # Push ACC to LSL
-                    if state_ear.firmware._acc_outlet:
-                        acc_data = np.column_stack(
-                            [
-                                synthetic["acc_x"],
-                                synthetic["acc_y"],
-                                synthetic["acc_z"],
-                            ]
-                        ).T  # Shape (3, n_samples)
-                        for i in range(acc_data.shape[1]):
-                            state_ear.firmware.push_acc_sample(acc_data[:, i])
-
-                    state_ear.last_data_time = current_time
-                    results[pod_id] = len(synthetic["t_eeg"])
-
-                    # Update clock sync with in-ear ACC
-                    if "acc" in state_ear.config.modalities:
-                        acc_mag = np.sqrt(
-                            synthetic["acc_x"] ** 2
-                            + synthetic["acc_y"] ** 2
-                            + synthetic["acc_z"] ** 2
-                        )
-                        self.clock_sync.add_hub_acc(float(np.mean(acc_mag)), current_time)
-
-                except Exception:
-                    logger.exception("Error pushing In-Ear pod %s data", pod_id)
+            except Exception:
+                state_ear.error_count += 1
+                self.last_push_failures[pod_id] = "exception while pushing synthetic in-ear data"
+                logger.exception("Error pushing In-Ear pod %s data", pod_id)
 
     def broadcast_sync_marker(self) -> SyncMarker | None:
         """Broadcast synchronization marker to all pods.

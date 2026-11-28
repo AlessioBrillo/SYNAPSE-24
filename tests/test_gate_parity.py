@@ -21,6 +21,7 @@ other side — never silently.
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 
@@ -43,6 +44,11 @@ _EXEMPT_LOCAL: dict[str, str] = {
 # same risk. A new step name must land here or be implemented locally.
 _EXEMPT_STEPS: dict[str, str] = {
     "firmware-band": "ESP-IDF image build; the host C gate (tests/firmware_host) covers the C contract locally",
+}
+# Local-only environment, with grounds. The gate script's `uv run` self-syncs
+# and must not re-resolve the lock while it is running.
+_LOCAL_ONLY_ENV: dict[str, str] = {
+    "UV_FROZEN": "1",
 }
 
 
@@ -88,6 +94,28 @@ def _exempt_match(command: str, table: dict[str, str]) -> str | None:
     return next((key for key in table if key in command), None)
 
 
+def _pipeline_env() -> dict[str, str]:
+    """Declared ``environment:`` entries of the pipeline."""
+    data = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+    entries = data.get("environment") or []
+    env: dict[str, str] = {}
+    for entry in entries:
+        key, sep, value = str(entry).partition("=")
+        assert sep, f"malformed pipeline environment entry: {entry!r}"
+        env[key] = value
+    return env
+
+
+def _local_env() -> dict[str, str]:
+    """``export KEY=VALUE`` declarations of the local gate script."""
+    env: dict[str, str] = {}
+    for line in GATE_SCRIPT.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+        if match:
+            env[match.group(1)] = match.group(2).strip().strip("\"'")
+    return env
+
+
 def test_pipeline_order_is_kept_locally() -> None:
     """Every local command runs in the same relative order as the pipeline."""
     pipeline = _pipeline_commands()
@@ -121,6 +149,29 @@ def test_pipeline_steps_are_run_locally() -> None:
             "Add it to the script (same position) or declare the difference."
         )
         cursor += 1
+
+
+def test_pipeline_environment_is_exported_locally() -> None:
+    """Thread-pool settings must be identical on the server and the host."""
+    pipeline = _pipeline_env()
+    local = _local_env()
+    drift = {
+        key: (value, local.get(key)) for key, value in pipeline.items() if local.get(key) != value
+    }
+    assert not drift, (
+        f"environment drift between .woodpecker/ci.yml and scripts/run_gate_locally.sh: {drift}. "
+        "Export the pipeline values in the local script (same value) so both runs "
+        "see the same numerical-stack settings."
+    )
+
+
+def test_local_environment_extras_are_declared() -> None:
+    """A local-only export must be registered, not hide a missing CI setting."""
+    extras = {key: value for key, value in _local_env().items() if key not in _pipeline_env()}
+    assert extras == _LOCAL_ONLY_ENV, (
+        f"undeclared local-only environment entries: {extras}. "
+        "Add the same entry to .woodpecker/ci.yml or register it in _LOCAL_ONLY_ENV with a reason."
+    )
 
 
 def test_exemptions_still_reference_being_run() -> None:
