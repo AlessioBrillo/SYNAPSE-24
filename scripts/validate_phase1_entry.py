@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 from synapse24.config.loader import load_hardware_config_from_path
 from synapse24.contracts_generated import UUIDS as CONTRACT_UUIDS
@@ -247,7 +248,12 @@ class LSLStreamManager:
             return f"{source_id[:-4]}_{serial_hint}"
         return source_id
 
-    def create_outlets(self, stream_configs: list[dict], serial_hint: str = "") -> None:
+    def create_outlets(
+        self,
+        stream_configs: list[dict],
+        serial_hint: str = "",
+        clock_fn: Callable[[], float] | None = None,
+    ) -> None:
         if pylsl is None:
             raise RuntimeError("pylsl not available")
 
@@ -256,11 +262,16 @@ class LSLStreamManager:
         self.spool.reset()
         self._sample_counts.clear()
         # Export to FIT needs one LSL<->Unix anchor for the whole session.
-        # Capture both clocks here, before the first sample is pushed; later
-        # conversion is a difference, not a guess from a filename timestamp.
-        clock_fn = pylsl.local_clock if pylsl is not None else time.time
+        # Bracket the Unix reading between two LSL readings: two sequential
+        # calls refer to slightly different instants, which used to shift the
+        # date written into every FIT derived from this recording.
+        # Use the same clock domain the validator uses for notified samples and
+        # sync exchanges; an injected rehearsal clock must anchor its own XDF.
+        lsl_clock = clock_fn or (pylsl.local_clock if pylsl is not None else time.time)
+        lsl_before = float(lsl_clock())
         self._session_utc0_s = float(time.time())
-        self._session_lsl0_s = float(clock_fn())
+        lsl_after = float(lsl_clock())
+        self._session_lsl_t0_s = (lsl_before + lsl_after) / 2.0
 
         for cfg in stream_configs:
             # A fixed `_001` source id would make two bands' recordings
@@ -390,7 +401,9 @@ class Phase1Validator:
         logger: logging.Logger,
         legacy_format: bool = False,
         transport: Any = None,
+        session_overrides: Path | None = None,
     ):
+        self.session_overrides = Path(session_overrides) if session_overrides else None
         self.config = self._load_config(config_path)
         self.logger = logger
         self.legacy_format = legacy_format
@@ -462,6 +475,18 @@ class Phase1Validator:
         self.device_config_readback: dict[str, Any] = {}
         self.device_config_attempts = 0
 
+    # The anchor is captured by LSLStreamManager.create_outlets(), where both
+    # clocks are readable. The validator's gates and gate report must read the
+    # *same* values: a plain getattr(self, ...) here used to return None and
+    # made utc_anchor_recorded fail on every real session.
+    @property
+    def _session_utc0_s(self) -> float | None:
+        return getattr(self.lsl_manager, "_session_utc0_s", None)
+
+    @property
+    def _session_lsl_t0_s(self) -> float | None:
+        return getattr(self.lsl_manager, "_session_lsl_t0_s", None)
+
     def _decoder_history_limit(self) -> int:
         """Values kept in memory per stream (30 s at the highest rate)."""
         rates = self._nominal_rates()
@@ -497,6 +522,10 @@ class Phase1Validator:
         config = load_hardware_config_from_path(
             Path(__file__).parent.parent / "config" / "hardware.yaml", config_path
         )
+        if self.session_overrides is not None:
+            overrides = load_session_overrides(self.session_overrides)
+            config["bringup"]["validation"].update(overrides)
+            config["_session_overrides"] = str(self.session_overrides)
         config["_config_path"] = str(config_path)
         return config
 
@@ -540,7 +569,9 @@ class Phase1Validator:
 
     def _create_lsl_outlets(self) -> None:
         streams = self.config["bringup"]["lsl"]["streams"]
-        self.lsl_manager.create_outlets(streams, serial_hint=self._lsl_serial())
+        self.lsl_manager.create_outlets(
+            streams, serial_hint=self._lsl_serial(), clock_fn=self.lsl_clock_fn
+        )
         self.logger.info(f"Created {len(streams)} LSL outlets")
 
     def _setup_clock_sync(self) -> None:
@@ -1555,7 +1586,7 @@ class Phase1Validator:
         # without it a later FIT export has to guess the wall-clock domain.
         has_anchor = (
             getattr(self, "_session_utc0_s", None) is not None
-            and getattr(self, "_session_lsl0_s", None) is not None
+            and getattr(self, "_session_lsl_t0_s", None) is not None
         )
         if self.live_hardware:
             gates.append(
@@ -1939,7 +1970,7 @@ class Phase1Validator:
             # LSL<->Unix anchor: export/FIT conversion needs both numbers, and
             # they must come from the same instant at session start.
             "utc0_s": getattr(self, "_session_utc0_s", None),
-            "lsl0_s": getattr(self, "_session_lsl0_s", None),
+            "lsl_t0_s": getattr(self, "_session_lsl_t0_s", None),
             "duration_s": duration,
             # `duration_s` is what was REQUESTED. `elapsed_s` is measured here
             # when the report is built, so a run that ended early cannot claim
@@ -2665,6 +2696,39 @@ def load_session_manifest(path: Path | None) -> dict[str, Any] | None:
 # rest of the report is computed from this recording and must stay computed.
 HAND_MEASURED_ROWS = ("idle_current_ma", "tier0_avg_current_ma")
 
+# The human-reference gates need values the contract cannot know (a stopwatch
+# count and a reference R-peak file). They live in an untracked per-session
+# overlay so the tester never edits a tracked config file. The allowlist is a
+# security boundary: a wider merge would let a failing run raise its own
+# sample rates or drop its own required gates.
+SESSION_OVERRIDE_KEYS = ("manual_hr_bpm", "ground_truth_ecg_path", "verified_by")
+
+
+def load_session_overrides(path: Path) -> dict[str, Any]:
+    """Read a per-session validation overlay, restricted to the allowlisted keys."""
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("session overrides must be a YAML mapping")  # noqa: TRY004 - CLI text
+    unknown = sorted(set(data) - {"validation"})
+    if unknown:
+        raise ValueError(f"session overrides may only contain 'validation', got {unknown}")
+    validation = data.get("validation") or {}
+    if not isinstance(validation, dict):
+        raise ValueError("session overrides 'validation' must be a mapping")  # noqa: TRY004
+    extra = sorted(set(validation) - set(SESSION_OVERRIDE_KEYS))
+    if extra:
+        raise ValueError(f"session overrides may only set {SESSION_OVERRIDE_KEYS}, got {extra}")
+    result = dict(validation)
+    if "manual_hr_bpm" in result and not str(result.get("verified_by") or "").strip():
+        raise ValueError("manual_hr_bpm in a session overlay requires verified_by")
+    reference = result.get("ground_truth_ecg_path")
+    if reference is not None:
+        ref_path = Path(str(reference))
+        if not ref_path.is_absolute():
+            ref_path = (Path(path).parent / ref_path).resolve()
+        result["ground_truth_ecg_path"] = str(ref_path)
+    return result
+
 
 def merge_bench_values(gate_report: dict[str, Any], path: Path) -> dict[str, Any]:
     """Merge hand-measured bench rows into the gate report, with provenance.
@@ -2794,7 +2858,12 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
         if session is None:
             return reject("live recording refused: --manifest is required (consent + pseudonym)")
 
-    validator = Phase1Validator(config_path, logger)
+    try:
+        validator = Phase1Validator(
+            config_path, logger, session_overrides=getattr(args, "session_overrides", None)
+        )
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        return reject(f"configuration refused: {exc}")
     validator.session_kind = str(session.get("kind", "human")) if session else "human"
 
     try:
@@ -2819,7 +2888,11 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
         # SOP evidence: the ten measurements PROCUREMENT.md gates G1 on.
         gate_report = validator._build_gate_report(report)
         gate_report["session"] = session
-        gate_report["verified_by"] = getattr(args, "verified_by", None) or None
+        gate_report["verified_by"] = (
+            getattr(args, "verified_by", None)
+            or validator.config["bringup"]["validation"].get("verified_by")
+            or None
+        )
         if getattr(args, "bench_values", None):
             try:
                 merge_bench_values(gate_report, args.bench_values)
@@ -2966,6 +3039,16 @@ def main() -> int:
     parser.add_argument(
         "--verified-by",
         help="Maintainer who verified the hand-filled rows of this run",
+    )
+    parser.add_argument(
+        "--session-overrides",
+        type=Path,
+        default=None,
+        help=(
+            "Untracked per-session YAML under data/sessions/<date>/ with "
+            "validation.manual_hr_bpm, validation.ground_truth_ecg_path and "
+            "validation.verified_by; only these keys are accepted"
+        ),
     )
     parser.add_argument(
         "--verbose",

@@ -63,6 +63,13 @@ class FirmwareBuilder:
             "sdkconfig.defaults.bench",
             "sdkconfig.defaults",
         ],
+        # ICM-20948 with AD0 tied high (0x69) — see config/hardware.yaml.
+        "band-bench-ad0": [
+            "sdkconfig.defaults.core",
+            "sdkconfig.defaults.bench",
+            "sdkconfig.defaults.ad0",
+            "sdkconfig.defaults",
+        ],
         "band-full": [],
         "band-product": ["sdkconfig.defaults.product", "sdkconfig.defaults"],
     }

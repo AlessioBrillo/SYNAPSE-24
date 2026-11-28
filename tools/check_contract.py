@@ -55,6 +55,10 @@ FIT_SOURCES = (
 )
 # C source suffixes when a FIT source is a directory.
 _FIT_SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
+# ICM-20948 AD0 selects the I2C address. 0x68 is the Kconfig default; every
+# other allowed address needs a committed sdkconfig.defaults profile so the
+# firmware-band CI step proves it compiles. None = the Kconfig default itself.
+IMU_ADDR_PROFILE_FILES: dict[int, str | None] = {0x68: None, 0x69: "sdkconfig.defaults.ad0"}
 
 
 # MAX30102 SPO2_SR code (SPO2_CONFIG bits 4:2) -> Hz, from the datasheet.
@@ -306,6 +310,36 @@ def check_sensor_config(hw: dict, report: Report) -> None:  # noqa: PLR0915 - on
         )
 
         eq(imu.get("i2c_addr"), "SYNAPSE_IMU_I2C_ADDR", "imu_config.i2c_addr")
+        allowed_addrs = [_as_int(addr) for addr in (imu.get("allowed_i2c_addrs") or [])]
+        report.check(
+            bool(allowed_addrs) and all(addr is not None for addr in allowed_addrs),
+            f"{pid}: imu_config.allowed_i2c_addrs must be a non-empty list of addresses",
+        )
+        report.check(
+            _as_int(imu.get("i2c_addr")) in allowed_addrs,
+            f"{pid}: imu_config.i2c_addr is not declared in imu_config.allowed_i2c_addrs",
+        )
+        for addr in allowed_addrs:
+            if addr is None:
+                continue
+            profile = IMU_ADDR_PROFILE_FILES.get(addr, "UNMAPPED")
+            report.check(
+                profile != "UNMAPPED",
+                f"{pid}: no firmware build profile is mapped to IMU address {addr:#x}",
+            )
+            if profile is None:
+                report.check(
+                    _kconfig_default("SYNAPSE_IMU_I2C_ADDR") == addr,
+                    f"{pid}: Kconfig default of SYNAPSE_IMU_I2C_ADDR must be {addr:#x}",
+                )
+            else:
+                path = FIRMWARE_DIR / str(profile)
+                text = path.read_text(encoding="utf-8") if path.is_file() else ""
+                report.check(
+                    re.search(rf"^CONFIG_SYNAPSE_IMU_I2C_ADDR={addr:#04x}$", text, re.MULTILINE)
+                    is not None,
+                    f"{pid}: {profile} must set CONFIG_SYNAPSE_IMU_I2C_ADDR={addr:#04x}",
+                )
         eq(imu.get("gpio_int"), "SYNAPSE_IMU_GPIO_INT", "imu_config.gpio_int")
         eq(imu.get("accel_range_g"), "SYNAPSE_IMU_ACCEL_FSR_G", "imu_config.accel_range_g")
         eq(imu.get("gyro_range_dps"), "SYNAPSE_IMU_GYRO_FSR_DPS", "imu_config.gyro_range_dps")

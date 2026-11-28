@@ -116,18 +116,19 @@ onto it. Let IDF use its own bundled interpreter for the build, and use the
 
 ## 4. Build variants
 
-The Band firmware has five build profiles, selected with `SDKCONFIG_DEFAULTS`:
+The Band firmware has six build profiles, selected with `SDKCONFIG_DEFAULTS`:
 
 | Variant | Sensors / features | Use |
 |---|---|---|
-| `band-bench` | `band-core` + the USB factory shell | **G1 configuration and bringup**. This is the image the tester flashes. |
+| `band-bench` | `band-core` + the USB factory shell, IMU at 0x68 (AD0 low) | **G1 configuration and bringup**. This is the image the tester flashes. |
+| `band-bench-ad0` | `band-bench` + `CONFIG_SYNAPSE_IMU_I2C_ADDR=0x69` (AD0 high) | Same rig with the IMU breakout wired for 0x69; flash this instead of editing Kconfig. |
 | `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS/TMP117/FIT/provisioning/OTA | Offline smoke-kit profile; no factory writes. |
 | `band-full` (default) | Everything: + GPS MAX-M10S, + TMP117, + FIT writer, + provisioning | Integration profile. OTA is still a stub (`synapse_ota.c`). |
 | `band-full` + `sdkconfig.rr` | `band-full` with `CONFIG_SYNAPSE_RR_ENABLE=y` | PPG RMSSD experiment; kept off by default (5x ECG). Built by the `firmware-band` CI step with an extra sdkconfig overlay; **not** a `--variant` choice (see below). |
 | `band-product` | Factory mode off and the raw research service unregistered | Commercial image; not used for G1 evidence. |
 
 > **Flash-selectable variants:** `scripts/build_and_flash_firmware.py` accepts
-> only `band-core`, `band-bench`, `band-full` and `band-product`
+> only `band-core`, `band-bench`, `band-bench-ad0`, `band-full` and `band-product`
 > (`FirmwareBuilder.VARIANT_DEFAULTS`). There is no `--variant band-full+RR`:
 > the RR configuration exists only as the CI overlay build shown above. Do not
 > type `band-full+RR` into the flash script.
@@ -137,6 +138,13 @@ The Band firmware has five build profiles, selected with `SDKCONFIG_DEFAULTS`:
 ```powershell
 # band-bench (G1 configuration image)
 $env:SDKCONFIG_DEFAULTS = "sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults"
+idf.py set-target esp32s3
+idf.py build
+```
+
+```powershell
+# band-bench-ad0 (ICM-20948 AD0 high, 0x69)
+$env:SDKCONFIG_DEFAULTS = "sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults.ad0;sdkconfig.defaults"
 idf.py set-target esp32s3
 idf.py build
 ```

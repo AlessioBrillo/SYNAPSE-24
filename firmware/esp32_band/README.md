@@ -32,21 +32,33 @@ idf.py build
 idf.py -p COM3 flash monitor
 ```
 
-Requires: ESP-IDF 5.2+, ESP32-S3 with 8MB PSRAM (TFLM arena 64KB).
+Requires: **ESP-IDF v5.5.5 (pinned in CI)**, ESP32-S3 **N8R8** with 8 MB PSRAM
+(TFLM arena). See `docs/hardware/ESP-IDF_SETUP.md`; delete a stale `sdkconfig`
+before switching profile, or Kconfig defaults (gain, PSRAM, MTU) will not apply.
+
+The canonical build profiles are `band-full`, `band-core`, `band-bench`
+(smoke kit + USB factory shell), `band-bench-ad0` (the same bench image with
+the ICM-20948 AD0 high, 0x69), `band-full+RR` and `band-product`. CI builds all
+six; `docs/hardware/BRINGUP_SOP.md` uses `band-bench` or `band-bench-ad0`.
 
 ## BLE GATT
 
 - Standard: Heart Rate (0x180D), Battery (0x180F), Device Info (0x180A)
-- Custom Synapse service (128-bit): feature stream (notify, 26B), device config (R/W), provisioning (W/N)
-- Contract UUIDs: `contracts/gatt_v1.json` (frozen v1)
+- Consumer v2 (contract 2.3): feature stream (notify, 27 B), status, stream
+  metadata, control point; device config (encrypted write, W/R)
+- Research service: raw ECG/PPG/IMU/POWER + SYNC, six notify characteristics.
+  It is compiled in every profile but registered **only outside `band-product`**.
+- Contract UUIDs: `contracts/gatt_v2.json` (generated); `gatt_v1.json` is a
+  frozen historical record, no longer registered by the firmware.
 
 ## FIT
 
-Sessions stored on SPIFFS `session_<utc>.fit`, developer fields:
+On-device FIT recording is compiled only in `band-full` (the G1 `band-core` and
+`band-bench` rigs stream raw data over BLE and record XDF on the host).
+Sessions are stored on SPIFFS `session_<utc>.fit`, developer fields:
 `synapse_stress`, `synapse_sqi`, `synapse_map`, `synapse_ecg_quality`,
 `synapse_sleep_stage`, `synapse_rmssd`, `synapse_sdnn`, `synapse_lf_hf`.
-Note: on-device session start (FSM + FIT write) is not yet wired into `app_main`;
-see `docs/increments/DEVICE_LOOP_V1.md` PR1.
+`band-product` disables the raw research service and the factory shell.
 
 ## References
 

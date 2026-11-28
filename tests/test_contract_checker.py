@@ -127,6 +127,32 @@ def test_reserved_i2c_pins_are_rejected(hw: dict) -> None:
     assert any("reserved 21-25" in f for f in report.failures)
 
 
+def test_every_allowed_imu_address_needs_a_firmware_profile(hw: dict) -> None:
+    """0x69 must be flashed as a variant, never edited into Kconfig on the bench."""
+
+    def mutate(pod: dict) -> dict:
+        imu = {**pod["metadata"]["imu_config"], "allowed_i2c_addrs": [0x68, 0x6A]}
+        return {**pod, "metadata": {**pod["metadata"], "imu_config": imu}}
+
+    report = cc.Report()
+    cc.check_sensor_config(_edit_forearm(hw, mutate), report)
+    assert any("no firmware build profile" in f for f in report.failures)
+
+
+def test_imu_address_outside_the_declared_set_is_rejected(hw: dict) -> None:
+    def mutate(pod: dict) -> dict:
+        imu = {
+            **pod["metadata"]["imu_config"],
+            "i2c_addr": 0x69,
+            "allowed_i2c_addrs": [0x68],
+        }
+        return {**pod, "metadata": {**pod["metadata"], "imu_config": imu}}
+
+    report = cc.Report()
+    cc.check_sensor_config(_edit_forearm(hw, mutate), report)
+    assert any("not declared in imu_config.allowed_i2c_addrs" in f for f in report.failures)
+
+
 def test_research_and_consumer_services_must_differ(hw: dict) -> None:
     report = cc.Report()
     cc.check_research_service_uuids(hw, report)

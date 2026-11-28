@@ -209,8 +209,23 @@ row then says so instead of inventing a number.
 If the PPG or the IMU fails to initialise, the boot log also lists who *does* answer on the I²C
 bus (`I2C scan: 0x57 answers (MAX30102)` …). That separates the causes that used to look alike:
 `nobody answers` is power, wiring or pull-ups; a part answering at another address is an address
-setting (`CONFIG_SYNAPSE_PPG_I2C_ADDR`, the ICM-20948 AD0 pin: 0x68 or 0x69); the right address
-answering with a failed init is the part itself.
+setting (the ICM-20948 AD0 pin: 0x68 or 0x69); the right address answering with a failed init is
+the part itself.
+
+**AD0 tied high (0x69).** Do not edit Kconfig or `hardware.yaml` on the bench.
+Flash the precompiled `band-bench-ad0` image instead:
+
+```bash
+uv run python scripts/build_and_flash_firmware.py --variant band-bench-ad0 \
+    --port COM3 --clean --monitor
+```
+
+`config/hardware.yaml` declares both addresses in `imu_config.allowed_i2c_addrs`
+and `tools/check_contract.py` verifies that a firmware build profile exists for
+each one. The boot log must print `SYNAPSE_ID` **and** the I²C line showing
+`0x69 answers (ICM-20948)`; a `0x68` boot log on an AD0-high breakout means the
+wrong image was flashed. The address is wiring, not calibration: it is not part
+of the per-unit NVS record.
 
 The **factory test** is the whole check of an assembled band in one run. It is
 already enabled by the `band-bench` image (`CONFIG_SYNAPSE_FACTORY_MODE`; it is
@@ -273,6 +288,9 @@ uv run python scripts/validate_phase1_entry.py --live-hardware \
     --config config/hardware_bringup.yaml --duration 60
 # Hand-measured rows belong to the same run and need a verifier:
 #   ... --bench-values data/bench/values.json --verified-by "<maintainer>"
+# Human references (stopwatch HR, reference R-peaks) live in an untracked
+# per-session overlay, never in the tracked config:
+#   ... --session-overrides data/sessions/2026-11-26/session_overrides.yaml
 ```
 
 The validator must report, in this order:
@@ -303,6 +321,23 @@ quality are N/A until a second pod and the Cerelog are actually connected.
 Step 5 is the one people skip. A recording with a hole is worse than a
 recording that stopped, because the hole is silent. `ResearchStreamDecoder`
 counts it; do not override it.
+
+**Per-session references (`--session-overrides`).** Rows 2 and 3 above need a
+stopwatch count and a reference `.npz`. They are hand measurements, so they
+must not be edited into the tracked `config/hardware_bringup.yaml`. Put them in
+`data/sessions/<date>/session_overrides.yaml` (gitignored) instead:
+
+```yaml
+validation:
+  manual_hr_bpm: 68
+  ground_truth_ecg_path: r_peaks.npz   # relative to this file
+  verified_by: "A. Brillo"
+```
+
+`manual_hr_bpm` requires `verified_by`; a missing reference file still fails
+the gate. Only those three keys are accepted — an overlay that tries to change
+a rate, a pin, a gate list or the contract is refused, not merged. The verifier
+is copied into the gate report and the append-only history.
 
 ### 3a. Staged stream subscription (BLE budget triage)
 

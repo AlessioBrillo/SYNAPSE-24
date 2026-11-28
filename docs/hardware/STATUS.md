@@ -4,9 +4,13 @@ This file is the authoritative status of the project. README, Roadmap,
 AGENTS.md, CONTRIBUTING.md and the compliance documents point here instead of
 keeping their own copy. If a number below changes, change it here first.
 
-**Latest increment:** MVP-2.10 (real-device onboarding truth). **Last gate:** see
-`docs/increments/MVP2_10_DEVICE_ONBOARDING_TRUTH.md` for the exact command
-sequence and result. The previous increment (MVP-2.9, first-device readiness hardening)
+**Latest increment:** MVP-2.12 (IMU address as a build variant). **Last gate:** see
+`docs/increments/MVP2_12_IMU_ADDRESS_VARIANT.md` and
+`docs/increments/MVP2_11_HOST_ONBOARDING_FIXES.md` for the exact command sequence
+and result. MVP-2.11 (host onboarding fixes) is recorded in
+`docs/increments/MVP2_11_HOST_ONBOARDING_FIXES.md`; MVP-2.10 (real-device onboarding
+truth) in `docs/increments/MVP2_10_DEVICE_ONBOARDING_TRUTH.md`.
+The previous increment (MVP-2.9, first-device readiness hardening)
 is recorded in `docs/increments/MVP2_9_DEVICE_READY_HARDENING.md`;
 MVP-2.8 (hardware readiness fixes)
 is recorded in `docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md`; MVP-2.7
@@ -36,13 +40,20 @@ MVP-2.6 (readiness governance) is recorded in
   the factory shell enabled; the product image does **not** register the raw
   research service.
 - Host path: raw-frame parity, research service, XDF/FIT conformance, SDK and
-  backend suites; C host gate with zero skips (Linux replay of all 12 modules).
+  backend suites; C host gate with zero skips (Linux replay of all 13 modules).
 - Per-unit calibration is bound to the DIS serial, versioned (v3) and
   records instrument, firmware, uncertainty and noise. The flashed-config gate
   now compares the *physical* IMU ODR read back by the band with the contract,
   and the manifest names `band-bench`, the only image with factory writes.
 - Gate evidence is fail-closed: a short soak, a dry run, an all-skipped Phase-0
   gate and a crashed run can no longer produce a green G1 verdict.
+- Human HR/RMSSD references come from an allowlisted, untracked per-session
+  overlay (`--session-overrides`); a first USB calibration cannot create a
+  record the BLE path is forbidden to edit; the FIT export reads the session's
+  own UTC/LSL anchor (canonical `lsl_t0_s`, with an alias for old reports).
+- Both ICM-20948 AD0 addresses are build profiles (`band-bench` 0x68,
+  `band-bench-ad0` 0x69), CI-built and contract-enforced; no bench operator
+  edits Kconfig.
 
 ## What is not proven
 

@@ -370,7 +370,7 @@ class LiveTier0Validator:
                     self.config.ecg_stream_name,
                     "ECG_T0",
                     ["ECG"],
-                    ["µV"],
+                    ["uV"],
                     self._get_ecg_fs(),
                 ),
                 (

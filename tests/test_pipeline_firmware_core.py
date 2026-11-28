@@ -1,4 +1,4 @@
-"""The Woodpecker `firmware-band` step must build two different firmwares.
+"""The Woodpecker `firmware-band` step must build three core-derived firmwares.
 
 The audit found the second build was a copy of the first: the variable was spelled
 ``SDKCONFIG_DEFAULT`` (ESP-IDF reads ``SDKCONFIG_DEFAULTS``), and ``idf.py fullclean`` leaves
@@ -25,13 +25,32 @@ def _commands() -> list[str]:
 def test_the_core_build_uses_the_variable_esp_idf_reads() -> None:
     commands = _commands()
     core = [c for c in commands if "sdkconfig.defaults.core" in c and "idf.py build" in c]
-    assert len(core) == 2, "the core and the bench (core + factory shell) profiles"
+    assert len(core) == 3, "core, bench (core + factory shell) and bench-ad0 (IMU at 0x69)"
     assert any(
         c.strip().startswith('SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults"')
         for c in core
     )
     assert any("sdkconfig.defaults.bench" in c for c in core)
+    assert any("sdkconfig.defaults.ad0" in c for c in core)
     assert not any("SDKCONFIG_DEFAULT=" in c for c in commands), "the misspelt variable is back"
+
+
+def test_ad0_variant_is_flashable() -> None:
+    from scripts.build_and_flash_firmware import FirmwareBuilder
+
+    defaults = FirmwareBuilder.VARIANT_DEFAULTS["band-bench-ad0"]
+    assert "sdkconfig.defaults.core" in defaults
+    assert "sdkconfig.defaults.bench" in defaults
+    assert "sdkconfig.defaults.ad0" in defaults
+
+
+def test_ad0_build_proves_the_address_and_the_variant() -> None:
+    commands = _commands()
+    ad0 = next(c for c in commands if "sdkconfig.defaults.ad0" in c)
+    assert "idf.py build" in ad0
+    assert any("CONFIG_SYNAPSE_IMU_I2C_ADDR=0x69" in c for c in commands)
+    assert any("band-bench-ad0" in c for c in commands if "CONFIG_SYNAPSE_BUILD_VARIANT" in c)
+    assert any("CONFIG_SYNAPSE_FACTORY_MODE=y" in c for c in commands)
 
 
 def test_sdkconfig_is_removed_before_the_core_build() -> None:

@@ -451,11 +451,14 @@ def test_the_factory_mode_is_off_everywhere_it_could_be_forced_on() -> None:
     assert "default n" in block.group(1)
     for defaults in BAND.glob("sdkconfig.defaults*"):
         text = _text(defaults)
-        if defaults.name == "sdkconfig.defaults.bench":
-            # The only profile allowed to enable the factory shell: a bench
-            # image, never a product or default image.
+        if defaults.name in ("sdkconfig.defaults.bench", "sdkconfig.defaults.ad0"):
+            # Only bench images may enable the factory shell; the AD0 variant
+            # is the same bench image with the IMU at 0x69, not a product image.
+            variant = (
+                "band-bench-ad0" if defaults.name == "sdkconfig.defaults.ad0" else "band-bench"
+            )
             assert "CONFIG_SYNAPSE_FACTORY_MODE=y" in text
-            assert 'CONFIG_SYNAPSE_BUILD_VARIANT="band-bench"' in text
+            assert f'CONFIG_SYNAPSE_BUILD_VARIANT="{variant}"' in text
             continue
         assert "CONFIG_SYNAPSE_FACTORY_MODE=y" not in text, defaults.name
     main = _text(BAND / "main" / "app_main.c")

@@ -83,7 +83,10 @@ def _find_float(node: Any, keys: tuple[str, ...], depth: int = 0) -> float | Non
 
 
 _UTC_KEYS = ("utc0_s", "utc0", "utc_epoch_s")
-_LSL_KEYS = ("lsl_t0_s", "lsl_start_s", "lsl_time_at_start_s")
+# `lsl0_s` is the name the phase-1 validator wrote before the anchor was
+# canonicalised. Gate reports are append-only evidence, so old sessions must
+# stay exportable; new reports use `lsl_t0_s`.
+_LSL_KEYS = ("lsl_t0_s", "lsl0_s", "lsl_start_s", "lsl_time_at_start_s")
 
 
 @dataclass(frozen=True)
@@ -460,7 +463,10 @@ def main(argv: list[str] | None = None) -> int:
         "--session-metadata",
         type=Path,
         default=None,
-        help="Gate report / session metadata JSON carrying utc0_s and optionally lsl_t0_s.",
+        help=(
+            "Gate report / session metadata JSON carrying utc0_s and optionally "
+            "lsl_t0_s (older reports use lsl0_s, which is also accepted)."
+        ),
     )
     parser.add_argument(
         "--lsl-t0-s",

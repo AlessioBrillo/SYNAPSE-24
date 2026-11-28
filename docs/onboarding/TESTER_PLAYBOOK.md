@@ -118,7 +118,7 @@ La regola è: **si misura, si scrive nel record, si verifica che la banda legga 
 
 ```powershell
 # 1. Scrittura USB: crea il record host con provenance completa (prima di ogni scrittura BLE)
-uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/live_validation/gain.json --led 1F,1F --operator "A. Brillo" --instrument "GEN-42" --fw "band-bench@<hash>" --uncertainty 2 --battery 1000 --reboot
+uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/live_validation/gain.json --led 1F,1F --operator "A. Brillo" --instrument "GEN-42" --fw "v1.0.0" --uncertainty 2 --battery 1000 --reboot
 ```
 
 **Prima di scrivere via BLE, associa la banda nel sistema operativo** (impostazioni Bluetooth del PC → "Pair"/"Aggiungi dispositivo"). La characteristic del device-config è marcata `WRITE_ENC`: senza pairing il client BLE non può scriverla. Il firmware usa Just Works (`sm_mitm = 0`) e **nessun bonding** (`sm_bonding = 0`, nessun key store): l'associazione vale per quella connessione, quindi ripetila su ogni host o adapter che scrive il profilo. Protegge da un ascoltatore passivo, ma non è protezione MITM: non descrivere questa configurazione come una postura di sicurezza definitiva (vedi `../../compliance/PRIVACY.md`).
@@ -161,8 +161,10 @@ Nota: l'XDF ECG scritto dal validatore è ora in **µV**, coerente con `g1_measu
 4. Scrivila nel record:
 
 ```powershell
-uv run python scripts/factory_calibrate.py --port COM3 --led 1F,1F --operator "Il tuo nome"
+uv run python scripts/factory_calibrate.py --port COM3 --led 1F,1F --operator "Il tuo nome" --instrument "GEN-42" --fw "v1.0.0" --uncertainty 5 --battery 1000 --reboot
 ```
+
+**Importante:** il primo record deve avere **provenance completa** (operatore, strumento, versione firmware, incertezza, capacità della cella). Il comando la rifiuta se manca anche solo un campo: il firmware infatti permette le scritture BLE solo su un record calibrato via USB con provenance completa (`cal_has_provenance()`). Dopo il primo record, le sole coppie LED possono essere aggiornate anche con `--led` da solo.
 
 **Criterio:** la misura con la corrente scelta deve restare stabile per almeno 30 secondi consecutivi.
 
@@ -182,7 +184,7 @@ Ogni volta che salvi, ricontrolla:
 uv run python scripts/factory_calibrate.py --port COM3 --dump
 ```
 
-**Criterio:** seriale corretto (derivato dal MAC, non scritto a mano), data, operatore, strumento (`--instrument`), versione firmware (`--fw`), incertezza del gain (`--uncertainty 5` = ±5 %), rumore ECG (`--noise-uv`) e capacità reale della cella (`--battery 1000`). Il file finisce in `data/calibration/<seriale>.json`, fuori da Git. La capacità deve corrispondere a `hardware_bringup.yaml`: se la cella è diversa, il gate di configurazione va in FAIL, non va "aggiustato" il contratto a mano.
+**Criterio:** seriale corretto (derivato dal MAC, non scritto a mano), data, operatore, strumento (`--instrument`), versione firmware (`--fw`, **max 16 caratteri**: la banda ha un buffer fisso e tronca senza avvisare), incertezza del gain (`--uncertainty 5` = ±5 %), rumore ECG (`--noise-uv`) e capacità reale della cella (`--battery 1000`). Provenance e capacità sono campi diversi: `cal_has_provenance()` del firmware richiede seriale, data, operatore, strumento, versione firmware e incertezza; la capacità è un dato per-unità del record ma non fa parte di quella verifica. Il file finisce in `data/calibration/<seriale>.json`, fuori da Git. La capacità deve corrispondere a `hardware_bringup.yaml`: se la cella è diversa, il gate di configurazione va in FAIL, non va "aggiustato" il contratto a mano.
 
 ---
 
@@ -194,7 +196,7 @@ Ogni test ha un ID. Quando lo esegui, salva l'esito in `evidence/<ID>.json`. T05
 |---|---|---|---|
 | T01 | Controllo kit | `bench_suite.py incoming --verified-by "nome verificatore"` + tabella del paragrafo 2 | Tutte le righe OK, **cinque righe manuali verificate con `--verified-by`** (senza verificatore T01 è FAIL) |
 | T02 | Identità e record | `bench_suite.py factory --port COM3 --address AA:BB:CC:DD:EE:FF` | Seriale `SYN-` + 12 hex, uguale al log **e alla characteristic DIS `2A25` letta via BLE** |
-| T03 | I²C scan | `bench_suite.py sensors --port COM3 --log boot.log` | **Log fresco** con righe `answers` per 0x57, **0x68 o 0x69** (IMU, AD0 basso/alto), 0x40 |
+| T03 | I²C scan | `bench_suite.py sensors --port COM3 --log boot.log` | **Log fresco** con righe `answers` per 0x57, **0x68 o 0x69** (IMU, AD0 basso/alto), 0x40; la variante flashata deve essere coerente con l'indirizzo (`band-bench` → 0x68, `band-bench-ad0` → 0x69) |
 | T04 | Configurazione flashed | `validate_phase1_entry.py --live-hardware …` | Ogni campo uguale al contratto; un campo mancante è FAIL |
 | T05 | Streaming 60 s | `bench_suite.py stream --live --manifest <bench.json>` | Report fresco, zero frame persi, XDF valido; se passi `--bench-values`, serve anche `--verified-by` |
 | T06 | Qualità PPG | Stesso run | SQI ≥ 0,3 e MAP ≤ 0,5 per oltre 30 s |
@@ -227,12 +229,22 @@ Le cinque righe manuali di T01 e le righe misurate a mano (T07, T09, `--bench-va
 ```
 
    Il `subject_id` è sempre un codice `S###`: **nessun nome vero nei dati**, né qui, né in `source_id`, né nelle issue.
+   Per T07/T08 prepara anche l'overlay di sessione (fuori da Git, `data/sessions/<data>/session_overrides.yaml`):
+
+   ```yaml
+   validation:
+     manual_hr_bpm: 68        # conteggio del polso, firmato
+     ground_truth_ecg_path: r_peaks.npz   # percorso relativo a questo file
+     verified_by: "nome verificatore"
+   ```
+
+   Non modificare `config/hardware_bringup.yaml`: è tracciato da Git e il tuo ruolo non lo consente. L'overlay accetta **solo** queste tre chiavi; un tentativo di cambiare rate, pin o gate viene rifiutato.
 3. Collega gli elettrodi: RA vicino al gomito, LA vicino al polso, RL su una parte ossea. Pelle pulita e asciutta.
 4. **Stacca l'USB.**
 5. Avvia:
 
 ```powershell
-uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<data>/manifest.json --config config/hardware_bringup.yaml --duration 60
+uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<data>/manifest.json --config config/hardware_bringup.yaml --duration 60 --session-overrides data/sessions/<data>/session_overrides.yaml
 ```
 
 6. Alla fine controlla:

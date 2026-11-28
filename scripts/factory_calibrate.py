@@ -39,6 +39,73 @@ TEXT_FIELDS = {
     "fw": "fw_version",
     "date": "date",
 }
+# Must match synapse_calibration.h (SYNAPSE_CAL_*_MAX). A value longer than
+# these is truncated by the firmware's fixed-size buffers, so validate here
+# rather than let the host record claim more provenance than the band stored.
+TEXT_LIMITS = {"operator": 16, "instrument": 24, "fw": 16, "date": 16}
+
+# Mirrors cal_has_provenance() in firmware/esp32_band/ble/ble_gatt_server.c:
+# a BLE client may edit only a USB-calibrated record that already carries its
+# measurement provenance. The host must refuse to *create* one without it,
+# otherwise the band would reject every later per-unit configuration.
+PROVENANCE_DUMP_KEYS = (
+    "serial",
+    "date",
+    "operator",
+    "instrument",
+    "fw_version",
+    "gain_uncertainty_pct_x100",
+)
+
+
+def missing_provenance(record: dict[str, object]) -> list[str]:
+    """Fields a record needs before the firmware lets a BLE client edit it."""
+    missing: list[str] = []
+    for key in PROVENANCE_DUMP_KEYS:
+        value = record.get(key)
+        if value is None:
+            missing.append(key)
+        elif isinstance(value, int) and value == 0:
+            # gain_uncertainty_pct_x100 = 0 means "not measured".
+            missing.append(key)
+        elif isinstance(value, str) and value == "":
+            # Mirror cal_has_provenance(): a non-empty first byte is enough;
+            # "0" is a legitimate (if odd) operator id and must not be refused.
+            missing.append(key)
+    return missing
+
+
+def require_writable_provenance(transport: Transport, commands: list[str]) -> None:
+    """Refuse to create a record the BLE path would be forbidden to edit later.
+
+    Replay the pending writes on a fake copy of the band's current record and
+    check the result against the firmware's provenance rule. An already
+    fully-provenanced band may still be edited with a single value (e.g. a new
+    LED pair), so only a partial *result* is refused.
+    """
+    current = parse_dump(transport.send("cal dump"))
+    if not missing_provenance(current):
+        return
+    simulated = FakeTransport(record=dict(current))
+    for command in commands:
+        reply = simulated.send(command)
+        if reply.startswith("ERR"):
+            raise ValueError(f"factory command refused: {command}: {reply}")
+    missing = missing_provenance(parse_dump(simulated.send("cal dump")))
+    if missing:
+        raise ValueError(
+            "a first calibration write needs complete provenance "
+            f"(missing: {', '.join(missing)}); pass --instrument, --fw, "
+            "--uncertainty and --operator"
+        )
+
+
+def check_text_field(key: str, value: str) -> str:
+    """Reject a provenance value the firmware cannot store verbatim."""
+    limit = TEXT_LIMITS[key]
+    if len(value) > limit:
+        raise ValueError(f"{key} must be at most {limit} characters, got {len(value)}")
+    return value
 
 
 def shell_quote(value: str) -> str:
@@ -268,13 +335,21 @@ def build_commands(args: argparse.Namespace) -> list[str]:  # noqa: PLR0915 - fl
         commands.append("cal accel_bias " + " ".join(str(int(v)) for v in accel))
         commands.append("cal gyro_bias " + " ".join(str(int(v)) for v in gyro))
     if args.instrument:
-        commands.append(f"cal instrument {shell_quote(args.instrument)}")
+        commands.append(
+            f"cal instrument {shell_quote(check_text_field('instrument', args.instrument))}"
+        )
     if args.fw:
-        commands.append(f"cal fw {shell_quote(args.fw)}")
+        commands.append(f"cal fw {shell_quote(check_text_field('fw', args.fw))}")
     if args.uncertainty is not None:
-        commands.append(f"cal uncertainty {int(round(float(args.uncertainty) * 100))}")
+        x100 = int(round(float(args.uncertainty) * 100))
+        if not 0 <= x100 <= 10_000:  # firmware stores it as uint16_t
+            raise ValueError(f"uncertainty must be 0..100 %, got {args.uncertainty}")
+        commands.append(f"cal uncertainty {x100}")
     if args.noise_uv is not None:
-        commands.append(f"cal noise {int(round(float(args.noise_uv) * 10))}")
+        x10 = int(round(float(args.noise_uv) * 10))
+        if not -32768 <= x10 <= 32767:  # firmware stores it as int16_t
+            raise ValueError(f"noise must be within -3276.8..3276.7 uV, got {args.noise_uv}")
+        commands.append(f"cal noise {x10}")
     battery = getattr(args, "battery", None)
     if battery is not None:
         # Same bounds as the BLE whitelist and device_profile.py: the USB shell
@@ -283,11 +358,11 @@ def build_commands(args: argparse.Namespace) -> list[str]:  # noqa: PLR0915 - fl
             raise ValueError(f"battery must be 100..10000 mAh, got {battery}")
         commands.append(f"cal battery {int(battery)}")
     if args.date:
-        commands.append(f"cal date {shell_quote(args.date)}")
+        commands.append(f"cal date {shell_quote(check_text_field('date', args.date))}")
     elif not args.dry_run:
         commands.append(f"cal date {shell_quote(datetime.now(UTC).date().isoformat())}")
     if args.operator:
-        commands.append(f"cal operator {shell_quote(args.operator)}")
+        commands.append(f"cal operator {shell_quote(check_text_field('operator', args.operator))}")
     if commands:
         commands.append("cal save")
     commands.append("cal dump")
@@ -354,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915 - CLI argument 
         commands = (
             ["cal dump"] if args.dump else ["cal erase"] if args.erase else build_commands(args)
         )
+        if commands and not (args.dump or args.erase or args.dry_run):
+            require_writable_provenance(transport, commands)
         reply = ""
         for command in commands:
             reply = transport.send(command)

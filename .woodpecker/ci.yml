@@ -63,7 +63,7 @@ steps:
       # skip reason before failing.
       - uv run --no-sync python scripts/host_c_gate.py
       # Host-side test of the compiled per-unit configuration JSON parser.
-      # Same fail-on-skip rule as the 12-module host-C step above.
+      # Same fail-on-skip rule as the 13-module host-C step above.
       - uv run --no-sync python scripts/host_c_gate.py --group parser
 
   - name: firmware-band
@@ -87,6 +87,14 @@ steps:
       - SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults" idf.py build
       - grep -q "^CONFIG_SYNAPSE_FACTORY_MODE=y" sdkconfig
       - grep -q "^# CONFIG_SYNAPSE_FEATURE_PROVISIONING is not set" sdkconfig
+      # ICM-20948 with AD0 tied high (0x69): the smoke kit must be flashable
+      # with either address without editing Kconfig on the bench.
+      - idf.py fullclean
+      - rm -f sdkconfig
+      - SDKCONFIG_DEFAULTS="sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults.ad0;sdkconfig.defaults" idf.py build
+      - grep -q "^CONFIG_SYNAPSE_IMU_I2C_ADDR=0x69" sdkconfig
+      - grep -q "^CONFIG_SYNAPSE_BUILD_VARIANT=\"band-bench-ad0\"" sdkconfig
+      - grep -q "^CONFIG_SYNAPSE_FACTORY_MODE=y" sdkconfig
       # band-full with the RR feature on: the code behind the flag must keep compiling while it is off
       - idf.py fullclean
       - rm -f sdkconfig

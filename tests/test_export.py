@@ -68,6 +68,28 @@ def test_time_anchor_reads_nested_gate_report() -> None:
     assert anchor == TimeAnchor(utc0_s=UTC0, lsl_t0_s=LSL_T0)
 
 
+def test_legacy_lsl0_s_report_is_still_exportable() -> None:
+    """Gate reports are append-only: a session written before the rename must export."""
+    anchor = TimeAnchor.from_mapping({"utc0_s": UTC0, "lsl0_s": LSL_T0})
+    assert anchor == TimeAnchor(utc0_s=UTC0, lsl_t0_s=LSL_T0)
+
+
+def test_legacy_lsl0_s_anchor_dates_the_fit(tmp_path: Path) -> None:
+    xdf = tmp_path / "legacy.xdf"
+    out = tmp_path / "legacy.fit"
+    first_sample_lsl = LSL_T0 + 5.0
+    _write_ecg_xdf(xdf, first_sample_lsl)
+
+    export_session_fit(
+        xdf,
+        out,
+        "SYN-000123",
+        window_s=30.0,
+        session_metadata={"utc0_s": UTC0, "lsl0_s": LSL_T0},
+    )
+    assert _first_record_time(out).timestamp() == pytest.approx(UTC0 + 5.0, abs=2.0)
+
+
 def test_session_metadata_anchor_dates_the_fit_without_a_flag(tmp_path: Path) -> None:
     xdf = tmp_path / "session.xdf"
     out = tmp_path / "session.fit"
