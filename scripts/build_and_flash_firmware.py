@@ -72,12 +72,12 @@ class FirmwareBuilder:
         firmware_dir: Path,
         build_dir: Path | None = None,
         target: str = "esp32s3",
-        build_variant: str = "band-core",
+        build_variant: str = "band-bench",
     ) -> None:
         self.firmware_dir = Path(firmware_dir).resolve()
         self.build_dir = Path(build_dir).resolve() if build_dir else self.firmware_dir / "build"
         self.target = target
-        # "band-core" builds the smoke-kit rig (ECG+PPG+IMU); "band-full" adds
+        # "band-bench" builds the smoke-kit rig with the factory shell; "band-full" adds
         # GPS, temperature, FIT, provisioning and OTA. See
         # docs/hardware/ESP-IDF_SETUP.md.
         self.build_variant = build_variant
@@ -396,7 +396,7 @@ def main() -> int:
         "--variant",
         default=None,
         choices=sorted(FirmwareBuilder.VARIANT_DEFAULTS),
-        help="Build variant (default: bringup config, normally band-core)",
+        help="Build variant (default: bringup config, normally band-bench)",
     )
     parser.add_argument("--target", default="esp32s3", help="Target chip")
     parser.add_argument("--port", help="Serial port (default: bringup config / COM3)")
@@ -417,7 +417,7 @@ def main() -> int:
     bringup = yaml.safe_load(
         (ROOT / "config" / "hardware_bringup.yaml").read_text(encoding="utf-8")
     )["bringup"]["firmware"]
-    variant = args.variant or bringup.get("build_variant", "band-core")
+    variant = args.variant or bringup.get("build_variant", "band-bench")
     port = args.port or os.environ.get("SYNAPSE_FOREARM_SERIAL") or bringup.get("port") or "COM3"
     port = re.sub(r"\$\{[^}]*:-?([^}]*)\}", r"\1", str(port)) or "COM3"
     baud = args.baud or int(bringup.get("baud", 921600))

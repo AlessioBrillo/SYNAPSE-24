@@ -7,9 +7,10 @@ that must not wait for hardware. This compiles
 ``firmware/esp32_band/sensors/ina219.c`` against a simulated I²C bus with
 ``-Wall -Wextra -Werror`` and drives it through a LiPo operating point.
 
-Skips are impossible: a missing compiler fails the gate (see
-``tests/firmware_host``), because a compile gate that skips is a gate that
-cannot fail.
+A missing compiler fails the build (see ``tests/firmware_host``); the only
+skip is an OS policy that refuses to load the freshly built DLL (Windows
+Application Control). Such a skip is not a pass: replay this module in the
+gate's Linux container, where zero skips are expected.
 """
 
 from __future__ import annotations
@@ -74,14 +75,18 @@ class TestIna219HostGate:
 
     def test_smoke_main_passes(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         rc = lib.ina_host_smoke_main()
         assert rc == 0, f"INA219 host smoke returned {rc}"
 
     def test_lipo_operating_point_is_exact(self, lib) -> None:
         """3.7 V, 100 mA, 0.1 Ω shunt -> 0.37 W within the LSB resolution."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(0x02, 925 << 3)  # bus voltage, 4 mV/LSB
         lib.ina_host_set_register(0x01, 1000)  # shunt, 10 uV/LSB -> 10 mV
 
@@ -93,7 +98,9 @@ class TestIna219HostGate:
     def test_discharging_is_negative(self, lib) -> None:
         """A shunt voltage of the other sign must read as negative current."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(0x02, 1050 << 3)  # 4.2 V, charging
         lib.ina_host_set_register(0x01, ctypes.c_int16(-500).value & 0xFFFF)  # -5 mV
         data = _read(lib)
@@ -103,7 +110,9 @@ class TestIna219HostGate:
     def test_i2c_failure_is_reported_not_swallowed(self, lib) -> None:
         """A bus error must surface as an error, never as a plausible value."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_read_error(0x107)  # ESP_ERR_TIMEOUT
         rc = _read_once(lib)
         assert rc != 0, "a failed I2C read must not return ESP_OK"
@@ -111,14 +120,18 @@ class TestIna219HostGate:
     def test_wiring_check_passes(self, lib) -> None:
         """The power→research-service wiring must compile and behave."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_wiring_smoke.restype = ctypes.c_int
         rc = lib.ina_host_wiring_smoke()
         assert rc == 0, f"ina_host_wiring_smoke returned {rc}"
 
     def test_stats_track_reads_and_errors(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(0x02, 925 << 3)
         lib.ina_host_set_register(0x01, 1000)
         _read_once(lib)
@@ -147,18 +160,24 @@ class TestIna219BusOwnership:
 
     def test_an_initialised_monitor_holds_exactly_one_reference(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         assert lib.ina_host_bus_refs() == 1
 
     def test_deinit_gives_the_reference_back(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_deinit()
         assert lib.ina_host_bus_refs() == 0
 
     def test_a_bus_that_is_not_available_fails_the_init_and_holds_nothing(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_bus_failure(self.ESP_ERR_INVALID_STATE)
         assert lib.ina_host_try_init() == self.ESP_ERR_INVALID_STATE
         assert lib.ina_host_bus_refs() == 0
@@ -167,7 +186,9 @@ class TestIna219BusOwnership:
     def test_a_monitor_that_does_not_answer_gives_the_bus_back(self, lib) -> None:
         """The init took a reference, then the first register read failed: it must be released."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_read_error(self.ESP_ERR_TIMEOUT)
         assert lib.ina_host_try_init() == self.ESP_ERR_TIMEOUT
         assert lib.ina_host_bus_refs() == 0
@@ -175,7 +196,9 @@ class TestIna219BusOwnership:
 
     def test_a_working_monitor_initialises_again_after_a_failure(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_bus_failure(self.ESP_ERR_INVALID_STATE)
         assert lib.ina_host_try_init() != 0
         lib.ina_host_set_bus_failure(0)
@@ -199,14 +222,18 @@ class TestIna219SelfTest:
 
     def test_a_freshly_initialised_monitor_passes(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         rc, detail = self._run(lib)
         assert rc == 0, detail
         assert "bus 3.70 V" in detail
 
     def test_a_config_register_that_lost_its_value_fails(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(self.CONFIG, 0x399F)  # the power-on default, not what init wrote
         rc, detail = self._run(lib)
         assert rc == self.ESP_FAIL
@@ -214,7 +241,9 @@ class TestIna219SelfTest:
 
     def test_a_calibration_register_that_lost_its_value_fails(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(self.CAL, 0)
         rc, detail = self._run(lib)
         assert rc == self.ESP_FAIL
@@ -223,7 +252,9 @@ class TestIna219SelfTest:
     def test_the_bits_that_do_not_hold_a_value_are_ignored(self, lib) -> None:
         """CONFIG bit 15 is the reset command, bit 14 is unused, CALIBRATION bit 0 reads 0."""
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_get_register.restype = ctypes.c_uint16
         lib.ina_host_set_register(self.CONFIG, lib.ina_host_get_register(self.CONFIG) ^ 0xC000)
         lib.ina_host_set_register(self.CAL, lib.ina_host_get_register(self.CAL) ^ 0x0001)
@@ -232,7 +263,9 @@ class TestIna219SelfTest:
 
     def test_a_rail_that_reads_zero_volts_fails(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_register(self.BUS_V, 0)
         rc, detail = self._run(lib)
         assert rc == self.ESP_FAIL
@@ -240,7 +273,9 @@ class TestIna219SelfTest:
 
     def test_a_bus_error_is_the_verdict_not_a_pass(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_set_read_error(self.ESP_ERR_TIMEOUT)
         rc, detail = self._run(lib)
         assert rc == self.ESP_ERR_TIMEOUT
@@ -248,7 +283,9 @@ class TestIna219SelfTest:
 
     def test_an_uninitialised_monitor_is_not_tested(self, lib) -> None:
         if lib is None:
-            pytest.skip("no C compiler available")
+            pytest.skip(
+                "host refused to load the freshly built DLL (usually Application Control); the C compile succeeded"
+            )
         lib.ina_host_deinit()
         rc, detail = self._run(lib)
         assert rc == self.ESP_ERR_INVALID_STATE

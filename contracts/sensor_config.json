@@ -3,7 +3,7 @@
     {
       "ble_address": "${SYNAPSE_FOREARM_BLE}",
       "board_type": "ESP32_BAND",
-      "build_variant": "band-core",
+      "build_variant": "band-bench",
       "channels": {
         "ecg": 1,
         "imu": 9,

@@ -16,29 +16,11 @@ GitHub Actions is not the gate. The single source of truth is `.woodpecker/ci.ym
 - **Real-signal chain (MVP-1.8):** `tests/test_real_signal_chain.py` (ECG MIT-BIH through the C raw-frame encoder, fixture `tests/fixtures/mitbih_ecg_30s.npz`) runs in the suite; it needs the host C codec like the other C host tests, so a "policy blocked" skip there is not a pass. `tests/test_real_ppg_chain.py` does the same for a real finger PPG (BIDMC fixture) through `synapse_rr.c`; the PPG RMSSD is ~5x the ECG's on record 02 with every detector tried (not a filter bug) and is pinned as a known limit, so `CONFIG_SYNAPSE_RR_ENABLE` stays off. `g1_measure.py` computes the SOP 4a bench numbers from the ECG stream (uV on the wire, not ADC counts); first day without hardware: `docs/hardware/FIRST_HARDWARE_DAY.md`. WESAD (wrist, in motion) was not run: `docs/increments/MVP1_8_REAL_SIGNAL.md`.
 - **TensorFlow is the `train` extra** (`uv sync --extra train`): a plain `uv sync --dev --frozen`, the gate and the Docker images do not install it (it was a core dependency, ~10k files and 2+ GB, used only by the triage training and quantisation). Every TensorFlow import is guarded, so the tests that need it skip without it; training and `quantize_and_deploy.py` need the extra.
 - **GitHub Actions** only holds a notice pointing here (`.github/workflows/ci.yml`); there is no second pipeline to keep aligned.
-- **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware-ci.yml matrix beyond the band, and the radio side of the virtual band (`scripts/virtual_band.py`, `check_phone_capture.py pull`: manual, see `docs/hardware/VIRTUAL_BAND_RUNBOOK.md`; their pure cores `virtual_band_core.py` and `check_phone_capture.py` are tested in the suite).
-- **Increment status:** the authoritative state is `docs/hardware/STATUS.md` (latest: MVP-2.7, `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`). Earlier increments: MVP-1.9 (`docs/increments/MVP1_9_PRE_HARDWARE_HARDENING.md`), MVP-2.1/2.2 (`docs/increments/MVP2_1_HARDWARE_READY.md`, `MVP2_2_G1_EVIDENCE_TRUTH.md`).
-- **Gate steps (2026-11-14):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`,
-  `generate_contracts --check` (the generated contract files do not drift from `config/hardware.yaml`),
-  `check_interfaces` (FIT developer fields, GATT UUIDs, worker payloads), `check_baseline_claim`,
-  phase1 dry-run, the format conformance
-  (`tests/test_format_conformance.py`: `fitdecode` reads the FIT files, `pyxdf` the XDF ones),
-  the full test suite with coverage over `src`, `worker` and `backend` (>= 80 %; the SDK is **not**
-  in this figure), the SDK suite with its own >= 80 % over `sdk/python`, the firmware host C gate
-  (raw-frame parity, research service, PPG SQI, BLE contract) and the `firmware-band` ESP-IDF
-  step (band-full, band-core, band-full with RR on, band-product). The fixture drift checks
-  (`make_band_fixtures`, `make_consumer_vectors`, `make_band_sidecars`) run inside the suite
-  (`tests/test_band_fixtures.py`, `tests/test_band_sidecars.py`).
-- **Firmware step (2026-11-26):** `firmware-band` builds band-full, then band-core (after `rm -f sdkconfig`, with `SDKCONFIG_DEFAULTS`), then band-full with `sdkconfig.rr` (RR feature on), and checks the produced `sdkconfig`. `run_gate_locally.sh` never runs it (it needs the ESP-IDF image and more memory than this host has); the GitHub `Firmware Build (ESP-IDF)` job builds the same four configurations too, since 2026-11-07 with a clean `sdkconfig` before band-full.
-- **Status:** first green run recorded on branch `feat/device-loop-v1` (commit `3bf5eef`).
-  The Python gate (ruff check/format, mypy, check_contract, check_baseline_claim,
-  phase1 dry-run, full test suite 650+ tests, firmware host C gate) is green.
-  The `firmware-band` ESP-IDF step could not complete in this environment because the
-  Docker container runs out of memory compiling tflite-micro + the full project
-  ("unexpected EOF" / OOM) — an environment limit, not a code regression; the C
-  sources that changed in this increment compile cleanly against the ESP-IDF toolchain
-  when memory allows, and the host C gate (tests/firmware_host) proves them on CI.
-  When the Docker host has sufficient RAM, `ci-local` should exit 0 end to end.
+- **Not in the gate:** baseline-validation (downloads datasets), triage-model training, PyPI release, firmware builds outside the `firmware-band` step, and the radio side of the virtual band (`scripts/virtual_band.py`, `check_phone_capture.py pull`: manual, see `docs/hardware/VIRTUAL_BAND_RUNBOOK.md`; their pure cores `virtual_band_core.py` and `check_phone_capture.py` are tested in the suite).
+- **Increment status:** the authoritative state is `docs/hardware/STATUS.md` (latest: MVP-2.9, `docs/increments/MVP2_9_DEVICE_READY_HARDENING.md`). Previous: MVP-2.8 (`docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md`), MVP-2.7 (`docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`).
+- **Gate steps (2026-11-28):** ruff check/format (unused imports included), mypy (`synapse24`, the SDK, `worker` and `backend`), `check_contract`, `generate_contracts --check`, `check_interfaces`, `check_baseline_claim`, phase1 dry-run, format conformance (`fitdecode`/`pyxdf`), the full test suite with coverage over `src`, `worker`, `backend` (>= 80 %), the SDK suite with its own >= 80 %, the firmware host C gate (raw-frame parity, research service, PPG SQI, BLE contract, compiled per-unit JSON parser and INA219 host gate), and the `firmware-band` ESP-IDF step (band-full, band-core, band-bench, band-full+RR, band-product). Fixture drift checks run inside the suite.
+- **Firmware step:** `firmware-band` builds the five configurations above; `run_gate_locally.sh` never runs it (needs the ESP-IDF image and more memory than this host has). GitHub Actions is notice-only: there is no second firmware job to keep aligned.
+- **Status:** see `docs/hardware/STATUS.md` and the increment docs. Windows Application Control can block freshly built C DLLs and the ESP-IDF step cannot run on this host: replay the C host gate in the Linux container and read the server `firmware-band` result before calling the gate green.
 - **Running the gate on this Windows host (MVP-1.3):** one `run_gate_locally.sh` run is killed when memory is low, so
   run it in pieces (each light step, the suite in chunks of 10 test files with `--cov-append`, then
   `coverage report --fail-under=80`, the SDK suite, `scripts/gcc_probe.py`). Windows Application Control intermittently

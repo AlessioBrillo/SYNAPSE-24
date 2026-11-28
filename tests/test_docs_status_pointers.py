@@ -15,7 +15,7 @@ def _text(relative: str) -> str:
 def test_status_is_the_source_of_truth() -> None:
     """The latest increment comes from STATUS.md, not from a pinned literal."""
     status = _text("docs/hardware/STATUS.md")
-    # STATUS.md writes the label in bold: "**Latest increment:** MVP-2.7 ...",
+    # STATUS.md writes the label in bold: "**Latest increment:** MVP-2.9 ...",
     # so skip the markdown asterisks before reading the increment id.
     match = re.search(r"Latest increment:\s*\**\s*(\S+)", status)
     assert match is not None, "STATUS.md must declare 'Latest increment:'"
@@ -26,6 +26,29 @@ def test_status_is_the_source_of_truth() -> None:
     prefix = "MVP" + increment.removeprefix("MVP-").replace(".", "_")
     increments = sorted((ROOT / "docs/increments").glob(f"{prefix}_*.md"))
     assert increments, f"no docs/increments/{prefix}_*.md for {increment}"
+
+
+def test_no_document_claims_a_different_latest_increment() -> None:
+    """Pointing at STATUS.md is not enough if a doc repeats an older version."""
+    status = _text("docs/hardware/STATUS.md")
+    latest = re.search(r"Latest increment:\s*\**\s*(\S+)", status)
+    assert latest is not None
+    current = latest.group(1).strip("*")
+    pattern = re.compile(
+        r"(?:latest increment|latest:|incremento corrente)\s*:?\s*\**\s*(MVP-\d+\.\d+)",
+        re.IGNORECASE,
+    )
+    for path in (
+        "README.md",
+        "Roadmap.md",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "docs/product/DECISIONS.md",
+    ):
+        for match in pattern.finditer(_text(path)):
+            assert match.group(1) == current, (
+                f"{path} claims {match.group(1)}, STATUS says {current}"
+            )
 
 
 def test_other_documents_point_to_status() -> None:

@@ -75,7 +75,7 @@ that never ran — both wasted, one of them silently.
    `gate_report.json` gets `measured_tier0_current_ma` / `measured_tier0_power_mw`
    / `measured_battery_pct` (mean/min/max) from the recording itself. The
    bench PSU row stays a hand-recorded cross-check, not the only source.
-2. **G2 criterion #4 is rewritten.** It no longer asks "does the measured T0
+2. **G3 criterion #4 is rewritten.** It no longer asks "does the measured T0
    current agree with ≤5 mW" (unanswerable for this rig). It asks:
    *does the kit's measured draw validate the `power_budget` *model* within a
    factor the battery math can absorb?* Concretely: measured mW per recorded

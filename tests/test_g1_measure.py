@@ -86,6 +86,56 @@ def test_the_noise_floor_is_the_std_in_uv() -> None:
     assert g1.noise_floor_uv(shorted)["std_uv"] == pytest.approx(3.0, rel=0.03)
 
 
+def test_the_noise_floor_is_restated_at_the_electrodes_when_gain_is_known() -> None:
+    rng = np.random.RandomState(1)
+    shorted = rng.normal(0, 3.0, 30_000)
+    result = g1.noise_floor_uv(shorted, configured_gain=550.0)
+    assert result["std_uv"] == pytest.approx(3.0, rel=0.03)
+    # A band running at half the nominal gain shows half the wire noise; the
+    # corrected figure restores the 3 µV at the electrodes (SOP §4a.1).
+    assert result["true_noise_uv"] == pytest.approx(6.0, rel=0.03)
+    assert result["configured_gain"] == 550.0
+
+
+def test_a_noise_run_without_a_record_warns_and_still_reports_true_noise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pytest.importorskip("pyxdf", reason="pyxdf is a project dependency")
+    from synapse_device.xdf_writer import write_xdf
+
+    rng = np.random.RandomState(7)
+    capture = tmp_path / "noise.xdf"
+    write_xdf(
+        capture,
+        [
+            {
+                "name": "SYNAPSE_ECG_T0",
+                "type": "ECG",
+                "data": rng.normal(0, 3.0, (5_000, 1)),
+                "timestamps": np.arange(5_000) / FS,
+                "sampling_rate": FS,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "g1_measure.py",
+            "noise",
+            str(capture),
+            "--serial",
+            "SYN-FFFFFFFFFFFF",
+        ],
+    )
+    assert g1.main() == 0
+    out = capsys.readouterr()
+    assert "assuming the nominal" in out.err
+    result = json.loads(out.out)
+    assert "true_noise_uv" in result
+    assert result["true_noise_uv"] == pytest.approx(result["std_uv"])
+
+
 def test_the_capture_can_be_the_xdf_the_validator_writes(tmp_path: Path) -> None:
     pytest.importorskip("pyxdf", reason="pyxdf is a project dependency")
     from synapse_device.xdf_writer import write_xdf

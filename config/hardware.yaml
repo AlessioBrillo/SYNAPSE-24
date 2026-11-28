@@ -19,7 +19,8 @@
 # Guardian Principle: BLE MACs / serial ports are NEVER hardcoded —
 # use ${ENV_VAR} expansion.
 #
-# Canonical firmware: firmware/esp32_band (band-core / band-full variants).
+# Canonical firmware: firmware/esp32_band (band-bench for G1; also band-core,
+# band-full, band-full+RR and band-product).
 # The former esp32_tier0 / esp32_head / esp32_forearm apps are archived; the
 # shared library firmware/common/ is retained and is used by this firmware.
 # =====================================================================
@@ -29,7 +30,9 @@ pods:
     status: active                    # check_contract validates every active pod
     name: "Forearm Hub (Tier 0 Continuous)"
     board_type: "ESP32_BAND"          # firmware/esp32_band
-    build_variant: "band-core"        # smoke kit: no GPS/TMP117/FIT/provisioning/OTA
+    build_variant: "band-bench"       # G1 image: smoke-kit core + USB factory shell;
+                                       # band-product is the (later) commercial image
+
     modalities: ["ecg", "ppg", "imu"]
     tier: 0
     channels:

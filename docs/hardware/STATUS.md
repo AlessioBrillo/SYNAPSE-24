@@ -4,11 +4,12 @@ This file is the authoritative status of the project. README, Roadmap,
 AGENTS.md, CONTRIBUTING.md and the compliance documents point here instead of
 keeping their own copy. If a number below changes, change it here first.
 
-**Latest increment:** MVP-2.8 (hardware readiness fixes). **Last gate:** see
-`docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md` for the exact command
-sequence and result. The previous increment (MVP-2.7, first device onboarding)
-is recorded in `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`; its review
-follow-ups are closed by MVP-2.8. MVP-2.6 (readiness governance) is recorded in
+**Latest increment:** MVP-2.9 (first-device readiness hardening). **Last gate:** see
+`docs/increments/MVP2_9_DEVICE_READY_HARDENING.md` for the exact command
+sequence and result. The previous increment (MVP-2.8, hardware readiness fixes)
+is recorded in `docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md`; MVP-2.7
+(first device onboarding) in `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`.
+MVP-2.6 (readiness governance) is recorded in
 `docs/increments/MVP2_6_READINESS_GOVERNANCE.md`.
 
 ## Gate status
@@ -34,8 +35,12 @@ follow-ups are closed by MVP-2.8. MVP-2.6 (readiness governance) is recorded in
   research service.
 - Host path: raw-frame parity, research service, XDF/FIT conformance, SDK and
   backend suites; C host gate with zero skips (Linux replay of all 12 modules).
-- Per-unit calibration is bound to the DIS serial, versioned (v2) and
-  records instrument, firmware, uncertainty and noise.
+- Per-unit calibration is bound to the DIS serial, versioned (v3) and
+  records instrument, firmware, uncertainty and noise. The flashed-config gate
+  now compares the *physical* IMU ODR read back by the band with the contract,
+  and the manifest names `band-bench`, the only image with factory writes.
+- Gate evidence is fail-closed: a short soak, a dry run, an all-skipped Phase-0
+  gate and a crashed run can no longer produce a green G1 verdict.
 
 ## What is not proven
 

@@ -368,17 +368,17 @@ def _run_gate_tests() -> tuple[list[GateResult], dict[str, Any], bool]:
             "skipped_count": skipped_count,
         }
 
-        # Gate passes if: (all tests passed) OR (all tests skipped due to missing data AND no failures)
-        # This handles external data dependencies (e.g., Sleep-EDF not available on PhysioNet)
-        gate_passed = (passed and total_count > 0) or (
-            skipped_count > 0 and failed_count == 0 and passed_count == 0
-        )
+        # A skipped gate is not a green gate (CI policy). Missing external data
+        # makes the verdict UNVERIFIED, never PASS — otherwise a Phase-0 report
+        # can claim completion with zero executed assertions.
+        unverified = skipped_count > 0 and failed_count == 0 and passed_count == 0
+        gate_passed = bool(passed and total_count > 0)
         overall_pass = overall_pass and gate_passed
 
         gate_result = GateResult(
             name=gate_name,
             passed=gate_passed,
-            value="PASS" if gate_passed else "FAIL",
+            value="PASS" if gate_passed else ("UNVERIFIED" if unverified else "FAIL"),
             threshold=threshold,
             details=f"{passed_count}/{total_count} passed, {failed_count} failed, {skipped_count} skipped",
             provenance=provenance,

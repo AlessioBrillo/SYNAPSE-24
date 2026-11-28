@@ -25,6 +25,8 @@ from synapse24.signal_quality import QualityThresholds, SignalQualityMetrics
 from synapse24.signal_quality import Tier as QualityTier
 from synapse24.utils import verify_xdf_roundtrip
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class TestCerelogEEGConfig:
     """Test CerelogEEGConfig creation and validation."""
@@ -342,7 +344,20 @@ class TestCerelogEEGIntegration:
     @pytest.mark.integration
     def test_impedance_check_gating(self):
         """Impedance check gates Tier 1 promotion (Architecture.md §77)."""
-        # This would test with real hardware
+        # No board here: pin the fail-closed comparison and the bringup value
+        # so an empty test can never masquerade as evidence.
+        import yaml  # noqa: PLC0415 - local to this integration check
+
+        bring = yaml.safe_load(
+            (ROOT / "config" / "hardware_bringup.yaml").read_text(encoding="utf-8")
+        )
+        cerelog = bring["bringup"]["cerelog_eeg"]
+        assert cerelog["impedance_check"] is True
+        assert cerelog["impedance_threshold_kohm"] == 50.0
+        source = (ROOT / "src" / "synapse24" / "ingestion" / "cerelog_eeg.py").read_text(
+            encoding="utf-8"
+        )
+        assert "z_kohm <= self.config.impedance_threshold_kohm" in source
 
 
 if __name__ == "__main__":

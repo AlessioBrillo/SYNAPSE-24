@@ -149,16 +149,14 @@ This is what turns "it works" into a gate. Instrumentation already on hand.
 | 7 | PPG SQI / MAP, seated and still | `signal_quality.ppg` | SQI ≥ 0.3 sustained >30 s, MAP ≤ 0.5. |
 | 8 | Clock residual drift vs host (pod↔host) **and pod↔pod** | `PodClockModel.status()` via the SYNC characteristic; ACC cross-correlation for pod↔pod | ≤10 ms (T0), ≤1 ms (T1). The pod↔pod number is the one that gates the Cerelog. |
 | 9 | XDF integrity | `utils.validate_xdf` | Zero dropped samples, monotonic timestamps. |
-| 10 | On-device triage latency | Serial log | **Not applicable at G1**: the Edge AI module is off in both build variants (MVP-1.9 debt). Re-enable it, and its ≤5 ms per inference criterion, when the module is switched back on. |
+| 10 | On-device triage latency | Serial log | **Not applicable at G1**: the Edge AI module is off in every build variant (MVP-1.9 debt). Re-enable it, and its ≤5 ms per inference criterion, when the module is switched back on. |
 | 11 | Measured Tier-0 power over the soak | POWER stream / `gate_report.json` (`measured_tier0_current_ma`, `measured_tier0_power_mw`, `measured_battery_pct`, `clock_residual_drift_ms`, `ble_throughput_bytes_per_s`, `dropped_frames` are filled automatically) | Inside the **budget-kit** envelope 150–600 mW (derivation: `docs/hardware/POWER_BUDGET.md`). NOT the 5 mW T0 profile: that is the optimised-system target, proven later by G3. The per-session figure is the input to the 24-hour model claim. |
 
-The validator writes rows 3, 4, 8, 9, 11 itself into
-`data/live_validation/gate_report.json` — including the measured power rows
-(`measured_tier0_current_ma`, `measured_tier0_power_mw`,
-`measured_battery_pct`) decoded from the POWER stream of the recording
-itself; rows 1, 2, 5, 6, 7, 10 are bench
-measurements recorded by hand into the same file (`"source": "bench"` marks
-the unfilled ones, so a half-filled report is visibly a half-filled report).
+The validator writes rows 3, 4, 8, 9 and 11 into the gate report — including the measured power rows (`measured_tier0_current_ma`, `measured_tier0_power_mw`, `measured_battery_pct`) decoded from the POWER stream of the recording itself.
+
+Rows 1 and 2 are hand measurements and must be supplied through `--bench-values <file>` **together with `--verified-by <name>`**; `merge_bench_values()` refuses the run (exit 2, FAIL in history) when `--bench-values` is given without a verifier; with no `--bench-values` at all the rows stay unfilled (`value: null`). Rows 5, 6, 7 are computed by `g1_measure.py` / the quality gates, and row 10 is N/A at G1 (the Edge AI module is off in every build variant; `firmware/esp32_band/config/Kconfig` warns that its interpreter is not ready).
+
+`gate_report.json` is rewritten on every run: never type hand values into it. Use a per-run report path (`--gate-report data/live_validation/gate_report_<run>.json`) and keep the append-only `history.jsonl` as the record of every attempt.
 
 Run it as:
 
@@ -166,15 +164,16 @@ Run it as:
 uv run python tools/check_toolchain.py
 uv run python tools/check_contract.py
 uv run python scripts/validate_phase1_entry.py --live-hardware \
-    --config config/hardware_bringup.yaml
+    --config config/hardware_bringup.yaml --manifest <consent-manifest.json> \
+    --bench-values <bench-values.json> --verified-by "A. Brillo"
 ```
 
-For the overnight MVP soak (6 h, battery, zero drops) add `--soak`, which
-records continuously through LabRecorderCLI:
+For the overnight MVP soak (6 h, battery, zero drops) add `--soak`, which records continuously through LabRecorderCLI:
 
 ```bash
 uv run python scripts/validate_phase1_entry.py --live-hardware --soak \
-    --duration 21600 --config config/hardware_bringup.yaml
+    --duration 21600 --config config/hardware_bringup.yaml \
+    --manifest <consent-manifest.json>
 ```
 
 ## Order of operations

@@ -75,7 +75,8 @@ except ImportError:
 # XDF and the gate report name the unit that actually produced the samples.
 DIS_SERIAL_UUID = "00002a25-0000-1000-8000-00805f9b34fb"
 # The device-config characteristic is already in the GATT contract (read-only
-# in practice: writes are refused by band-core). Its value is the pod's own
+# in practice: writes are refused except in band-bench, where they are
+# provenance-bound). Its value is the pod's own
 # account of what it booted with, generated from hardware.yaml by the
 # firmware, so the host can prove the flashed configuration on the bench.
 DEVICE_CONFIG_UUID = CONTRACT_UUIDS["CONSUMER_DEVICE_CONFIG"]
@@ -308,6 +309,34 @@ class LSLStreamManager:
         # samples must survive, because the XDF gate proof is written *after*
         # the session closes.
         self.outlets.clear()
+
+
+# The XDF must say what its columns are: an ECG column in µV and a PPG column
+# in arbitrary units are not interchangeable. hardware.yaml declares the
+# types; the names/units below make the written streams self-describing.
+XDF_CHANNEL_META: dict[str, tuple[list[str], list[str]]] = {
+    "ECG": (["ECG"], ["uV"]),
+    "PPG": (["PPG_Red", "PPG_IR"], ["a.u.", "a.u."]),
+    "ACC": (["ACC_X", "ACC_Y", "ACC_Z"], ["g", "g", "g"]),
+    "GYRO": (["GYRO_X", "GYRO_Y", "GYRO_Z"], ["dps", "dps", "dps"]),
+    "MAG": (["MAG_X", "MAG_Y", "MAG_Z"], ["uT", "uT", "uT"]),
+    "Power": (
+        ["Voltage_mV", "Current_mA", "Power_mW", "Battery_pct"],
+        ["mV", "mA", "mW", "%"],
+    ),
+    "Markers": (["Marker"], [""]),
+}
+
+
+def channel_meta(stream_type: str, n_channels: int) -> tuple[list[str], list[str]]:
+    """Names and units for a channel count, never shorter than the columns."""
+    names, units = XDF_CHANNEL_META.get(
+        stream_type, ([f"CH{i + 1}" for i in range(n_channels)], [""] * n_channels)
+    )
+    if len(names) != n_channels:
+        names = [f"{stream_type}_{i + 1}" for i in range(n_channels)]
+        units = [units[0] if units else ""] * n_channels
+    return names, units
 
 
 class Phase1Validator:
@@ -862,6 +891,7 @@ class Phase1Validator:
             stream_type = cfg.get("type", "Other")
             sampling_rate = cfg.get("sampling_rate", 0)
             tier = cfg.get("tier", 0)
+            names, units = channel_meta(stream_type, int(data_arr.shape[1]))
 
             streams_for_xdf.append(
                 {
@@ -871,6 +901,8 @@ class Phase1Validator:
                     "timestamps": timestamps,
                     "sampling_rate": sampling_rate,
                     "tier": tier,
+                    "channel_names": names,
+                    "channel_units": units,
                 }
             )
 
@@ -1832,6 +1864,14 @@ class Phase1Validator:
             or None,
             "calibration_source": self._calibration_source(),
             "duration_s": duration,
+            # `duration_s` is what was REQUESTED. `elapsed_s` is measured here
+            # when the report is built, so a run that ended early cannot claim
+            # a six-hour soak by repeating the requested duration.
+            "elapsed_s": (
+                round(time.monotonic() - started, 3)
+                if (started := getattr(self, "_run_started_at", None)) is not None
+                else None
+            ),
             # v2 truth rows (Q3/Q5): who wrote the artifact the report reads
             # from, what the MTU actually negotiated to, and every drop broken
             # out by reason. A rehearsal marks itself, so its numbers can
@@ -2085,6 +2125,7 @@ class Phase1Validator:
         live_hardware: bool = False,
     ) -> Phase1ValidationReport:
         self.live_hardware = bool(live_hardware) and self.transport is None
+        self._run_started_at = time.monotonic()
         # Reusing a validator (the suite does) must not attribute one run's
         # measurements or the previous pod's readback to the next session.
         self._quality_cache = None
@@ -2110,6 +2151,15 @@ class Phase1Validator:
 
         if dry_run:
             self.logger.info("DRY RUN MODE - validating configuration only")
+            # A dry run has no device and no samples. Mark the artifact before
+            # building the gate report: otherwise a config-only green report
+            # lands in data/live_validation/gate_report.json as live evidence.
+            self.artifact = {
+                "source": "dry-run (configuration only)",
+                "path": None,
+                "sha256": None,
+                "rehearsal": True,
+            }
             # Validate config structure, env expansion, etc. What the setup raises is the
             # verdict: the report used to say PASS whatever happened (it was a constant).
             problems: list[str] = []
@@ -2556,6 +2606,41 @@ def merge_bench_values(gate_report: dict[str, Any], path: Path) -> dict[str, Any
     return gate_report
 
 
+def append_failed_attempt(gate_report_path: Path, reason: str, *, live: bool) -> Path:
+    """Record a run that crashed before it could build a gate report.
+
+    The SOP promises that every attempt is in the append-only history. A
+    crash used to leave no trace at all (the spool was deleted in ``finally``),
+    which made a half-empty history indistinguishable from a clean one.
+    """
+    run_id = f"failed-{int(time.time() * 1000)}"
+    payload = {
+        "run_id": run_id,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "overall_pass": False,
+        "rehearsal": not live,
+        "failure": reason,
+        "measurements": {},
+    }
+    gate_report_path.parent.mkdir(parents=True, exist_ok=True)
+    per_run = gate_report_path.parent / f"gate_report_{run_id}.json"
+    per_run.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    with (gate_report_path.parent / "history.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "timestamp": payload["timestamp"],
+                    "overall_pass": False,
+                    "rehearsal": not live,
+                    "gate_report": str(per_run),
+                }
+            )
+            + "\n"
+        )
+    return per_run
+
+
 def append_gate_history(
     gate_report_path: Path, gate_report: dict[str, Any], report: Any, *, live: bool = True
 ) -> dict[str, Any]:
@@ -2669,6 +2754,10 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
             gate_report["overall_pass"] = False
             report.overall_pass = False
             logger.error("hand-filled rows need --verified-by: %s", ", ".join(hand_filled))
+            # The detailed report is written above; keep its verdict identical
+            # to the gate report and the exit code instead of leaving a PASS
+            # artefact next to a FAIL gate report.
+            report_path.write_text(report.to_json())
         args.gate_report.parent.mkdir(parents=True, exist_ok=True)
         args.gate_report.write_text(json.dumps(gate_report, indent=2, default=str))
         # Append-only history: a later run must never erase an earlier attempt,
@@ -2687,8 +2776,15 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
 
         return 0 if report.overall_pass else 1
 
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - a crash is itself gate evidence
         logger.exception("Validation failed")
+        try:
+            failed = append_failed_attempt(
+                args.gate_report, f"{type(exc).__name__}: {exc}", live=args.live_hardware
+            )
+            logger.info("failed attempt recorded in %s", failed)
+        except Exception:  # noqa: BLE001 - never mask the original failure
+            logger.exception("could not append the failed attempt to history")
         return 2
     finally:
         # The samples are on disk: release them (a 6-hour session leaves

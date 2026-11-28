@@ -37,9 +37,9 @@ side of the wire:
   `SYNAPSE_FEATURE_GPS/TEMPERATURE`. Those Kconfig flags were previously
   declared and consulted nowhere, so GPS and TMP117 compiled unconditionally
   and the smoke-kit rig could not boot without a MAX-M10S on the desk.
-- CI job `firmware-build` compiles both `band-core` and `band-full` on every
+- CI step `firmware-band` builds five configs (band-full, band-core, band-bench, band-full+RR, band-product) on every
   push, so the build can never silently regress again.
-- `scripts/build_and_flash_firmware.py` targets `esp32_band` and resolves both
+- `scripts/build_and_flash_firmware.py` targets `esp32_band` and resolves the configured
   variants.
 
 ### Sprint 1 — one contract, enforced
@@ -198,7 +198,7 @@ above for the three firmware defects it caught before any hardware existed.
 
 ## Work explicitly deferred
 
-SDK CLI, FIT writer, signed OTA, provisioning, GPS, TMP117, multi-pod wired
+signed OTA, signed releases, GPS, TMP117, multi-pod wired
 sync, in-ear EEG, compute hub, fNIRS, cloud. Each has its own gate; putting any
 of them on the critical path now would delay the hardware that matters.
 

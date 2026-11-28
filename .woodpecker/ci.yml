@@ -49,7 +49,7 @@ steps:
       # reach the network.
       - uv run --no-sync pytest --cov=src --cov=worker --cov=backend --cov-fail-under=80 --cov-report=term-missing tests
       - uv run --no-sync pytest sdk/python/tests --cov=sdk/python --cov-fail-under=80 --cov-report=term-missing -v
-      - uv run --no-sync pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py tests/test_consumer_v2_parity.py tests/test_firmware_s3_time_and_loss.py tests/test_firmware_calibration_host.py -v -rs --no-cov -p no:cacheprovider
+      - uv run --no-sync pytest tests/test_research_service_host.py tests/test_raw_frame_parity.py tests/test_firmware_host_loadgate.py tests/test_triage_feature_parity.py tests/test_firmware_ppg_imu_host.py tests/test_firmware_ppg_sqi_host.py tests/test_firmware_ble_contract.py tests/test_firmware_fit_writer_host.py tests/test_consumer_v2_parity.py tests/test_firmware_s3_time_and_loss.py tests/test_firmware_calibration_host.py tests/test_ina219_host.py -v -rs --no-cov -p no:cacheprovider
       # Host-side test of the compiled per-unit configuration JSON parser.
       - uv run --no-sync pytest tests/test_firmware_config_parser_host.py -v --no-cov -p no:cacheprovider
 

@@ -117,6 +117,9 @@ Ci sono tre livelli. Non confonderli:
 La regola è: **si misura, si scrive nel record, si verifica che la banda legga lo stesso valore**. Scrittura e verifica sono due passi distinti:
 
 ```powershell
+# 1. Scrittura USB: crea il record host con provenance completa (prima di ogni scrittura BLE)
+uv run python scripts/factory_calibrate.py --port COM3 --gain-json data/live_validation/gain.json --led 1F,1F --operator "A. Brillo" --instrument "GEN-42" --fw "band-bench@<hash>" --uncertainty 2 --battery 1000 --reboot
+# 2. Profilo BLE: ammesso solo su unita gia calibrata via USB
 uv run python scripts/device_profile.py example
 uv run python scripts/device_profile.py configure SYN-A1B2C3D4E5F6 --address AA:BB:CC:DD:EE:FF --profile profilo.json
 # riavvia la banda, poi:
@@ -263,10 +266,10 @@ Serve per provare il clock, la radio e la batteria per davvero.
 
 - Usa la batteria da **1000+ mAh**, non quella da 500.
 - Serve LabRecorderCLI installato e avviato: è lui il solo scrittore del file.
-- Comando:
+- Comando: usa `bench_suite.py`, non il solo validatore: è lui a scrivere `evidence/T12_*.json`. Il validatore da solo non produce l'evidenza T12.
 
 ```powershell
-uv run python scripts/validate_phase1_entry.py --live-hardware --manifest data/sessions/<data>/manifest.json --config config/hardware_bringup.yaml --duration 21600 --soak
+uv run python scripts/bench_suite.py soak --live --manifest data/sessions/<data>/manifest.json --duration 21600
 ```
 
 Con 4-6 ore a settimana non puoi stare presente per sei ore di fila: fai l'avvio insieme a me, poi fissiamo un controllo a metà e la verifica finale. **Non** usare `--soak-rehearsal` come prova: è solo una prova del meccanismo e il suo report è marcato `rehearsal: true`.

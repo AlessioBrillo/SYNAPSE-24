@@ -34,6 +34,8 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "fw": None,
         "uncertainty": None,
         "noise_uv": None,
+        "battery": None,
+        "reboot": False,
         "date": None,
         "operator": None,
         "dry_run": True,
@@ -65,6 +67,22 @@ def test_build_commands_translates_all_fields() -> None:
         "cal save",
         "cal dump",
     ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"battery": 50}, "battery must be 100..10000"),
+        ({"gain": 2_000_000}, "gain must be 1..1000000"),
+        ({"led": "00,1F"}, "LED codes must be 01..FF"),
+        ({"accel_bias": ["3000", "0", "0"]}, "--accel-bias values"),
+        ({"gyro_bias": ["0", "25000", "0"]}, "--gyro-bias values"),
+    ],
+)
+def test_usb_validation_matches_the_ble_whitelist(kwargs: object, message: str) -> None:
+    """A USB shell must not persist a value the radio path would refuse."""
+    with pytest.raises(ValueError, match=message):
+        fc.build_commands(_args(**kwargs))
 
 
 def test_calibration_v2_fields_are_written() -> None:

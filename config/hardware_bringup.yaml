@@ -11,11 +11,12 @@ bringup:
   target_pod: "forearm_hub"
 
   # Firmware flashing (ESP32-S3 with triage INT8 model for forearm_hub).
-  # Canonical firmware is firmware/esp32_band; band-core builds the smoke-kit
-  # rig (ECG+PPG+IMU, no GPS/TMP117/FIT/provisioning/OTA).
+  # Canonical firmware is firmware/esp32_band; band-bench builds the smoke-kit
+  # rig (ECG+PPG+IMU, no GPS/TMP117/FIT/provisioning/OTA) with the USB factory
+  # shell needed to configure a unit.
   firmware:
     project_dir: "firmware/esp32_band"
-    build_variant: "band-core"
+    build_variant: "band-bench"   # factory mode is required to configure a unit
     port: "${SYNAPSE_FOREARM_SERIAL:-COM3}"
     baud: 921600
     verify_after_flash: true

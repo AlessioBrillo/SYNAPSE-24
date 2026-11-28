@@ -32,6 +32,10 @@
 #include "synapse_config.h"
 #include "synapse_calibration.h"
 #include "synapse_identity.h"
+/* The IMU ODR helper is the one the ICM-20948 driver uses to programme the
+ * divider. The readback must report the resulting sensor rate, not the poll
+ * rate, or the flashed-config gate compares two different quantities. */
+#include "imu_odr.h"
 /* The device-config whitelist parsers are pure C: the firmware and the host
  * parser tests compile the SAME production header, so a host fix cannot drift
  * from the image shipped on the band. No NimBLE/ESP-IDF headers are needed. */
@@ -292,6 +296,15 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
     const bool pending_reboot =
         synapse_calibration_applied_crc() != synapse_calibration_effective_crc(&cal);
 
+    /* cfg.imu_*_odr_hz is the scheduler POLL rate: the driver runs the sensor
+     * at (at least) twice that rate so no poll re-reads a stale sample. Report
+     * the physical ODR here; `imu_hz` below stays the poll rate the host LSL
+     * outlets declare. hardware.yaml states both quantities separately. */
+    const unsigned accel_effective_hz = (unsigned)imu_effective_odr_hz(
+        (uint32_t)cfg.imu_accel_odr_hz, ICM20948_ACCEL_BASE_ODR_HZ, UINT32_MAX);
+    const unsigned gyro_effective_hz = (unsigned)imu_effective_odr_hz(
+        (uint32_t)cfg.imu_gyro_odr_hz, ICM20948_GYRO_BASE_ODR_HZ, IMU_GYRO_DIV_MAX);
+
     /* Every active hardware.yaml field the host gate checks is reported
      * here, with short keys so a long BLE read stays compact. A stale
      * sdkconfig can no longer change an unchecked sensor setting. */
@@ -316,7 +329,7 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)synapse_ppg_rate_hz(cfg.ppg_sample_rate),
              (unsigned)cfg.imu_accel_odr_hz,
              (unsigned long)gain_x100, (unsigned)led_red, (unsigned)led_ir,
-             battery_mah, (unsigned)s_feat2_rate_hz,
+             (unsigned)battery_mah, (unsigned)s_feat2_rate_hz,
              (unsigned)(pending_reboot ? 1u : 0u),
              accel_bias[0], accel_bias[1], accel_bias[2],
              gyro_bias[0], gyro_bias[1], gyro_bias[2],
@@ -324,8 +337,8 @@ static void build_config_readback(uint8_t *buf, size_t cap) {
              (unsigned)cfg.ppg_i2c_addr, (unsigned)cfg.ppg_sample_rate,
              (unsigned)cfg.ppg_pulse_width, (unsigned)cfg.ppg_adc_range,
              (unsigned)cfg.imu_i2c_addr, (int)cfg.imu_accel_fsr_g,
-             (int)cfg.imu_gyro_fsr_dps, (unsigned)cfg.imu_accel_odr_hz,
-             (unsigned)cfg.imu_gyro_odr_hz,
+             (int)cfg.imu_gyro_fsr_dps, accel_effective_hz,
+             gyro_effective_hz,
              (int)cfg.ppg_i2c_port, (int)cfg.i2c_sda_gpio, (int)cfg.i2c_scl_gpio,
              (unsigned long)cfg.i2c_freq_hz,
              (unsigned)SYNAPSE_CONTRACT_WIRED_SYNC_GPIO,

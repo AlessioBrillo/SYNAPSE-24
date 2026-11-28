@@ -119,24 +119,25 @@ static void handle_cal(char *args) {
     char *p1 = strtok(NULL, " \t\r\n");
     char *p2 = NULL;
     char *p3 = NULL;
-    if (strcmp(cmd, "gain") == 0 && p1 && parse_int(p1, false, &a) == 0 && a > 0) {
+    if (strcmp(cmd, "gain") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
+        a > 0 && a <= 1000000) {
         s_cal.ecg_gain_x100 = (uint32_t)a;
     } else if (strcmp(cmd, "midrail") == 0 && p1 && parse_int(p1, false, &a) == 0) {
         s_cal.ecg_midrail_mv = a;
     } else if (strcmp(cmd, "led") == 0 && p1 && parse_int(p1, true, &a) == 0 &&
                (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, true, &b) == 0 &&
-               a >= 0 && a <= 255 && b >= 0 && b <= 255) {
+               a >= 1 && a <= 255 && b >= 1 && b <= 255) {
         s_cal.ppg_led_red = (uint8_t)a;
         s_cal.ppg_led_ir = (uint8_t)b;
     } else if (strcmp(cmd, "accel_bias") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
                (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, false, &b) == 0 &&
-               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0) {
+               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0 && a >= -2000 && a <= 2000 && b >= -2000 && b <= 2000 && c >= -2000 && c <= 2000) {
         s_cal.accel_bias_mg[0] = (int16_t)a;
         s_cal.accel_bias_mg[1] = (int16_t)b;
         s_cal.accel_bias_mg[2] = (int16_t)c;
     } else if (strcmp(cmd, "gyro_bias") == 0 && p1 && parse_int(p1, false, &a) == 0 &&
                (p2 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p2, false, &b) == 0 &&
-               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0) {
+               (p3 = strtok(NULL, " \t\r\n")) != NULL && parse_int(p3, false, &c) == 0 && a >= -20000 && a <= 20000 && b >= -20000 && b <= 20000 && c >= -20000 && c <= 20000) {
         s_cal.gyro_bias_mdps[0] = (int16_t)a;
         s_cal.gyro_bias_mdps[1] = (int16_t)b;
         s_cal.gyro_bias_mdps[2] = (int16_t)c;
@@ -152,7 +153,7 @@ static void handle_cal(char *args) {
                parse_int(p1, false, &a) == 0 && a >= 0 && a <= 32767) {
         s_cal.noise_std_uv_x10 = (int16_t)a;
     } else if (strcmp(cmd, "battery") == 0 && p1 &&
-               parse_int(p1, false, &a) == 0 && a >= 0 && a <= 65535) {
+               parse_int(p1, false, &a) == 0 && a >= 100 && a <= 10000) {
         s_cal.battery_capacity_mah = (uint16_t)a;
     } else if (strcmp(cmd, "date") == 0 && p1 && strlen(p1) < sizeof(s_cal.date)) {
         snprintf(s_cal.date, sizeof(s_cal.date), "%s", p1);

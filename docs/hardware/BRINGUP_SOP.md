@@ -299,12 +299,7 @@ characteristics out of `config/hardware_bringup.yaml` `bringup.ble`:
 2. Second run: ECG + PPG (~1,4 kB/s).
 3. Third run: everything, including the three IMU sub-streams.
 
-Before blaming capacity, check that **DLE was negotiated** (link-layer
-packets of 251 B, not the default 27 B): `nRF Connect` shows it under the
-connection ("Data Length"). With 27-byte PDUs the ~244-byte notifications
-fragment into 9 link-layer packets each and the budget collapses. If DLE is
-missing on the pod side, set the preferred data length after connect
-(`esp_ble_gap_set_data_length`) — one function call in the research service.
+Before blaming capacity, check that **DLE was negotiated** (link-layer packets of 251 B, not the default 27 B): `nRF Connect` shows it under the connection ("Data Length"). The firmware already requests it on connect (`ble_gap_set_data_len(conn_handle, 251, 2120)` in `ble_gatt_server.c`): if the peer still reports 27 B, the limitation is the host adapter or the phone, not a missing firmware call. Do not add a second data-length request to the research service.
 
 ### 3b. Two-pod bench — the number that actually gates the Cerelog
 
@@ -318,7 +313,7 @@ for €0:
    the only configuration where `min_acc_correlation: 0.7` is physically
    attainable — pods on different body sites (head vs forearm) see different
    motion and will never correlate, whatever the clocks do.
-2. Flash both with `band-core`; they advertise as two `SYNAPSE-BAND` devices.
+2. Flash both with `band-bench`; they advertise as two `SYNAPSE-BAND` devices.
 3. Subscribe to ECG+PPG+ACC on both; record both pods simultaneously (two
    recorders, or one PC with two BLE adapters). **T10 needs at least 30 minutes
    of overlap** — a shorter capture returns no residual, not a pass. Then
@@ -362,8 +357,8 @@ Three cheap bench numbers that make the G1 dataset interpretable later:
    (next): use the ADC counts until it is.*
    **Pass (provisional): std ≤ 30 µV on the stream as emitted** (the wire carries µV
    computed with the configured gain, nominal 1100, so this is ≈ 40 ADC counts).
-   Once step 2 gives `gain_measured`, restate the result as
-   `true_noise = std × 1100 / gain_measured`: that is the figure to keep, and the
+   The tool reports `true_noise_uv` (std × nominal 1100 / configured gain) when
+   a calibration record exists; that is the electrode-referred figure to keep, and the
    30 µV bound applies to it too. The bound comes from the AD8232 datasheet input
    noise (of the order of 100 µVpp ≈ 15 µV rms) plus margin for the ESP32 ADC; it is an
    estimate, not a measurement. If the first real run misses it, record the value,
@@ -461,10 +456,12 @@ Two rules that keep the bar honest:
   reach 6 h. A soak that dies at hour three is a gate that never
   ran. Use the 1000+ mAh cell from the kit for the 6-hour soak, or log the
   battery percentage at start and end (`measured_battery_pct`) and say so. The
-  firmware divides the charge it has consumed by `CONFIG_SYNAPSE_HUB_BATTERY_MAH`
-  (1000 in `band-core`): if the cell you fit is not 1000 mAh, set that value to its
-  real capacity in menuconfig and rebuild, or `measured_battery_pct` is wrong by the
-  ratio.
+  firmware divides the charge it has consumed by the **per-unit** `battery_mah`
+  (1000 in `band-bench` defaults): if the cell you fit is not 1000 mAh, write its
+  measured capacity with `factory_calibrate.py --battery <mAh> --reboot` (or
+  `device_profile.py configure` after the USB record exists): editing
+  menuconfig alone changes the compile-time default, not the value the band
+  reports.
 
 ### 5a. What the bench must show about the loss counters
 
