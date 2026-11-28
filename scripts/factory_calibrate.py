@@ -156,10 +156,12 @@ class SerialTransport:
         self._conn.close()
 
 
-def build_commands(args: argparse.Namespace) -> list[str]:
+def build_commands(args: argparse.Namespace) -> list[str]:  # noqa: PLR0915 - flat CLI dispatch table
     """Translate CLI options into firmware shell lines (pure, testable)."""
     commands: list[str] = []
     if args.gain is not None:
+        if not 1 <= int(args.gain) <= 1_000_000:
+            raise ValueError(f"gain must be 1..1000000 (x100), got {args.gain}")
         commands.append(f"cal gain {args.gain}")
     elif args.gain_json:
         payload = json.loads(Path(args.gain_json).read_text(encoding="utf-8"))
@@ -171,7 +173,18 @@ def build_commands(args: argparse.Namespace) -> list[str]:
         commands.append(f"cal midrail {args.midrail}")
     if args.led:
         red, ir = (part.strip() for part in args.led.split(","))
+        if not (1 <= int(red, 16) <= 255 and 1 <= int(ir, 16) <= 255):
+            raise ValueError("LED codes must be 01..FF each (0 keeps the compiled default)")
         commands.append(f"cal led {red} {ir}")
+    for flag, values, limit in (
+        ("--accel-bias", args.accel_bias, 2000),
+        ("--gyro-bias", args.gyro_bias, 20_000),
+    ):
+        if not values:
+            continue
+        ints = [int(value) for value in values]
+        if any(not -limit <= value <= limit for value in ints):
+            raise ValueError(f"{flag} values must be within -{limit}..{limit}")
     if args.accel_bias:
         commands.append("cal accel_bias " + " ".join(args.accel_bias))
     if args.gyro_bias:
@@ -194,6 +207,10 @@ def build_commands(args: argparse.Namespace) -> list[str]:
         commands.append(f"cal noise {int(round(float(args.noise_uv) * 10))}")
     battery = getattr(args, "battery", None)
     if battery is not None:
+        # Same bounds as the BLE whitelist and device_profile.py: the USB shell
+        # must not be able to persist a value that the radio path would refuse.
+        if int(battery) < 100 or int(battery) > 10_000:
+            raise ValueError(f"battery must be 100..10000 mAh, got {battery}")
         commands.append(f"cal battery {int(battery)}")
     if args.date:
         commands.append(f"cal date {args.date}")
@@ -230,7 +247,7 @@ def write_record(record: dict[str, object]) -> Path:
     return path
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915 - CLI argument surface
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", default="COM3", help="USB serial port of the band")
     parser.add_argument("--baud", type=int, default=115200)
@@ -251,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator", help="who performed the calibration")
     parser.add_argument("--dump", action="store_true", help="only print the current record")
     parser.add_argument("--erase", action="store_true", help="drop the NVS record")
+    parser.add_argument(
+        "--reboot", action="store_true", help="restart the band after saving so the profile applies"
+    )
     args = parser.parse_args(argv)
 
     transport: Transport
@@ -271,6 +291,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"factory command failed: {command}: {reply}", file=sys.stderr)
                 return 1
         record = parse_dump(reply) if not args.erase else {"serial": "erased"}
+        if args.reboot:
+            if not isinstance(transport, SerialTransport):
+                print("--reboot needs a real serial port (not --dry-run)", file=sys.stderr)
+                return 1
+            transport.reboot()
+            # The drivers read the per-unit record only at boot. Read it again
+            # from the booted band so the host record reflects what is applied.
+            record = parse_dump(transport.send("cal dump"))
         if args.erase:
             print("calibration record erased: the band uses Kconfig defaults")
             return 0

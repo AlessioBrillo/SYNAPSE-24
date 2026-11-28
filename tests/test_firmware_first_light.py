@@ -259,8 +259,12 @@ def test_a_sensor_that_failed_init_gets_no_task_and_no_abort() -> None:
 
 
 def test_the_imu_gyro_divider_uses_the_gyro_base_rate() -> None:
+    # The base rates moved to the shared ODR header so the BLE readback can
+    # derive the same physical rate the driver programmes.
+    odr = _strip_comments(_src(COMMON / "sensors" / "imu_odr.h"))
+    assert re.search(r"ICM20948_GYRO_BASE_ODR_HZ\s+1100u", odr)
+    assert re.search(r"ICM20948_ACCEL_BASE_ODR_HZ\s+1125u", odr)
     code = _strip_comments(_src(IMU))
-    assert re.search(r"ICM20948_GYRO_BASE_ODR_HZ\s+1100", code)
     assert "imu_smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, (uint32_t)config->gyro_odr_hz)" in code
     assert "imu_smplrt_div_for(ICM20948_ACCEL_BASE_ODR_HZ, (uint32_t)config->accel_odr_hz)" in code
 

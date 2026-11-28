@@ -335,6 +335,12 @@ def imu_odr(tmp_path_factory: pytest.TempPathFactory) -> ctypes.CDLL:
     lib.host_imu_div.restype = ctypes.c_uint32
     lib.host_imu_odr_mhz.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
     lib.host_imu_odr_mhz.restype = ctypes.c_uint32
+    lib.host_imu_effective_odr_hz.argtypes = [
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+    ]
+    lib.host_imu_effective_odr_hz.restype = ctypes.c_uint32
     return lib
 
 
@@ -354,6 +360,27 @@ def test_the_old_divider_ran_the_accelerometer_slower_than_the_poll(imu_odr: cty
     new_div = imu_odr.host_imu_div(1125, 50)
     assert (new_div, imu_odr.host_imu_odr_mhz(1125, new_div)) == (10, 102_272)
     assert imu_odr.host_imu_odr_mhz(1100, imu_odr.host_imu_div(1100, 50)) == 100_000  # exact
+
+
+def test_the_config_readback_reports_the_physical_odr_not_the_poll(
+    imu_odr: ctypes.CDLL,
+) -> None:
+    """The gate compares hardware.yaml's 102/100 Hz ODR, not the 50 Hz poll."""
+    assert imu_odr.host_imu_effective_odr_hz(50, 1125, 0xFFFFFFFF) == 102
+    assert imu_odr.host_imu_effective_odr_hz(50, 1100, 255) == 100
+    # Below ~4.3 Hz the driver clamps the 8-bit gyro divider; the readback must
+    # report the clamped rate, not a rate the sensor never produced.
+    assert imu_odr.host_imu_effective_odr_hz(1, 1100, 255) == 4
+    gatt = _text(BAND / "ble" / "ble_gatt_server.c")
+    assert "imu_effective_odr_hz(" in gatt
+    readback = gatt[gatt.index('\\"accel_hz\\":%u') : gatt.index("cal_instrument, cal_fw_version,")]
+    args = readback[readback.index("synapse_config_get_fw_version()") :]
+    assert "accel_effective_hz" in args
+    assert "gyro_effective_hz" in args
+    # The only raw ODR left in the arguments is `imu_hz`, the poll rate the
+    # LSL outlets declare. The ODR keys must use the derived physical rate.
+    assert args.count("cfg.imu_accel_odr_hz") == 1
+    assert "cfg.imu_gyro_odr_hz" not in args
 
 
 def test_the_imu_divider_is_clamped_and_never_zero_rate(imu_odr: ctypes.CDLL) -> None:

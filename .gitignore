@@ -33,8 +33,10 @@ data/bidmc/
 data/sleep_edf/
 data/processed/
 data/live_validation/
+data/bench/
 data/calibration/
 data/sessions/
+capture/
 evidence/
 *.xdf
 *.edf

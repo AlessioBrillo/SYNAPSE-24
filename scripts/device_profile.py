@@ -15,9 +15,12 @@ config write at run time; it is not a persisted per-unit profile field.
 
 ``configure`` writes one atomic profile and reads every field back; it does
 NOT commit the host record. ``verify`` (after the reboot that applies the
-NVS record) compares the live readback with the contract and with that host
-record, commits the record only on a complete match, and refuses a profile
-that is stored but not yet applied.
+NVS record) compares the live readback with the contract and with a host
+record that must ALREADY exist: the firmware only accepts per-unit BLE writes
+for a unit calibrated over USB with full provenance. Create that record with
+``scripts/factory_calibrate.py`` (never with ``--dump``, which is read-only)
+before calling ``configure``. ``verify`` commits the record only on a complete
+match and refuses a profile that is stored but not yet applied.
 """
 
 from __future__ import annotations
@@ -93,9 +96,18 @@ def load_profile(path: Path) -> dict[str, Any]:
     # fail before any file or device is touched, with a clear reason.
     if "gain_x100" in payload:
         _require_int("gain_x100", payload["gain_x100"], 1, 1_000_000)
+    # The firmware whitelist writes both LEDs in one command: a half profile
+    # is refused on the wire with a BLE ATT error, so reject it here with an
+    # actionable message instead of a traceback from the radio layer.
+    if ("led_red" in payload) != ("led_ir" in payload):
+        raise ValueError("led_red and led_ir must be written together")
     for key in ("led_red", "led_ir"):
         if key in payload:
-            _require_int(key, payload[key], 0, 255)
+            # 0 means "keep the Kconfig default" in the firmware, so a readback
+            # of a requested 0 can never match. It is not a writable LED value.
+            if payload[key] == 0:
+                raise ValueError(f"{key}: 0 keeps the compiled default and cannot be verified")
+            _require_int(key, payload[key], 1, 255)
     if "battery_mah" in payload:
         _require_int("battery_mah", payload["battery_mah"], 100, 10_000)
     if "accel_bias_mg" in payload:
@@ -196,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         path = dcw.update_local_record(readback, serial)
         print(f"host record committed to data/calibration/{path.name}")
         return code
-    except (ValueError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: bleak raises its own hierarchy
         print(f"device profile failed: {exc}", file=sys.stderr)
         return 1
 

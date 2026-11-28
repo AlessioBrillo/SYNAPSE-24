@@ -27,13 +27,20 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+# G1_TEST_MATRIX.md T12: a soak is six hours, not whatever duration was asked
+# for by a shorter streaming gate. A 60 s report must not close the soak row.
+SOAK_MIN_S = 21_600
 EVIDENCE = ROOT / "evidence"
 # The addresses the bringup rig must answer on the shared I²C bus.
 REQUIRED_I2C = {"0x57": "MAX30102 PPG", "0x68": "ICM-20948 IMU", "0x40": "INA219"}
-I2C_LINE = re.compile(r"(0x5[47]|0x68|0x40)", re.IGNORECASE)
+# The ICM-20948 answers at 0x68 with AD0 low and 0x69 with AD0 high. The kit
+# may be wired either way; only PPG and INA219 have fixed addresses.
+I2C_LINE = re.compile(r"(0x5[47]|0x6[89]|0x40)", re.IGNORECASE)
 # An address printed anywhere in a dump proves nothing: the log must say the
 # device *answered* during a scan.
-I2C_ANSWERS = re.compile(r"(?:I2C scan:|i2c_\w+:)\s*(0x5[47]|0x68|0x40)\s+answers", re.IGNORECASE)
+I2C_ANSWERS = re.compile(
+    r"(?:I2C scan:|i2c_\w+:)\s*(0x5[47]|0x6[89]|0x40)\s+answers", re.IGNORECASE
+)
 DIS_SERIAL_UUID = "00002a25-0000-1000-8000-00805f9b34fb"
 
 Runner = Callable[[list[str]], tuple[int, str]]
@@ -133,7 +140,8 @@ def _report_verdict(
     A synthetic run writes a green report too (the normal spool path carries
     no ``rehearsal`` marker), so the command itself must ask for live hardware.
     The report must also describe the run that was requested (duration) and,
-    for a soak, name the recorder that actually wrote the artifact.
+    for a soak, name the recorder that actually wrote the artifact and prove
+    the run lasted at least six hours.
     """
     report = _read_report(path)
     run_id = str(report.get("run_id") or "")
@@ -141,10 +149,17 @@ def _report_verdict(
     artifact = report.get("artifact") or {}
     source = str(artifact.get("source") or "") if isinstance(artifact, dict) else ""
     reported_duration = report.get("duration_s")
+    elapsed = report.get("elapsed_s")
     duration_ok = duration is None or (
         isinstance(reported_duration, (int, float)) and float(reported_duration) == float(duration)
     )
     soak_ok = not soak or "LabRecorderCLI" in source
+    # `duration_s` is what the operator asked for; `elapsed_s` is measured by
+    # the validator when it builds the report. A run that ended early must not
+    # close the six-hour row by repeating the requested number.
+    soak_duration_ok = not soak or (
+        isinstance(elapsed, (int, float)) and float(elapsed) >= SOAK_MIN_S
+    )
     details = {
         "run_id": run_id or None,
         "overall_pass": report.get("overall_pass"),
@@ -152,9 +167,11 @@ def _report_verdict(
         "live_hardware": live,
         "fresh": bool(run_id) and run_id != str(previous.get("run_id") or ""),
         "duration_s": reported_duration,
+        "elapsed_s": elapsed,
         "duration_ok": duration_ok,
         "artifact_source": source or None,
         "soak_ok": soak_ok,
+        "soak_duration_ok": soak_duration_ok,
     }
     passed = (
         details["fresh"]
@@ -163,6 +180,7 @@ def _report_verdict(
         and report.get("rehearsal") is False
         and duration_ok
         and soak_ok
+        and soak_duration_ok
     )
     return verdict(passed, "the SOP gate report of THIS run is live and PASS", details)
 
@@ -262,7 +280,7 @@ def sensors(port: str, log: Path | None, runner: Runner) -> dict[str, Any]:
             "timestamp": datetime.now(UTC).isoformat(),
             **verdict(
                 False,
-                "0x57 PPG, 0x68 IMU and 0x40 INA219 answer on the bus",
+                "0x57 PPG, 0x68/0x69 IMU and 0x40 INA219 answer on the bus",
                 {
                     "reason": "--log <boot or factory log> is required; a --dump alone proves nothing"
                 },
@@ -273,12 +291,15 @@ def sensors(port: str, log: Path | None, runner: Runner) -> dict[str, Any]:
     command = [sys.executable, "scripts/factory_calibrate.py", "--port", port, "--dump"]
     started = datetime.now(UTC).timestamp()
     evidence = _execute(
-        "T03", command, runner, claim="0x57 PPG, 0x68 IMU and 0x40 INA219 answer on the bus"
+        "T03", command, runner, claim="0x57 PPG, 0x68/0x69 IMU and 0x40 INA219 answer on the bus"
     )
     text = log.read_text(encoding="utf-8", errors="replace")
     # A 0x57 in an old boot log or in a source comment is not an answer.
     seen = set(I2C_ANSWERS.findall(text))
-    missing = sorted(set(REQUIRED_I2C) - seen)
+    required = set(REQUIRED_I2C)
+    if "0x69" in seen:  # AD0 high: the IMU is present at its alternate address
+        required.discard("0x68")
+    missing = sorted(required - seen)
     modified = log.stat().st_mtime
     # The operator captures the boot log during bringup and then runs this
     # check, so the log necessarily predates the command. A five-minute window
@@ -297,7 +318,7 @@ def sensors(port: str, log: Path | None, runner: Runner) -> dict[str, Any]:
     evidence.update(
         verdict(
             evidence["passed"] and not missing and fresh,
-            "0x57 PPG, 0x68 IMU and 0x40 INA219 answer on the bus (fresh log)",
+            "0x57 PPG, 0x68/0x69 IMU and 0x40 INA219 answer on the bus (fresh log)",
             {"missing": missing, "fresh": fresh},
         )
     )

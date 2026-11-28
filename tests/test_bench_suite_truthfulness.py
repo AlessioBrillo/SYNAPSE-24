@@ -56,6 +56,7 @@ def _gate_report(
     passed: bool,
     rehearsal: bool = False,
     duration: float = 60.0,
+    elapsed: float | None = None,
     artifact_source: str | None = None,
 ) -> Path:
     payload: dict[str, object] = {
@@ -63,6 +64,7 @@ def _gate_report(
         "overall_pass": passed,
         "rehearsal": rehearsal,
         "duration_s": duration,
+        "elapsed_s": elapsed,
     }
     if artifact_source is not None:
         payload["artifact"] = {"source": artifact_source}
@@ -222,6 +224,17 @@ class TestSensorPresence:
         evidence = bench_suite.sensors("COM3", log, _runner(0))
         assert evidence["status"] == "PASS"
 
+    def test_the_imu_alternate_address_0x69_also_passes(self, tmp_path: Path) -> None:
+        log = tmp_path / "boot.log"
+        log.write_text(
+            "I2C scan: 0x57 answers (MAX30102)\n"
+            "i2c_probe: 0x69 answers (ICM-20948, AD0 high)\n"
+            "I2C scan: 0x40 answers (INA219)\n",
+            encoding="utf-8",
+        )
+        evidence = bench_suite.sensors("COM3", log, _runner(0))
+        assert evidence["status"] == "PASS"
+
     def test_an_address_without_an_answer_does_not_count(self, tmp_path: Path) -> None:
         log = tmp_path / "boot.log"
         log.write_text("0x57 MAX30102\n0x68 ICM-20948\n0x40 INA219\n", encoding="utf-8")
@@ -314,13 +327,49 @@ class TestReportMustDescribeTheRequestedRun:
         manifest.write_text("{}", encoding="utf-8")
 
         def runner(_command: list[str]) -> tuple[int, str]:
-            _gate_report(tmp_path, "fresh", passed=True, artifact_source="LabRecorderCLI (0.9)")
+            _gate_report(
+                tmp_path,
+                "fresh",
+                passed=True,
+                duration=21_600.0,
+                elapsed=21_600.0,
+                artifact_source="LabRecorderCLI (0.9)",
+            )
             return 0, ""
 
         evidence = bench_suite._stream_evidence(
-            "T12", "six-hour soak", _args(tmp_path, gate_report=report, soak=True), runner
+            "T12",
+            "six-hour soak",
+            _args(tmp_path, gate_report=report, soak=True, duration=21_600),
+            runner,
         )
         assert evidence["status"] == "PASS"
+
+    def test_a_short_soak_is_fail_even_with_a_labrecorder(self, tmp_path: Path) -> None:
+        """A 60 s streaming report must not close the six-hour soak row."""
+        report = _gate_report(tmp_path, "old", passed=True)
+
+        def runner(_command: list[str]) -> tuple[int, str]:
+            # The requested duration says six hours, but the run ended after a
+            # minute: a self-reported `duration_s` alone is not evidence.
+            _gate_report(
+                tmp_path,
+                "fresh",
+                passed=True,
+                duration=21_600.0,
+                elapsed=60.0,
+                artifact_source="LabRecorderCLI (0.9)",
+            )
+            return 0, ""
+
+        evidence = bench_suite._stream_evidence(
+            "T12",
+            "six-hour soak",
+            _args(tmp_path, gate_report=report, soak=True, duration=21_600),
+            runner,
+        )
+        assert evidence["status"] == "FAIL"
+        assert evidence["details"]["soak_duration_ok"] is False
 
 
 class TestCommandLineFailClosed:

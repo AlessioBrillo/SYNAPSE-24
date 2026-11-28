@@ -29,7 +29,9 @@ from scripts.validate_phase1_entry import (  # noqa: E402
     LSLStreamManager,
     Phase1Validator,
     _overall_pass,
+    append_failed_attempt,
     append_gate_history,
+    channel_meta,
     load_session_manifest,
     merge_bench_values,
 )
@@ -527,6 +529,36 @@ class TestEvidenceNeverFabricated:
         asyncio.run(validator.run(dry_run=True, duration_s=1.0))
         assert validator._quality_cache is None
         assert validator.device_config_readback == {}
+
+    def test_xdf_columns_carry_names_and_units(self) -> None:
+        """A µV ECG column and an arbitrary-unit PPG column are not interchangeable."""
+        assert channel_meta("ECG", 1) == (["ECG"], ["uV"])
+        assert channel_meta("PPG", 2) == (["PPG_Red", "PPG_IR"], ["a.u.", "a.u."])
+        assert channel_meta("ACC", 3)[1] == ["g", "g", "g"]
+        assert channel_meta("Power", 4)[1] == ["mV", "mA", "mW", "%"]
+        # An unexpected channel count must never write fewer labels than columns.
+        names, units = channel_meta("ECG", 3)
+        assert len(names) == len(units) == 3
+
+    def test_a_dry_run_is_marked_as_a_rehearsal_in_the_gate_report(self) -> None:
+        validator = _validator()
+        report = asyncio.run(validator.run(dry_run=True, duration_s=1.0))
+        gate_report = validator._build_gate_report(report)
+        assert gate_report["rehearsal"] is True
+        assert "dry-run" in gate_report["artifact"]["source"]
+        # Requested duration and measured elapsed are distinct rows: only the
+        # latter may close a six-hour soak.
+        assert isinstance(gate_report["elapsed_s"], float)
+        assert gate_report["elapsed_s"] >= 0.0
+
+    def test_a_crashed_run_leaves_a_fail_entry_in_the_history(self, tmp_path: Path) -> None:
+        gate_report = tmp_path / "gate_report.json"
+        per_run = append_failed_attempt(gate_report, "RuntimeError: radio died", live=True)
+        assert per_run.is_file()
+        assert json.loads(per_run.read_text(encoding="utf-8"))["overall_pass"] is False
+        history = (tmp_path / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(history) == 1
+        assert json.loads(history[0])["overall_pass"] is False
 
     def test_rehearsal_documentation_does_not_claim_live_hardware(self) -> None:
         text = (ROOT / "docs" / "hardware" / "BRINGUP_SOP.md").read_text(encoding="utf-8")

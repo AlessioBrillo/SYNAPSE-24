@@ -8,7 +8,7 @@ it is not validated by `tools/check_contract.py` until hardware exists.
 
 ## `forearm_hub` — active
 
-- board: `ESP32_BAND` / `band-core`
+- board: `ESP32_BAND` / `band-bench`
 - modalities: ecg, ppg, imu
 - rates (Hz): {"ecg": 500, "imu": 50, "ppg": 50}
 - `ecg_config`: {"adc_channel": 0, "adc_gpio": 1, "format": "s16", "gain": 1100.0, "gain_measured": null, "gpio_lead_off": 15, "lead_off_minus": null, "lead_off_plus": 15, "lsl_stream": "SYNAPSE_ECG_T0", "midrail_source": "auto"}

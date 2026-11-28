@@ -96,12 +96,26 @@ def configured_gain_for(serial: str | None) -> float | None:
     return int(value) / 100.0 if value else None
 
 
-def noise_floor_uv(wire_uv: npt.ArrayLike) -> dict[str, float]:
-    """Std of a shorted-input recording, in µV at the configured gain (SOP §4a.1)."""
+def noise_floor_uv(
+    wire_uv: npt.ArrayLike, configured_gain: float | None = None
+) -> dict[str, float]:
+    """Std of a shorted-input recording, in µV at the configured gain (SOP §4a.1).
+
+    ``std_uv`` is the number on the wire. The 30 µV limit in the SOP is at the
+    electrodes, so the corrected figure ``std_uv * nominal_gain / configured_gain``
+    is reported alongside it when the actual gain is known. Never make the
+    operator do this correction by hand and compare the wrong number to the
+    limit (SOP §4a.1).
+    """
     x = np.asarray(wire_uv, dtype=np.float64)
     if x.size < 2:
         raise ValueError("need at least two samples")
-    return {"std_uv": float(np.std(x, ddof=1)), "mean_uv": float(np.mean(x))}
+    std = float(np.std(x, ddof=1))
+    result = {"std_uv": std, "mean_uv": float(np.mean(x))}
+    if configured_gain is not None:
+        result["true_noise_uv"] = std * NOMINAL_GAIN / float(configured_gain)
+        result["configured_gain"] = float(configured_gain)
+    return result
 
 
 def _longest_run(mask: npt.NDArray[np.bool_]) -> int:
@@ -197,19 +211,23 @@ def main() -> int:
     ap.add_argument("--serial", help="band serial, to read its calibration record")
     args = ap.parse_args()
     wire, fs = load_capture(args.capture, args.fs)
+    configured = args.configured_gain
+    if configured is None:
+        configured = configured_gain_for(args.serial)
+    if configured is None:
+        # One warning, one assumption, for both subcommands: a noise result
+        # without `true_noise_uv` would silently invite the wrong comparison.
+        configured = NOMINAL_GAIN
+        origin = (
+            f"no calibration record for {args.serial}" if args.serial else "no --configured-gain"
+        )
+        print(
+            f"warning: {origin}: assuming the nominal {NOMINAL_GAIN:g}x",
+            file=sys.stderr,
+        )
     if args.what == "noise":
-        result = noise_floor_uv(wire)
+        result = noise_floor_uv(wire, configured_gain=configured)
     else:
-        configured = args.configured_gain
-        if configured is None:
-            configured = configured_gain_for(args.serial)
-        if configured is None:
-            configured = NOMINAL_GAIN
-            print(
-                "warning: no --configured-gain and no calibration record: "
-                f"assuming the nominal {NOMINAL_GAIN:g}x",
-                file=sys.stderr,
-            )
         result = gain_from_sine(
             wire,
             fs,

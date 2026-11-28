@@ -40,6 +40,23 @@ def test_a_complete_profile_is_accepted(tmp_path: Path) -> None:
     assert dp.load_profile(path) == dp.EXAMPLE
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"led_red": 31}, "written together"),
+        ({"led_red": 0, "led_ir": 31}, "0 keeps the compiled default"),
+        ({"led_red": 31, "led_ir": 256}, "out of range"),
+    ],
+)
+def test_led_values_the_firmware_cannot_write_are_refused_on_the_host(
+    tmp_path: Path, payload: dict[str, int], message: str
+) -> None:
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        dp.load_profile(path)
+
+
 def test_diff_catches_missing_wrong_and_string_fields() -> None:
     readback = {
         "cal_serial": "SYN-OTHER",
@@ -59,6 +76,21 @@ def test_diff_catches_missing_wrong_and_string_fields() -> None:
     assert any("ecg_gain_x100" in p for p in problems)
     assert any("accel_bias_mg" in p for p in problems)
     assert any("battery_mah: missing" in p for p in problems)
+
+
+def test_the_configured_image_is_the_one_that_allows_configuration() -> None:
+    """A manifest naming band-core would make every configure/write fail."""
+    import yaml  # noqa: PLC0415 - local to this assertion
+
+    hw = yaml.safe_load((ROOT / "config" / "hardware.yaml").read_text(encoding="utf-8"))
+    bring = yaml.safe_load((ROOT / "config" / "hardware_bringup.yaml").read_text(encoding="utf-8"))
+    variant = hw["pods"][0]["build_variant"]
+    assert variant == bring["bringup"]["firmware"]["build_variant"] == "band-bench"
+    defaults_file = variant.removeprefix("band-")
+    defaults = (ROOT / "firmware" / "esp32_band" / f"sdkconfig.defaults.{defaults_file}").read_text(
+        encoding="utf-8"
+    )
+    assert "CONFIG_SYNAPSE_FACTORY_MODE=y" in defaults
 
 
 def test_contract_fields_come_from_the_manifest() -> None:

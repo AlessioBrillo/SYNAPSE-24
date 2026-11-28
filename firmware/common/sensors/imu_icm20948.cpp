@@ -32,8 +32,8 @@ static const char* TAG = "imu_icm20948";
 #define ICM20948_REG_GYRO_SMPLRT_DIV    0x00   // bank 2
 #define ICM20948_REG_ACCEL_SMPLRT_DIV_1 0x10   // bank 2 (high byte)
 #define ICM20948_REG_ACCEL_SMPLRT_DIV_2 0x11   // bank 2 (low byte)
-#define ICM20948_ACCEL_BASE_ODR_HZ  1125       // accel output rate with DLPF enabled, before the divider
-#define ICM20948_GYRO_BASE_ODR_HZ   1100       // gyro base rate differs from the accel's
+/* The base rates now live in imu_odr.h: the BLE readback derives the same
+ * effective ODR from them, so the driver and the reported value cannot drift. */
 
 #define ICM20948_AK09916_ADDR       0x0C
 #define AK09916_REG_WIA1            0x00
@@ -149,9 +149,9 @@ static esp_err_t imu_configure(const imu_icm20948_config_t* config) {
     }
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_CONFIG_1, gyro_fsr | 0x28 | 0x01));
     uint32_t gdiv = imu_smplrt_div_for(ICM20948_GYRO_BASE_ODR_HZ, (uint32_t)config->gyro_odr_hz);
-    if (gdiv > 255) {  // 8-bit divider: the slowest gyro ODR is ~4.3 Hz
+    if (gdiv > IMU_GYRO_DIV_MAX) {  // 8-bit divider: the slowest gyro ODR is ~4.3 Hz
         ESP_LOGW(TAG, "gyro ODR %u Hz is below the divider range; running at the slowest rate", (unsigned)config->gyro_odr_hz);
-        gdiv = 255;
+        gdiv = IMU_GYRO_DIV_MAX;
     }
     CHK(i2c_write_reg(config->i2c_port, config->i2c_addr, ICM20948_REG_GYRO_SMPLRT_DIV, (uint8_t)gdiv));
     CHK(icm20948_select_bank(ICM20948_BANK_0));

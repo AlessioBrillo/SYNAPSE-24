@@ -113,19 +113,21 @@ onto it. Let IDF use its own bundled interpreter for the build, and use the
 
 ## 4. Build variants
 
-The Band firmware has two build profiles, selected with `SDKCONFIG_DEFAULTS`:
+The Band firmware has five build profiles, selected with `SDKCONFIG_DEFAULTS`:
 
 | Variant | Sensors / features | Use |
 |---|---|---|
-| `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS, no TMP117, no FIT, no provisioning, no OTA | **Smoke kit bringup** — the ~€140 rig (`PROCUREMENT.md`). This is what Phase 1 hardware validation runs against. |
-| `band-full` (default) | Everything: + GPS MAX-M10S, + TMP117, + FIT writer, + BLE provisioning, + signed OTA | Product firmware for the Synapse Band v1. |
+| `band-bench` | `band-core` + the USB factory shell | **G1 configuration and bringup**. This is the image the tester flashes. |
+| `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS/TMP117/FIT/provisioning/OTA | Offline smoke-kit profile; no factory writes. |
+| `band-full` (default) | Everything: + GPS MAX-M10S, + TMP117, + FIT writer, + provisioning | Integration profile. OTA is still a stub (`synapse_ota.c`). |
+| `band-full` + `sdkconfig.rr` | `band-full` with `CONFIG_SYNAPSE_RR_ENABLE=y` | PPG RMSSD experiment; kept off by default (5x ECG). |
+| `band-product` | Factory mode off and the raw research service unregistered | Commercial image; not used for G1 evidence. |
 
-`band-core` exists so that bringup does not block on hardware you have not
-bought yet. It is the default for `scripts/build_and_flash_firmware.py`.
+`band-bench` exists so that an operator never has to run `menuconfig` to configure a unit; `scripts/build_and_flash_firmware.py --variant band-bench` selects it.
 
 ```powershell
-# band-core (smoke kit)
-$env:SDKCONFIG_DEFAULTS = "sdkconfig.defaults.core;sdkconfig.defaults"
+# band-bench (G1 configuration image)
+$env:SDKCONFIG_DEFAULTS = "sdkconfig.defaults.core;sdkconfig.defaults.bench;sdkconfig.defaults"
 idf.py set-target esp32s3
 idf.py build
 ```
@@ -147,7 +149,7 @@ Expected first-boot log:
 ```
 I (xxx) SYNAPSE_BAND: === Synapse Band v1 Starting ===
 I (xxx) synapse_i2c: port 0 up: SDA=8 SCL=9 400000 Hz
-I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-core]
+I (xxx) SYNAPSE_SENSORS: Sensors initialized (ECG:500Hz, PPG:50Hz, IMU:50Hz) [band-bench]
 I (xxx) SYNAPSE_RESEARCH: research service registered (6 streams, raw samples only)
 ...
 I (xxx) SYNAPSE_BAND: Entering main loop
