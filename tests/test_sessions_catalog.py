@@ -253,3 +253,47 @@ def test_the_session_id_is_a_prefix_of_the_recorded_digest(tmp_path: Path) -> No
     _make_fit(fit)
     rec = index_fit(fit)
     assert rec.session_id == "syn-" + rec.sha256[:24]
+
+
+def test_xdf_serial_comes_from_the_source_id_not_the_filename(tmp_path: Path) -> None:
+    from synapse24.utils import StreamConfig
+
+    path = tmp_path / "copied_and_renamed.xdf"
+    n = 100
+    write_xdf(
+        path,
+        streams=[
+            {
+                "data": np.random.randn(n, 2).astype(np.float64),
+                "timestamps": np.arange(n) / 100.0,
+                "info": StreamConfig(
+                    name="SYNAPSE_ECG_T0",
+                    stream_type="ECG",
+                    channel_count=2,
+                    sampling_rate=100.0,
+                    channel_names=["ECG_A", "ECG_B"],
+                    channel_units=["mV", "mV"],
+                    source_id="synapse24_ecg_t0_SYN-000123",
+                    tier=1,
+                ),
+            }
+        ],
+    )
+
+    rec = index_xdf(path)
+    assert rec.device_serial == "SYN-000123"
+    assert rec.device_serial != path.stem.upper()
+    stream = rec.streams[0]
+    assert stream.source_id == "synapse24_ecg_t0_SYN-000123"
+    assert stream.channel_names == ["ECG_A", "ECG_B"]
+    assert stream.channel_units == ["mV", "mV"]
+    assert stream.tier == 1
+
+    # The extra fields survive a catalog JSON round-trip.
+    index_path = tmp_path / "catalog.json"
+    save_catalog(index_directory(tmp_path), index_path)
+    loaded = load_catalog(index_path)
+    reloaded = loaded.sessions[rec.session_id].streams[0]
+    assert reloaded.channel_names == ["ECG_A", "ECG_B"]
+    assert reloaded.tier == 1
+    assert reloaded.source_id == stream.source_id

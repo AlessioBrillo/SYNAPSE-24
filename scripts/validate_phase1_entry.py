@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import struct
@@ -254,6 +255,12 @@ class LSLStreamManager:
         # samples of *this* run, never the ones of the previous one.
         self.spool.reset()
         self._sample_counts.clear()
+        # Export to FIT needs one LSL<->Unix anchor for the whole session.
+        # Capture both clocks here, before the first sample is pushed; later
+        # conversion is a difference, not a guess from a filename timestamp.
+        clock_fn = pylsl.local_clock if pylsl is not None else time.time
+        self._session_utc0_s = float(time.time())
+        self._session_lsl0_s = float(clock_fn())
 
         for cfg in stream_configs:
             # A fixed `_001` source id would make two bands' recordings
@@ -270,10 +277,23 @@ class LSLStreamManager:
                 source_id=source_id,
             )
             info.desc().append_child_value("tier", str(cfg.get("tier", 0)))
+            # LabRecorder copies the StreamInfo <desc> straight into XDF. A
+            # stream without labels/units produces an evidence file nobody can
+            # interpret later, so write them at outlet creation (source_id is
+            # immutable too, hence all metadata is set here).
+            stream_type = str(cfg.get("type", "Other"))
+            names, units = channel_meta(stream_type, int(cfg.get("channel_count", 1)))
+            channels_node = info.desc().append_child("channels")
+            for label, unit in zip(names, units):
+                node = channels_node.append_child("channel")
+                node.append_child_value("label", label)
+                node.append_child_value("unit", unit)
 
             outlet = pylsl.StreamOutlet(info, chunk_size=cfg.get("chunk_size", 16))
             self.outlets[cfg["name"]] = outlet
-            self.stream_configs[cfg["name"]] = cfg
+            stored_cfg = dict(cfg)
+            stored_cfg["source_id"] = source_id
+            self.stream_configs[cfg["name"]] = stored_cfg
             self.stream_buffers[cfg["name"]] = []
             self.stream_timestamps[cfg["name"]] = []
             self.spool.spool(cfg["name"])
@@ -311,7 +331,29 @@ class LSLStreamManager:
         self.outlets.clear()
 
 
-# The XDF must say what its columns are: an ECG column in µV and a PPG column
+# The research service exposes exactly six notify characteristics. `service`
+# is a *service* UUID and SYNC is READ|WRITE only (see
+# firmware/esp32_band/ble/ble_research_service.c). Asking a real bleak client
+# to start_notify on either aborts the capture before the first sample; the
+# synthetic transports used to no-op and hide this.
+NOTIFY_CHARACTERISTICS = ("ecg", "ppg", "acc", "gyro", "mag", "power")
+
+
+def subscribable_characteristics(bringup_cfg: dict) -> dict[str, str]:
+    """Only the notify-capable research characteristics.
+
+    The bringup config also lists the service UUID and the SYNC
+    characteristic. SYNC is read/written explicitly for clock sync, never
+    subscribed; the service UUID is not a characteristic at all.
+    """
+    chars = bringup_cfg["ble"]["characteristics"]
+    missing = [name for name in NOTIFY_CHARACTERISTICS if not chars.get(name)]
+    if missing:
+        raise ValueError("bringup BLE config lacks notify UUIDs: " + ", ".join(missing))
+    return {name: str(chars[name]) for name in NOTIFY_CHARACTERISTICS}
+
+
+# The XDF must say what its columns are: an ECG column in uV and a PPG column
 # in arbitrary units are not interchangeable. hardware.yaml declares the
 # types; the names/units below make the written streams self-describing.
 XDF_CHANNEL_META: dict[str, tuple[list[str], list[str]]] = {
@@ -435,11 +477,16 @@ class Phase1Validator:
         writes is G1 evidence: it must carry the same unit as ``synapse record``
         and as ``g1_measure.py``, which fit a gain from microvolts. Pushing mV
         into that XDF produced a ~1000x wrong gain (an sdkconfig gain of ~110
-        instead of ~110000). Convert ONLY ECG at this boundary; every other
-        stream already arrives in its declared unit.
+        instead of ~110000). The gyro arrives in rad/s from the research client
+        but the XDF declares dps (config/hardware.yaml display_per_wire), so it
+        needs the same boundary conversion. Other streams already arrive in
+        their declared unit.
         """
         if outlet == "SYNAPSE_ECG_T0":
             return [float(value) * 1000.0 for value in values]
+        if outlet == "SYNAPSE_GYRO_T0":
+            # research_client: wire mrad/s / 1000 -> rad/s; dps = rad/s * 180/pi.
+            return [float(value) * 180.0 / math.pi for value in values]
         return values
 
     def _push_raw_to_lsl(self, outlet: str, values: list[float], ts: float) -> None:
@@ -513,9 +560,9 @@ class Phase1Validator:
             },
         )
         self.clock_sync = MultiPodClockSync(config)
-        self.clock_sync.register_pod(
-            "forearm_hub", int(self._nominal_rates().get("SYNAPSE_ACC_T0", 0) or 0)
-        )
+        # Do NOT register the hub as its own comparison pod. It is the clock
+        # reference: self-comparing its ACC buffer makes every sync gate pass
+        # with corr=1/lag=0 even when no second clock was ever measured.
 
         marker_info = pylsl.StreamInfo(
             name="SYNAPSE_MARKERS",
@@ -681,7 +728,6 @@ class Phase1Validator:
                 if self.clock_sync:
                     acc_mag = float(np.linalg.norm(acc))
                     self.clock_sync.add_hub_acc(acc_mag, timestamp)
-                    self.clock_sync.add_pod_acc("forearm_hub", acc_mag, timestamp)
 
                 if self.controller:
                     self.controller.update_imu(
@@ -903,6 +949,7 @@ class Phase1Validator:
                     "tier": tier,
                     "channel_names": names,
                     "channel_units": units,
+                    "source_id": str(cfg.get("source_id", "")),
                 }
             )
 
@@ -1273,7 +1320,12 @@ class Phase1Validator:
                 record = canonical_record(
                     json.loads((ROOT / cal_source).read_text(encoding="utf-8"))
                 )
-                for key in ("ecg_gain_x100", "ppg_led_red", "ppg_led_ir"):
+                for key in (
+                    "ecg_gain_x100",
+                    "ppg_led_red",
+                    "ppg_led_ir",
+                    "battery_mah",
+                ):
                     if record.get(key):
                         result[key] = int(record[key])
                 # The DIS serial is the identity truth; a record that claims
@@ -1478,7 +1530,7 @@ class Phase1Validator:
             )
         return self._gate("power_telemetry_measured", ok, value, 0, details)
 
-    def _evaluate_gates(
+    def _evaluate_gates(  # noqa: PLR0915 - one row per G1 gate, deliberately flat
         self,
         loop_results: dict,
         xdf_proof: dict,
@@ -1498,6 +1550,27 @@ class Phase1Validator:
                 f"Total dropped samples: {total_dropped}",
             )
         )
+
+        # A live session needs one LSL<->Unix anchor for the whole recording;
+        # without it a later FIT export has to guess the wall-clock domain.
+        has_anchor = (
+            getattr(self, "_session_utc0_s", None) is not None
+            and getattr(self, "_session_lsl0_s", None) is not None
+        )
+        if self.live_hardware:
+            gates.append(
+                self._gate(
+                    "utc_anchor_recorded",
+                    has_anchor,
+                    int(has_anchor),
+                    1,
+                    "the session started with both a Unix and an LSL clock reading",
+                )
+            )
+        else:
+            gates.append(
+                self._na("utc_anchor_recorded", "no live session: no export anchor needed")
+            )
 
         # Gate 2: research stream zero-drop — frames lost in transit. The
         # header stamps a 16-bit sequence per stream, so a hole is *seen*;
@@ -1703,9 +1776,9 @@ class Phase1Validator:
             # Injected transport: no bleak, no radio, the same code path.
             self.client = self.transport
             setup_session_state()
-            for _name, char_uuid in bringup_cfg["ble"]["characteristics"].items():
+            for _name, char_uuid in subscribable_characteristics(bringup_cfg).items():
                 await self.client.start_notify(char_uuid, self._notification_handler)
-            self.logger.info("Subscribed to all characteristics (injected transport)")
+            self.logger.info("Subscribed to notify characteristics (injected transport)")
             await self._calibrate_clock_model()
             return
 
@@ -1726,7 +1799,7 @@ class Phase1Validator:
 
         # Step 3: Subscribe to sensor notifications
         await self._subscribe_characteristics()
-        self.logger.info("Subscribed to all characteristics")
+        self.logger.info("Subscribed to all notify characteristics")
 
         # Step 5: Calibrate the pod clock before the recording starts, so the
         # very first pushed sample already carries a mapped LSL timestamp
@@ -1863,6 +1936,10 @@ class Phase1Validator:
             or str(self.config["bringup"]["ble"].get("serial") or "").strip()
             or None,
             "calibration_source": self._calibration_source(),
+            # LSL<->Unix anchor: export/FIT conversion needs both numbers, and
+            # they must come from the same instant at session start.
+            "utc0_s": getattr(self, "_session_utc0_s", None),
+            "lsl0_s": getattr(self, "_session_lsl0_s", None),
             "duration_s": duration,
             # `duration_s` is what was REQUESTED. `elapsed_s` is measured here
             # when the report is built, so a run that ended early cannot claim
@@ -2466,8 +2543,12 @@ class Phase1Validator:
 
         acc_mag = float(np.linalg.norm(acc[-3:]))
         if self.clock_sync:
+            # The forearm hub IS the hub here. Feeding the same magnitude and
+            # the same timestamp to a "pod" buffer produced a perfect
+            # cross-correlation (corr=1, lag=0) and let tier0_sync_10ms pass
+            # without any second clock. Only the reference side is real; a pod
+            # must be registered from its own samples to be comparable.
             self.clock_sync.add_hub_acc(acc_mag, timestamp)
-            self.clock_sync.add_pod_acc("forearm_hub", acc_mag, timestamp)
         if self.controller:
             self.controller.update_imu(accel_magnitude=acc_mag, timestamp=timestamp)
 
@@ -2518,7 +2599,9 @@ class Phase1Validator:
         )
 
     async def _subscribe_characteristics(self) -> None:
-        ble_chars = self.config["bringup"]["ble"]["characteristics"]
+        # Never subscribe to the service UUID or SYNC: a real bleak client
+        # rejects both and the recording would abort before the first sample.
+        ble_chars = subscribable_characteristics(self.config["bringup"])
         for name, char_uuid in ble_chars.items():
             self.logger.info(f"Subscribing to {name}: {char_uuid}")
             await self.client.start_notify(char_uuid, self._notification_handler)
@@ -2665,18 +2748,25 @@ def append_gate_history(
 async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
     logger = setup_logging(args.verbose)
 
-    if BleakClient is None or BleakScanner is None:
-        logger.error("bleak not installed. Install with: uv add bleak")
+    def reject(reason: str) -> int:
+        """A refused run is still an attempt: keep it in the append-only history."""
+        logger.error(reason)
+        try:
+            failed = append_failed_attempt(args.gate_report, reason, live=args.live_hardware)
+            logger.info("failed attempt recorded in %s", failed)
+        except Exception:  # noqa: BLE001 - never mask the original rejection
+            logger.exception("could not append the failed attempt to history")
         return 2
 
+    if BleakClient is None or BleakScanner is None:
+        return reject("bleak not installed. Install with: uv add bleak")
+
     if pylsl is None:
-        logger.error("pylsl not installed. Install with: uv add pylsl")
-        return 2
+        return reject("pylsl not installed. Install with: uv add pylsl")
 
     config_path = Path(args.config)
     if not config_path.exists():
-        logger.error(f"Config file not found: {config_path}")
-        return 2
+        return reject(f"Config file not found: {config_path}")
 
     mode_errors: list[str] = []
     if args.soak and args.soak_rehearsal:
@@ -2693,20 +2783,16 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
             "--soak-rehearsal is a synthetic rehearsal and cannot be a live-hardware run"
         )
     if mode_errors:
-        for message in mode_errors:
-            logger.error(message)
-        return 2
+        return reject("; ".join(mode_errors))
 
     session = None
     if args.live_hardware:
         try:
             session = load_session_manifest(getattr(args, "manifest", None))
         except (ValueError, OSError, json.JSONDecodeError) as exc:
-            logger.error(f"live recording refused: {exc}")  # noqa: TRY400
-            return 2
+            return reject(f"live recording refused: {exc}")
         if session is None:
-            logger.error("live recording refused: --manifest is required (consent + pseudonym)")
-            return 2
+            return reject("live recording refused: --manifest is required (consent + pseudonym)")
 
     validator = Phase1Validator(config_path, logger)
     validator.session_kind = str(session.get("kind", "human")) if session else "human"
@@ -2738,8 +2824,7 @@ async def main_async(args: argparse.Namespace) -> int:  # noqa: PLR0911, PLR0915
             try:
                 merge_bench_values(gate_report, args.bench_values)
             except (ValueError, OSError, json.JSONDecodeError) as exc:
-                logger.error(f"bench values refused: {exc}")  # noqa: TRY400
-                return 2
+                return reject(f"bench values refused: {exc}")
         # A hand-filled row is a claim made by a person. Without a second
         # signature it stays visible but cannot turn the run green (G1 matrix
         # rule 3). This applies to bench runs too: an operator still measured

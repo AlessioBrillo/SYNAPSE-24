@@ -30,6 +30,10 @@ from synapse24.utils.xdf import (
 )
 
 
+class CorrectionError(ValueError):
+    """A non-empty correction set did not match any stream in the XDF file."""
+
+
 @dataclass(frozen=True)
 class CorrectionResult:
     """Result of XDF timestamp correction."""
@@ -40,6 +44,20 @@ class CorrectionResult:
     total_samples: int
     corrections_applied: dict[str, DriftEstimate]
     validation: dict[str, Any]
+
+
+#: XDF channel_format -> bytes per channel value (the wire is little-endian).
+#: Assuming 4 bytes for every numeric format misaligns int16/int8/double
+#: samples and silently corrupts every sample after the first timestamp.
+_CHANNEL_FORMAT_BYTES: dict[str, int] = {
+    "int8": 1,
+    "int16": 2,
+    "int32": 4,
+    "int64": 8,
+    "float32": 4,
+    "float64": 8,
+    "double": 8,
+}
 
 
 def _read_varlen_int(f: BinaryIO) -> int:
@@ -108,10 +126,14 @@ def _parse_stream_header_xml(xml_bytes: bytes) -> dict[str, Any]:
     info["channel_format"] = get_text(root, "channel_format", "float32")
     info["source_id"] = get_text(root, "source_id")
 
+    # LSL/XDF puts the descriptive metadata under <desc>, not directly under
+    # <info>: looking at the root dropped labels, units and tier on rewrite.
+    desc = root.find("desc")
+
     # Channel names/units
     ch_names: list[str] = []
     ch_units: list[str] = []
-    chns = root.find("channels")
+    chns = desc.find("channels") if desc is not None else None
     if chns is not None:
         for ch in chns.findall("channel"):
             ch_names.append(get_text(ch, "label", ""))
@@ -120,15 +142,25 @@ def _parse_stream_header_xml(xml_bytes: bytes) -> dict[str, Any]:
     info["channel_units"] = ch_units
 
     # Device/acquisition metadata
-    device = root.find("device")
+    device = desc.find("device") if desc is not None else None
     if device is not None:
         info["device"] = get_text(device, "manufacturer", "")
         info["model"] = get_text(device, "model", "")
-    acq = root.find("acquisition")
+    acq = desc.find("acquisition") if desc is not None else None
     if acq is not None:
         info["software"] = get_text(acq, "software", "")
         info["version"] = get_text(acq, "version", "")
         info["tier"] = int(get_text(acq, "tier", "0"))
+
+    # Preserve the original <metadata> block: the header is re-emitted from
+    # StreamConfig, and dropping these values would make the corrected file
+    # less self-describing than the one it came from.
+    metadata: dict[str, str] = {}
+    meta_node = desc.find("metadata") if desc is not None else None
+    if meta_node is not None:
+        for child in meta_node:
+            metadata[child.tag] = child.text or ""
+    info["metadata"] = metadata
 
     return info
 
@@ -202,8 +234,10 @@ def _process_samples_chunk(
                 _write_varlen_int_to_bytes(output, str_len)
                 output.extend(str_data)
         else:
-            # float32: 4 bytes per channel
-            sample_bytes = 4 * n_channels
+            width = _CHANNEL_FORMAT_BYTES.get(channel_format)
+            if width is None:
+                raise CorrectionError(f"unsupported numeric channel_format: {channel_format!r}")
+            sample_bytes = width * n_channels
             if pos + sample_bytes > len(data):
                 break
             output.extend(data[pos : pos + sample_bytes])
@@ -241,7 +275,9 @@ def _write_varlen_int_to_bytes(buf: bytearray, value: int) -> None:
 
 
 def _collect_chunks_and_configs(
-    fin: BinaryIO, corrections: dict[str, DriftEstimate]
+    fin: BinaryIO,
+    corrections: dict[str, DriftEstimate],
+    pod_id_to_source_id: dict[str, str] | None = None,
 ) -> tuple[
     list[tuple[int, int | None, bytes]],
     dict[int, StreamConfig],
@@ -249,12 +285,24 @@ def _collect_chunks_and_configs(
     dict[str, DriftEstimate],
     int,
 ]:
-    """First pass: read all chunks, collect stream headers and corrections."""
-    chunks = []
+    """First pass: read all chunks, collect stream headers and corrections.
+
+    ``corrections`` may be keyed by XDF ``source_id`` (the direct case) or by
+    ``pod_id`` from ``get_sync_status()["pods"]``. In the latter case the caller
+    supplies ``pod_id_to_source_id`` so the match is explicit rather than a
+    lucky coincidence of naming. A non-empty set that matches *no* stream is
+    an error: silently emitting an uncorrected file is worse than refusing.
+    """
+    chunks: list[tuple[int, int | None, bytes]] = []
     stream_configs: dict[int, StreamConfig] = {}
     stream_corrections: dict[int, DriftEstimate] = {}
-    corrections_applied = {}
+    corrections_applied: dict[str, DriftEstimate] = {}
     streams_corrected = 0
+
+    by_source_id: dict[str, DriftEstimate] = dict(corrections)
+    for pod_id, source_id in (pod_id_to_source_id or {}).items():
+        if pod_id in corrections:
+            by_source_id[source_id] = corrections[pod_id]
 
     while True:
         chunk = _read_xdf_chunk(fin)
@@ -266,9 +314,9 @@ def _collect_chunks_and_configs(
         if tag == XDF_CHUNK_TAGS["STREAMHEADER"] and stream_id is not None:
             info = _parse_stream_header_xml(data)
             source_id = info.get("source_id", "")
-            correction = corrections.get(source_id)
+            correction = by_source_id.get(source_id)
 
-            if correction:
+            if correction is not None:
                 stream_corrections[stream_id] = correction
                 corrections_applied[source_id] = correction
                 streams_corrected += 1
@@ -285,9 +333,16 @@ def _collect_chunks_and_configs(
                 tier=info.get("tier", 0),
                 device=info.get("device", "SYNAPSE-24"),
                 model=info.get("model", "Phase0"),
-                metadata={"corrected": bool(correction)},
+                metadata={**info.get("metadata", {}), "corrected": bool(correction)},
             )
             stream_configs[stream_id] = config
+
+    if corrections and streams_corrected == 0:
+        raise CorrectionError(
+            "none of the supplied corrections matched any XDF stream "
+            f"(looked for source_ids {sorted(by_source_id)}); refusing to write "
+            "an uncorrected file"
+        )
 
     return chunks, stream_configs, stream_corrections, corrections_applied, streams_corrected
 
@@ -332,6 +387,14 @@ def _write_corrected_chunks(
             else:
                 _write_xdf_chunk(fout, tag, data, stream_id)
 
+        elif tag == XDF_CHUNK_TAGS["CLOCK"]:
+            # A CLOCK chunk carries the recorder's clock map. After rewriting
+            # SAMPLES timestamps it is stale: pyxdf's dejitter would apply the
+            # old offsets on top of the correction. Drop it for corrected
+            # streams (un-corrected streams keep theirs verbatim).
+            if stream_id is None or stream_id not in stream_corrections:
+                _write_xdf_chunk(fout, tag, data, stream_id)
+
         else:
             _write_xdf_chunk(fout, tag, data, stream_id)
 
@@ -343,6 +406,7 @@ def correct_xdf_timestamps(
     output_path: Path,
     corrections: dict[str, DriftEstimate],
     *,
+    pod_id_to_source_id: dict[str, str] | None = None,
     validate_output: bool = True,
 ) -> CorrectionResult:
     """Apply per-stream timestamp correction to XDF file.
@@ -350,30 +414,38 @@ def correct_xdf_timestamps(
     Args:
         input_path: Source XDF file
         output_path: Destination XDF file (will be created)
-        corrections: Mapping of stream source_id -> DriftEstimate
+        corrections: Mapping of stream source_id -> DriftEstimate. Keys that
+            are pod_ids are resolved through ``pod_id_to_source_id``.
+        pod_id_to_source_id: Explicit pod_id -> XDF source_id map, used when
+            the corrections come from ``get_sync_status()["pods"]``.
         validate_output: If True, run validate_xdf on output
 
     Returns:
         CorrectionResult with statistics and validation info
+
+    Raises:
+        CorrectionError: A non-empty correction set matched no stream, or a
+            numeric channel_format has no known byte width.
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input XDF not found: {input_path}")
 
-    with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
-        # Copy magic bytes
+    # First pass only reads the input. If the corrections match no stream we
+    # fail before creating (or truncating) any output file.
+    with open(input_path, "rb") as fin:
         magic = fin.read(len(XDF_MAGIC))
         if magic != XDF_MAGIC:
             raise ValueError(f"Invalid XDF magic: {magic!r}")
-        fout.write(magic)
-
-        # First pass: collect chunks and configs
         chunks, stream_configs, stream_corrections, corrections_applied, streams_corrected = (
-            _collect_chunks_and_configs(fin, corrections)
+            _collect_chunks_and_configs(fin, corrections, pod_id_to_source_id)
         )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "wb") as fout:
+        fout.write(magic)
 
         # Write FILEHEADER
         _write_xdf_chunk(fout, XDF_CHUNK_TAGS["FILEHEADER"], XDF_FILEHEADER_XML)
@@ -404,6 +476,7 @@ def correct_xdf_from_sync(
     output_path: Path,
     sync_estimates: dict[str, dict[str, Any]],
     *,
+    pod_id_to_source_id: dict[str, str] | None = None,
     validate_output: bool = True,
 ) -> CorrectionResult:
     """Convenience wrapper using MultiPodClockSync estimate format.
@@ -411,7 +484,10 @@ def correct_xdf_from_sync(
     Args:
         input_path: Source XDF file
         output_path: Destination XDF file
-        sync_estimates: Output from MultiPodClockSync.get_sync_status()["pods"]
+        sync_estimates: Output from MultiPodClockSync.get_sync_status()["pods"] —
+            keyed by **pod_id**, not by source_id.
+        pod_id_to_source_id: Explicit pod_id -> XDF source_id map. Without it,
+            keys are taken as source_ids directly (legacy callers).
         validate_output: If True, run validate_xdf on output
     """
     # Extract DriftEstimate objects from sync status
@@ -427,5 +503,9 @@ def correct_xdf_from_sync(
             )
 
     return correct_xdf_timestamps(
-        input_path, output_path, corrections, validate_output=validate_output
+        input_path,
+        output_path,
+        corrections,
+        pod_id_to_source_id=pod_id_to_source_id,
+        validate_output=validate_output,
     )

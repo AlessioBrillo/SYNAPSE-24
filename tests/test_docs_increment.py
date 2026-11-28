@@ -41,12 +41,14 @@ def test_the_previous_increment_points_at_the_renumbering() -> None:
     assert "MVP-1.4" in previous
 
 
-def test_the_gate_surfaces_the_reason_of_every_skipped_c_host_test() -> None:
-    """A skip is not a pass: the host C gate step must print why a test skipped (-rs)."""
+def test_the_gate_fails_closed_and_surfaces_every_skipped_c_host_test() -> None:
+    """A skip is not a pass: both gates use the wrapper that prints skip reasons."""
     for path in (ROOT / ".woodpecker" / "ci.yml", ROOT / "scripts" / "run_gate_locally.sh"):
-        step = next(
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if "test_research_service_host" in line
+        text = path.read_text(encoding="utf-8")
+        assert "scripts/host_c_gate.py" in text, f"{path.name}: host C gate is not wrapped"
+        assert "test_research_service_host" not in text, (
+            f"{path.name}: raw pytest step can still treat skips as passes"
         )
-        assert " -rs " in step, f"{path.name}: the host C gate no longer prints skip reasons"
+    wrapper = (ROOT / "scripts" / "host_c_gate.py").read_text(encoding="utf-8")
+    assert '"-rs"' in wrapper, "the wrapper must keep pytest's skip reasons visible"
+    assert "skipped" in wrapper, "the wrapper must refuse a skipped test"

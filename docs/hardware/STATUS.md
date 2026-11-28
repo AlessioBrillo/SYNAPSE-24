@@ -4,9 +4,11 @@ This file is the authoritative status of the project. README, Roadmap,
 AGENTS.md, CONTRIBUTING.md and the compliance documents point here instead of
 keeping their own copy. If a number below changes, change it here first.
 
-**Latest increment:** MVP-2.9 (first-device readiness hardening). **Last gate:** see
-`docs/increments/MVP2_9_DEVICE_READY_HARDENING.md` for the exact command
-sequence and result. The previous increment (MVP-2.8, hardware readiness fixes)
+**Latest increment:** MVP-2.10 (real-device onboarding truth). **Last gate:** see
+`docs/increments/MVP2_10_DEVICE_ONBOARDING_TRUTH.md` for the exact command
+sequence and result. The previous increment (MVP-2.9, first-device readiness hardening)
+is recorded in `docs/increments/MVP2_9_DEVICE_READY_HARDENING.md`;
+MVP-2.8 (hardware readiness fixes)
 is recorded in `docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md`; MVP-2.7
 (first device onboarding) in `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md`.
 MVP-2.6 (readiness governance) is recorded in

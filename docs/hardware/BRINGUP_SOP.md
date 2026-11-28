@@ -117,10 +117,28 @@ the USB serial console offers a calibration shell (`help` lists it) without
 ```bash
 uv run python scripts/factory_calibrate.py --port COM3 --dump
 uv run python scripts/factory_calibrate.py --port COM3 --gain-json <gain.json> \
-    --led 1F,1F --battery 1000 --operator "<name>"
-# Over BLE, with atomic readback verification:
+    --led 1F,1F --battery 1000 --operator "<name>" \
+    --instrument "<generator-id>" --fw "<fw-version>" --uncertainty 5 --reboot
+```
+
+`--instrument`, `--fw`, `--uncertainty` and `--operator` are the provenance the
+BLE write is only allowed to *edit*, not to create; `--reboot` makes the band
+apply the record before any recording.
+
+> **Pair in the OS before the BLE writes below.** The device-config characteristic
+> is marked `WRITE_ENC`, so `bleak` cannot write it over an unpaired link: pair
+> the band in the host's Bluetooth settings first. The firmware uses Just Works
+> (`sm_mitm = 0`) with **no bonding** (`sm_bonding = 0`, no key store), so pairing
+> is per connection — if a new host or adapter writes the profile, pair again on
+> that host. This keeps out a passive eavesdropper, but it is not MITM-protected
+> and must not be described as a shipped security posture (see
+> `../../compliance/PRIVACY.md`).
+
+```bash
+# Over BLE, with atomic readback verification (OS pairing already done):
 uv run python scripts/device_profile.py configure <serial> --address <ble-addr> \
     --profile profile.json
+# After the reboot signalled by pending_reboot: 1:
 uv run python scripts/device_profile.py verify <serial> --address <ble-addr>
 ```
 
@@ -155,7 +173,7 @@ measurement.
 rm -f firmware/esp32_band/sdkconfig   # a stale sdkconfig overrides the defaults (gain trap)
 uv run python tools/check_contract.py
 uv run python scripts/build_and_flash_firmware.py --variant band-bench \
-    --port COM3 --clean monitor
+    --port COM3 --clean --monitor
 ```
 
 Expected first-boot sequence:
@@ -488,7 +506,7 @@ and answers the scan request with **18 bytes** (the complete name
 `SYNAPSE-BAND` + the 16-bit Heart Rate UUID). If a scanner shows a name
 without the service UUID, or a payload longer than 31 bytes, the build is
 not the one this SOP describes: check that the firmware was flashed from
-`firmware/esp32_band` with the `band-core` variant, and that the UUIDs came
+`firmware/esp32_band` with the `band-bench` variant, and that the UUIDs came
 from the generated contract header
 (`uv run python tools/generate_contracts.py --check` must pass).
 

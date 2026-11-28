@@ -4,7 +4,7 @@ SYNAPSE-24 is **dual-licensed**:
 
 | Option | For whom | Terms |
 |--------|----------|-------|
-| **Open source** | Research, education, community and any use that can comply with the AGPL | [GNU AGPL v3.0 or later](LICENSE) |
+| **Open source** | Research, education, community and any use that can comply with the AGPL | [GNU AGPL v3.0 or later](../LICENSE) |
 | **Commercial** | Organizations that want to embed, ship or host SYNAPSE-24 without the AGPL copyleft obligations (e.g. closed-source products, firmware shipped in devices, hosted services without source disclosure) | Separate written agreement with the copyright holder |
 
 Copyright (c) 2025 Alessio Brillo and contributors. SPDX identifier: `AGPL-3.0-or-later`.
@@ -15,7 +15,7 @@ Copyright (c) 2025 Alessio Brillo and contributors. SPDX identifier: `AGPL-3.0-o
 - Unlike the plain GPL, the obligation also applies when users interact with a modified version **over a network** (AGPL §13), not only when binaries are distributed.
 - Distributing firmware images built from this repository in a device counts as conveying: recipients are entitled to the corresponding source and the right to modify it, subject to the AGPL terms.
 
-This summary is informational. The text of [LICENSE](LICENSE) is the only authoritative statement of the open-source terms.
+This summary is informational. The text of [LICENSE](../LICENSE) is the only authoritative statement of the open-source terms.
 
 ## Commercial licensing
 
@@ -41,12 +41,12 @@ remain Apache-2.0 while `synapse24` depends on it. Firmware files carry the
 `MIT` SPDX header; SDK files carry `Apache-2.0`; `synapse24`/worker/backend
 files carry `AGPL-3.0-or-later`.
 
-The root [LICENSE](LICENSE) (AGPL-3.0-or-later) governs the host package;
+The root [LICENSE](../LICENSE) (AGPL-3.0-or-later) governs the host package;
 `firmware/LICENSE` and `sdk/python/LICENSE` govern the device-side deliverables.
 
 ## Contributions
 
-Dual licensing only works if the maintainer may relicense every line. Contributors therefore grant that right explicitly; see [CONTRIBUTING.md](CONTRIBUTING.md#licensing-of-contributions).
+Dual licensing only works if the maintainer may relicense every line. Contributors therefore grant that right explicitly; see [CONTRIBUTING.md](../CONTRIBUTING.md#licensing-of-contributions).
 
 ## Earlier releases
 

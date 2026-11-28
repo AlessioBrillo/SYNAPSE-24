@@ -144,6 +144,65 @@ def test_events_from_jobs(tmp_path: Path) -> None:
     assert len(stress_events) == 2
 
 
+def test_report_carries_channel_metadata_tier_and_serial_source(tmp_path: Path) -> None:
+    """A consumer can describe the stream without re-reading the source XDF."""
+    from synapse24.sessions import StreamInfo, index_xdf
+    from synapse24.utils import StreamConfig
+
+    path = tmp_path / "renamed.xdf"
+    n = 100
+    write_xdf(
+        path,
+        streams=[
+            {
+                "data": np.zeros((n, 2)),
+                "timestamps": np.arange(n) / 100.0,
+                "info": StreamConfig(
+                    name="SYNAPSE_ECG_T0",
+                    stream_type="ECG",
+                    channel_count=2,
+                    sampling_rate=100.0,
+                    channel_names=["ECG_A", "ECG_B"],
+                    channel_units=["mV", "mV"],
+                    source_id="synapse24_ecg_t0_SYN-000123",
+                    tier=1,
+                ),
+            }
+        ],
+    )
+    record = index_xdf(path)
+    report = build_session_report(record)
+    stream = report["streams"][0]
+    assert stream["channel_names"] == ["ECG_A", "ECG_B"]
+    assert stream["channel_units"] == ["mV", "mV"]
+    assert stream["unit"] == "mV"
+    assert stream["tier"] == 1
+    assert stream["source_id"] == "synapse24_ecg_t0_SYN-000123"
+    assert report["device_serial"] == "SYN-000123"
+
+    # A report built from a hand-made record (e.g. a FIT session) still has
+    # the fields, with honest defaults instead of invented metadata.
+    from synapse24.sessions import SessionRecord
+
+    fit_like = SessionRecord(
+        session_id="syn-test",
+        device_serial="SYN-000000",
+        path=str(path),
+        format="fit",
+        size_bytes=1,
+        sha256="0" * 64,
+        started_at=None,
+        ended_at=None,
+        duration_s=0.0,
+        streams=[StreamInfo(name="record", type="FIT", sampling_rate_hz=0.0, n_samples=0)],
+    )
+    fallback = build_session_report(fit_like)["streams"][0]
+    assert fallback["channel_names"] == []
+    assert fallback["channel_units"] == []
+    assert fallback["tier"] == 0
+    assert fallback["source_id"] == ""
+
+
 def test_report_quality_note_mutates() -> None:
     report = {"quality": {"notes": []}}
     report_quality_note(report, "low SQI on PPG")

@@ -168,13 +168,19 @@ uv run python scripts/validate_phase1_entry.py --live-hardware \
     --bench-values <bench-values.json> --verified-by "A. Brillo"
 ```
 
-For the overnight MVP soak (6 h, battery, zero drops) add `--soak`, which records continuously through LabRecorderCLI:
+For the overnight MVP soak (6 h, battery, zero drops), run it through the bench
+suite — that is the entry point that writes `evidence/T12_*.json`:
 
 ```bash
-uv run python scripts/validate_phase1_entry.py --live-hardware --soak \
-    --duration 21600 --config config/hardware_bringup.yaml \
-    --manifest <consent-manifest.json>
+uv run python scripts/bench_suite.py soak --live \
+    --manifest <consent-manifest.json> --duration 21600
 ```
+
+`scripts/validate_phase1_entry.py --soak` on its own only writes
+`data/live_validation/gate_report.json`; without the bench-suite wrapper there
+is no T12 evidence file, so the row stays unproven. The soak's gate report must
+show measured `elapsed_s >= 21600`, `rehearsal: false` and an artifact written
+by LabRecorderCLI.
 
 ## Order of operations
 
@@ -183,8 +189,10 @@ uv run python scripts/validate_phase1_entry.py --live-hardware --soak \
 2. **Then:** order the smoke kit (rows above, one shipment).
 3. **On arrival:** follow `docs/hardware/BRINGUP_SOP.md`, then run the SOP
    table above and record every number in `data/live_validation/`
-   (`gate_report.json` is written by the validator; the bench rows are typed
-   into it by hand).
+   (`gate_report.json` is written by the validator; hand-measured rows go into
+   a JSON file passed with `--bench-values <file> --verified-by <name>`, and a
+   per-run `--gate-report <path>` keeps each attempt separate — never type
+   values into `gate_report.json` by hand).
 4. **When G1 passes:** order the Cerelog ESP-EEG with the criteria above
    re-checked — including the pod↔pod sync number and the measured power.
 5. **When G2 passes:** the readme/roadmap status flips and the next gate's

@@ -11,8 +11,12 @@ raw-frame codec. It has already earned its keep: it caught an implicit
 int -> uint8_t truncation of the unit-scale constants (1000 -> 232) that would
 have silently corrupted every quantised sample, and a missing <stdbool.h>.
 
-Skips (rather than fails) when no C compiler is available locally; on CI the
-absence of a compiler is a failure, so the gate cannot silently disappear.
+A missing C compiler is a hard failure (``tests.firmware_host.build``
+asserts), never a skip: a compile gate that skips cannot fail. The only
+permitted skip is an OS policy that refuses to load the freshly built library
+(Windows Application Control); such a skip is not a pass — scripts/host_c_gate.py
+turns it into a red CI step, and the module must be replayed in the gate's
+Linux container, where zero skips are expected.
 """
 
 from __future__ import annotations

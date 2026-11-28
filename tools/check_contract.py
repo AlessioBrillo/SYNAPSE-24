@@ -811,6 +811,9 @@ def check_config_readback(report: Report) -> None:
     """The flashed-configuration proof must exist on both sides of the link."""
     server = FIRMWARE_DIR / "ble" / "ble_gatt_server.c"
     src = server.read_text(encoding="utf-8") if server.is_file() else ""
+    # One authoritative key set: every field the host gate compares must be
+    # published by the firmware. A field dropped from either side used to make
+    # CI green and G1 fail on the bench.
     keys = (
         "ecg_hz",
         "ppg_hz",
@@ -819,11 +822,41 @@ def check_config_readback(report: Report) -> None:
         "ppg_led_red",
         "ppg_led_ir",
         "battery_mah",
+        "feature_rate_hz",
+        "pending_reboot",
+        "accel_bias_mg",
+        "gyro_bias_mdps",
+        "ecg_adc_ch",
+        "ecg_lead_off",
+        "ppg_addr",
+        "ppg_sr",
+        "ppg_pw",
+        "ppg_adc",
+        "imu_addr",
+        "accel_g",
+        "gyro_dps",
+        "accel_hz",
+        "gyro_hz",
+        "i2c_port",
+        "i2c_sda",
+        "i2c_scl",
+        "i2c_hz",
+        "sync_gpio",
+        "ina_addr",
+        "ina_shunt",
+        "power_profile",
+        "cal_serial",
+        "cal_state",
+        "cal_date",
+        "cal_operator",
+        "cal_instrument",
+        "cal_fw_version",
+        "cal_uncertainty_pct_x100",
+        "cal_noise_std_uv_x10",
     )
     report.check(
         "build_config_readback" in src and all(f'\\"{key}\\"' in src for key in keys),
-        "the device-config characteristic must publish the live rates, gain, LEDs "
-        "and battery capacity as JSON",
+        "the device-config characteristic must publish every field the host gate checks",
     )
     report.check(
         "synapse_calibration_load" in src,
@@ -834,6 +867,13 @@ def check_config_readback(report: Report) -> None:
     report.check(
         'DEVICE_CONFIG_UUID = CONTRACT_UUIDS["CONSUMER_DEVICE_CONFIG"]' in host,
         "the host validator must read the device-config UUID from the generated contract",
+    )
+    # feature_rate_hz is session-only and i2c_hz is reported but not a contract
+    # field; every other published key must be expected by the host gate.
+    host_keys = tuple(key for key in keys if key not in ("feature_rate_hz", "i2c_hz"))
+    report.check(
+        all(f'"{key}"' in host for key in host_keys),
+        "the host validator must expect every readback key the firmware publishes",
     )
 
 
@@ -944,6 +984,11 @@ _RATE_LITERAL_TARGETS = [
         "live 2-pod sync test",
         "forearm_hub_normative_rates",
     ),
+    (
+        ROOT / "tests" / "test_phase1_dry_run.py",
+        "Phase 1 dry-run round-trip test",
+        "forearm_hub_normative_rates",
+    ),
 ]
 
 _FORBIDDEN_RATE_LITERALS = [
@@ -958,6 +1003,8 @@ _FORBIDDEN_RATE_LITERALS = [
     ("__SAMPLING_RATE_DICT__", "legacy rate literal in a sampling_rate structure"),
     (r"int\(64\s*\*", "hardcoded 64 Hz PPG expectation"),
     (r"abs\([a-z_]+_rate\s*-\s*\d+\)", "hardcoded nominal rate in a gate check"),
+    # YAML/JSON-style stream specs: "sampling_rate": 64.0 (test_phase1_dry_run.py).
+    (r"[\"']sampling_rate[\"']\s*:\s*64(?:\.0+)?\b", "legacy 64 Hz stream spec"),
 ]
 
 # A line carrying this marker is exempt from the literal check. It exists for

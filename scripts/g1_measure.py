@@ -101,19 +101,18 @@ def noise_floor_uv(
 ) -> dict[str, float]:
     """Std of a shorted-input recording, in µV at the configured gain (SOP §4a.1).
 
-    ``std_uv`` is the number on the wire. The 30 µV limit in the SOP is at the
-    electrodes, so the corrected figure ``std_uv * nominal_gain / configured_gain``
-    is reported alongside it when the actual gain is known. Never make the
-    operator do this correction by hand and compare the wrong number to the
-    limit (SOP §4a.1).
+    ``std_uv`` is the number on the wire. The firmware already divides the
+    ADC reading by the configured (calibrated) gain and the raw encoder scales
+    mV to uV, so the wire number is electrode-referred uV when a gain was
+    applied: ``true_noise_uv`` is the same figure, not a second correction.
+    Scaling by nominal/actual here would double-correct a calibrated band.
     """
     x = np.asarray(wire_uv, dtype=np.float64)
     if x.size < 2:
         raise ValueError("need at least two samples")
     std = float(np.std(x, ddof=1))
-    result = {"std_uv": std, "mean_uv": float(np.mean(x))}
+    result = {"std_uv": std, "mean_uv": float(np.mean(x)), "true_noise_uv": std}
     if configured_gain is not None:
-        result["true_noise_uv"] = std * NOMINAL_GAIN / float(configured_gain)
         result["configured_gain"] = float(configured_gain)
     return result
 

@@ -2,7 +2,7 @@
 
 This file records **decisions and open risks**, not shipped features. It is the
 input to the first product design freeze; none of the items below is
-implemented by MVP-2.9. The authoritative engineering state is
+implemented by MVP-2.10. The authoritative engineering state is
 [`../hardware/STATUS.md`](../hardware/STATUS.md) and the regulatory position is
 [`../../compliance/COMPLIANCE.md`](../../compliance/COMPLIANCE.md).
 
@@ -32,6 +32,6 @@ and remains **Open** for the commercial image.
 
 ## Link to the bench
 
-These risks are tracked here so the bench work stays focused: MVP-2.9 makes
-the evidence and the per-unit configuration trustworthy; it does **not** claim
+These risks are tracked here so the bench work stays focused: MVP-2.10 makes
+the live onboarding path and the per-unit configuration trustworthy; it does **not** claim
 that any of the rows above is closed.

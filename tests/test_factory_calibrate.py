@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -62,11 +63,46 @@ def test_build_commands_translates_all_fields() -> None:
         "cal led 1F 20",
         "cal accel_bias 1 -2 3",
         "cal gyro_bias 4 5 -6",
-        "cal date 2026-11-24",
-        "cal operator A. Brillo",
+        'cal date "2026-11-24"',
+        'cal operator "A. Brillo"',
         "cal save",
         "cal dump",
     ]
+
+
+def test_multiword_provenance_survives_the_emitted_commands() -> None:
+    """The exact bug: a multi-word operator used to reach NVS as just "A."."""
+    commands = fc.build_commands(
+        _args(
+            operator="A. Brillo",
+            instrument="Fluke 8846A",
+            fw="v2.10 dev",
+            date="2026-11-28",
+        )
+    )
+    assert commands == [
+        'cal instrument "Fluke 8846A"',
+        'cal fw "v2.10 dev"',
+        'cal date "2026-11-28"',
+        'cal operator "A. Brillo"',
+        "cal save",
+        "cal dump",
+    ]
+    transport = fc.FakeTransport()
+    for command in commands:
+        reply = transport.send(command)
+        assert not reply.startswith("ERR"), reply
+    record = fc.parse_dump(reply)
+    assert record["operator"] == "A. Brillo"
+    assert record["instrument"] == "Fluke 8846A"
+    assert record["fw_version"] == "v2.10 dev"
+    assert record["date"] == "2026-11-28"
+
+
+@pytest.mark.parametrize("value", ['a "b', "a\nb", "a\rb"])
+def test_shell_quote_refuses_values_the_shell_cannot_represent(value: str) -> None:
+    with pytest.raises(ValueError, match="cannot contain quotes or newlines"):
+        fc.shell_quote(value)
 
 
 @pytest.mark.parametrize(
@@ -95,8 +131,8 @@ def test_calibration_v2_fields_are_written() -> None:
         )
     )
     assert commands == [
-        "cal instrument GEN-42",
-        "cal fw 1.2.3",
+        'cal instrument "GEN-42"',
+        'cal fw "1.2.3"',
         "cal uncertainty 500",
         "cal noise 125",
         "cal save",
@@ -136,6 +172,19 @@ def test_fake_transport_round_trip() -> None:
     record = fc.parse_dump(reply)
     assert record["ecg_gain_x100"] == 110000
     assert record["serial"] == "SYN-000000000000"  # the device owns its serial
+
+
+def test_fake_transport_mirrors_the_real_firmware_text_parser() -> None:
+    """An unquoted value is truncated; malformed quotes are refused loudly."""
+    transport = fc.FakeTransport()
+    assert transport.send("cal operator A. Brillo") == "OK operator"
+    assert transport.send('cal instrument "GEN 42"') == "OK instrument"
+    assert transport.send('cal operator "A. Brillo') == "ERR bad operator value"
+    assert transport.send('cal operator "A." junk') == "ERR bad operator value"
+    assert transport.send('cal operator A."Brillo') == "ERR bad operator value"
+    record = fc.parse_dump(transport.send("cal dump"))
+    assert record["operator"] == "A."  # first token only, like strtok on the band
+    assert record["instrument"] == "GEN 42"  # quoted -> whole value
 
 
 def test_parse_dump_rejects_a_missing_record() -> None:
@@ -200,3 +249,53 @@ def test_a_real_port_dump_emits_json_and_writes_no_file(
     ]
     assert any(item["serial"] == record["serial"] for item in lines)
     assert not cal_dir.exists(), "a dump must never write the host record"
+
+
+class _FakeConn:
+    """Minimal pyserial stand-in: answers `cal dump` only when told to."""
+
+    answers_dump = False
+
+    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 2.0) -> None:
+        self.port = port
+        self.line = ""
+        self.closed = False
+        self.dumped = 0
+
+    def write(self, data: bytes) -> None:
+        self.line = data.decode("ascii").strip()
+
+    def readline(self) -> bytes:
+        if self.line == "cal dump" and type(self).answers_dump:
+            self.dumped += 1
+            return b'{"serial":"SYN-A1B2C3D4E5F6"}\r\n'
+        return b"OK reboot\r\n"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _install_fake_serial(monkeypatch: pytest.MonkeyPatch, conn_type: type[_FakeConn]) -> None:
+    monkeypatch.setitem(sys.modules, "serial", types.SimpleNamespace(Serial=conn_type))
+
+
+def test_reboot_polls_until_the_booted_shell_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LateBoot(_FakeConn):
+        answers_dump = True
+
+    _install_fake_serial(monkeypatch, LateBoot)
+    transport = fc.SerialTransport("COM9")
+    transport.reboot(timeout=1.0)
+    assert transport._conn.dumped == 1
+    transport.close()
+
+
+def test_reboot_fails_loudly_when_the_band_never_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_serial(monkeypatch, _FakeConn)
+    transport = fc.SerialTransport("COM9")
+    with pytest.raises(RuntimeError, match="did not answer `cal dump` within"):
+        transport.reboot(timeout=0.05)

@@ -164,6 +164,7 @@ bringup:
         - xdf_zero_drop
         - research_stream_zero_loss
         - tier0_sync_10ms
+        - utc_anchor_recorded
         - ppg_completeness
         - sample_rate_accuracy
         - power_telemetry_measured
@@ -179,6 +180,7 @@ bringup:
         - xdf_zero_drop
         - research_stream_zero_loss
         - tier0_sync_10ms
+        - utc_anchor_recorded
         - ppg_completeness
         - sample_rate_accuracy
         - power_telemetry_measured

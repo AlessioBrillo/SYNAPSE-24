@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import struct
 import sys
 from dataclasses import asdict, dataclass, field
@@ -58,6 +59,12 @@ class StreamInfo:
     n_samples: int
     #: unit of each channel as the file declares it ([] = the file says nothing; never guessed)
     channel_units: list[str] = field(default_factory=list)
+    #: channel labels as declared in the XDF header ([] = the file says nothing)
+    channel_names: list[str] = field(default_factory=list)
+    #: acquisition tier declared by the writer (0 when absent)
+    tier: int = 0
+    #: LSL source_id, which carries the device serial on real recordings
+    source_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -247,8 +254,27 @@ def _extract_device_serial_from_fit(path: Path) -> str:
     return path.stem.upper()
 
 
-def _extract_device_serial_from_xdf(path: Path) -> str:
-    """XDF has no embedded device serial; use the filename stem."""
+_SERIAL_RE = re.compile(r"SYN-(\d{6})", re.IGNORECASE)
+
+
+def _serial_from_source_ids(source_ids: list[str]) -> str | None:
+    """The serial a serial-bearing LSL source_id declares (e.g. ``..._SYN-000123``)."""
+    for source_id in source_ids:
+        match = _SERIAL_RE.search(source_id)
+        if match:
+            return f"SYN-{match.group(1)}"
+    return None
+
+
+def _extract_device_serial_from_xdf(path: Path, source_ids: list[str] | None = None) -> str:
+    """Prefer the serial in the XDF stream's source_id over the filename.
+
+    A copied/renamed file keeps its device identity in the source_id; the old
+    filename-based guess silently attributed a session to the wrong device.
+    """
+    serial = _serial_from_source_ids(source_ids or [])
+    if serial is not None:
+        return serial
     return path.stem.upper()
 
 
@@ -269,12 +295,63 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return default
 
 
-def _xdf_stream_infos(streams: list[dict[str, Any]]) -> list[StreamInfo]:
-    """validate_xdf già appiattisce ogni stream a name/type/n_samples/nominal_srate/duration_s."""
+def _xdf_stream_extras(path: Path) -> list[dict[str, Any]]:
+    """Channel labels/tier from the XDF <desc>, which validate_xdf does not expose."""
+    import pyxdf  # imported here: indexing stays importable without pyxdf
+
+    try:
+        streams, _header = pyxdf.load_xdf(str(path), dejitter_timestamps=False)
+    except Exception:  # a broken file is reported by validate_xdf, not here
+        return []
+
+    extras: list[dict[str, Any]] = []
+    for stream in streams:
+        info = stream.get("info", {}) or {}
+
+        def first(key: str, default: str = "") -> str:
+            value = info.get(key, default)
+            if isinstance(value, list):
+                return str(value[0]) if value else default
+            return str(value) if value is not None else default
+
+        names: list[str] = []
+        try:
+            for channel in info["desc"][0]["channels"][0]["channel"]:
+                names.append(str((channel.get("label") or [""])[0] or ""))
+        except (KeyError, IndexError, TypeError, AttributeError):
+            pass
+        try:
+            tier = int(info["desc"][0]["acquisition"][0]["tier"][0])
+        except (KeyError, IndexError, TypeError, ValueError):
+            tier = 0
+        extras.append(
+            {
+                "name": first("name"),
+                "source_id": first("source_id"),
+                "channel_names": names,
+                "tier": tier,
+            }
+        )
+    return extras
+
+
+def _xdf_stream_infos(
+    streams: list[dict[str, Any]], extras: list[dict[str, Any]] | None = None
+) -> list[StreamInfo]:
+    """Build StreamInfo from validate_xdf's flat summary + the header <desc> extras."""
+    extras = extras or []
+    by_name_source = {(e["name"], e["source_id"]): e for e in extras}
+    by_name = {e["name"]: e for e in extras}
     infos: list[StreamInfo] = []
-    for s in streams:
+    for index, s in enumerate(streams):
         name = _clean_str(s.get("name")) or "unnamed"
         stype = _clean_str(s.get("type")) or "unknown"
+        source_id = _clean_str(s.get("source_id"))
+        extra = (
+            by_name_source.get((name, source_id))
+            or by_name.get(name)
+            or (extras[index] if index < len(extras) else {})
+        )
         fs = _to_float(s.get("nominal_srate"))
         if fs == 0.0:
             # nominal_srate round-trippa a 0 attraverso l'XML header di XDF;
@@ -287,6 +364,9 @@ def _xdf_stream_infos(streams: list[dict[str, Any]]) -> list[StreamInfo]:
                 sampling_rate_hz=fs,
                 n_samples=int(_to_float(s.get("n_samples"))),
                 channel_units=[str(u) for u in (s.get("channel_units") or [])],
+                channel_names=[str(n) for n in (extra.get("channel_names") or [])],
+                tier=int(extra.get("tier", 0)),
+                source_id=source_id or str(extra.get("source_id", "")),
             )
         )
     return infos
@@ -325,7 +405,8 @@ def index_xdf(path: Path) -> SessionRecord:
     digest = _sha256_file(path)
     summary = validate_xdf(path)
     streams_raw = summary.get("streams", []) or []
-    streams = _xdf_stream_infos(streams_raw)
+    extras = _xdf_stream_extras(path)
+    streams = _xdf_stream_infos(streams_raw, extras)
     n_total = sum(s.n_samples for s in streams)
     # validate_xdf reports per-stream duration_s but not absolute wall-clock
     # start/end times; leave those unset rather than inventing them.
@@ -333,7 +414,9 @@ def index_xdf(path: Path) -> SessionRecord:
     started_at, ended_at = _wall_clock_window(streams_raw)
     return SessionRecord(
         session_id=_session_id(digest),
-        device_serial=_extract_device_serial_from_xdf(path),
+        device_serial=_extract_device_serial_from_xdf(
+            path, [s.source_id for s in streams if s.source_id]
+        ),
         path=str(path.resolve()),
         format="xdf",
         size_bytes=path.stat().st_size,

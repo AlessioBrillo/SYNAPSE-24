@@ -16,13 +16,16 @@ compiler**. The canonical firmware is now `firmware/esp32_band`; the legacy apps
 library `firmware/common/` is retained because `esp32_band` and the host-side
 parity tests in `tests/firmware_host/` both depend on it.
 
-The gate is: **`firmware/esp32_band` compiles with `-Wall -Wextra -Werror`**,
-and CI proves it on every push so the gate can never silently regress.
+The gate is: **`firmware/esp32_band` compiles for `esp32s3` under ESP-IDF
+v5.5.5**, and CI proves it in the `firmware-band` step on every push so the
+gate can never silently regress. The strict `-Wall -Wextra -Werror` flags apply
+to the *host* C compile gates in `tests/firmware_host/`, not to the ESP-IDF
+firmware build.
 
 ## Pinned version: v5.5.5
 
 The project pins **ESP-IDF v5.5.5** everywhere (local host + CI
-`firmware-build` job). Rationale (verified October 2026):
+`firmware-band` step). Rationale (verified October 2026):
 
 - v5.5.5 is the **latest stable 5.x** (16 Jul 2026). v5.3 is at end of
   maintenance (last bugfix v5.3.6, 15 Sep 2026) and v6.0/6.1, while released,
@@ -120,8 +123,14 @@ The Band firmware has five build profiles, selected with `SDKCONFIG_DEFAULTS`:
 | `band-bench` | `band-core` + the USB factory shell | **G1 configuration and bringup**. This is the image the tester flashes. |
 | `band-core` | ECG (AD8232) + PPG (MAX30102) + IMU (ICM-20948), no GPS/TMP117/FIT/provisioning/OTA | Offline smoke-kit profile; no factory writes. |
 | `band-full` (default) | Everything: + GPS MAX-M10S, + TMP117, + FIT writer, + provisioning | Integration profile. OTA is still a stub (`synapse_ota.c`). |
-| `band-full` + `sdkconfig.rr` | `band-full` with `CONFIG_SYNAPSE_RR_ENABLE=y` | PPG RMSSD experiment; kept off by default (5x ECG). |
+| `band-full` + `sdkconfig.rr` | `band-full` with `CONFIG_SYNAPSE_RR_ENABLE=y` | PPG RMSSD experiment; kept off by default (5x ECG). Built by the `firmware-band` CI step with an extra sdkconfig overlay; **not** a `--variant` choice (see below). |
 | `band-product` | Factory mode off and the raw research service unregistered | Commercial image; not used for G1 evidence. |
+
+> **Flash-selectable variants:** `scripts/build_and_flash_firmware.py` accepts
+> only `band-core`, `band-bench`, `band-full` and `band-product`
+> (`FirmwareBuilder.VARIANT_DEFAULTS`). There is no `--variant band-full+RR`:
+> the RR configuration exists only as the CI overlay build shown above. Do not
+> type `band-full+RR` into the flash script.
 
 `band-bench` exists so that an operator never has to run `menuconfig` to configure a unit; `scripts/build_and_flash_firmware.py --variant band-bench` selects it.
 

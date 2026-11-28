@@ -292,7 +292,38 @@ filterwarnings = [
 source = ["src", "worker", "sdk/python", "backend"]
 omit = [
     "tests/*",
-    "scripts/*",
+    # --cov=scripts measures the device-onboarding path only (see the
+    # dedicated coverage step in .woodpecker/ci.yml). Every script that is a
+    # manually invoked CLI tool is omitted so it cannot dilute that gate;
+    # a new onboarding script must be added to the CI step, not to this list.
+    "scripts/__init__.py",
+    "scripts/build_and_flash_firmware.py",
+    "scripts/calibrate_imu.py",
+    "scripts/check_phone_capture.py",
+    "scripts/download_datasets.py",
+    "scripts/export_session_fit.py",
+    "scripts/gcc_probe.py",
+    "scripts/host_c_gate.py",
+    "scripts/ingest_datasets.py",
+    "scripts/make_band_fixtures.py",
+    "scripts/make_band_sidecars.py",
+    "scripts/make_consumer_vectors.py",
+    "scripts/measure_two_pod_sync.py",
+    "scripts/ppg_sweep.py",
+    "scripts/preflight.py",
+    "scripts/quantize_and_deploy.py",
+    "scripts/real_ppg_replay.py",
+    "scripts/real_signal_replay.py",
+    "scripts/reproduce_wesad_fusion.py",
+    "scripts/train_triage.py",
+    "scripts/validate_baseline.py",
+    "scripts/validate_live_sync.py",
+    "scripts/validate_live_tier0.py",
+    "scripts/validate_phase0_exit.py",
+    "scripts/validate_phase1_entry.py",
+    "scripts/validate_sync.py",
+    "scripts/virtual_band.py",
+    "scripts/virtual_band_core.py",
     "*/__pycache__/*",
     # Integration-heavy acquisition modules (require LSL/hardware)
     "src/synapse24/acquisition/lsl_gateway.py",

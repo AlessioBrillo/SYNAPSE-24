@@ -459,6 +459,10 @@ def verify_xdf_roundtrip(
                     channel_names=list(spec.get("channel_names") or []),
                     channel_units=list(spec.get("channel_units") or []),
                     source_id=spec.get("source_id", ""),
+                    tier=int(spec.get("tier", 0)),
+                    device=str(spec.get("device", "SYNAPSE-24")),
+                    model=str(spec.get("model", "Phase0")),
+                    metadata=dict(spec.get("metadata") or {}),
                 ),
             }
         )

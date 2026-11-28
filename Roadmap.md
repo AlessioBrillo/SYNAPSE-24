@@ -181,6 +181,7 @@ Every row below is "closed" in the sense of *merged and tested on the host*; **n
 | MVP-2.7 | Fail-closed bench evidence, bench/human manifests, one per-unit profile command, executable T10 | `docs/hardware/STATUS.md`, `docs/increments/MVP2_7_FIRST_DEVICE_ONBOARDING.md` |
 | MVP-2.8 | Hardware-readiness review fixes: µV truth, provenance-bound writes, usable bench tooling | `docs/increments/MVP2_8_HARDWARE_READINESS_FIXES.md` |
 | MVP-2.9 | First-device readiness: ODR readback truth, factory-mode image, fail-closed gates and evidence | `docs/increments/MVP2_9_DEVICE_READY_HARDENING.md` |
+| MVP-2.10 | Real-device onboarding truth: BLE subscribe, readback keys, provenance, XDF units/anchor and fail-closed host-C gate | `docs/increments/MVP2_10_DEVICE_ONBOARDING_TRUTH.md` |
 | **Next** | The first bench day (`docs/hardware/FIRST_HARDWARE_DAY.md`); a BLE dongle (MVP-1.7 radio); a Mac (iOS) | |
 
 **Honest reality check:** 24/7 dry-electrode EEG at good signal quality is an unsolved problem even for funded labs; fNIRS DIY is genuinely hard analog/optical work; and long-term wearability/power are their own multi-month efforts. A solo, part-time researcher should treat the ECG+PPG+IMU+consumer-EEG stack as the achievable near-term win and treat dense dry-EEG and DIY-fNIRS as ambitious research spikes, not deliverables on a fixed schedule.

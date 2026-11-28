@@ -19,6 +19,7 @@ Two rules make the export trustworthy:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -39,6 +40,7 @@ from synapse24.utils.windows import window_bounds
 __all__ = [
     "ExportError",
     "ExportSummary",
+    "TimeAnchor",
     "export_session_fit",
     "load_xdf_streams",
     "main",
@@ -53,6 +55,67 @@ class ExportError(RuntimeError):
     """Raised when a session cannot be exported."""
 
 
+def _find_float(node: Any, keys: tuple[str, ...], depth: int = 0) -> float | None:
+    """Find the first numeric value under ``keys`` in a nested dict/list tree."""
+    if depth > 8:
+        return None
+    if isinstance(node, dict):
+        for key in keys:
+            if key in node:
+                value = node[key]
+                if isinstance(value, list):
+                    value = value[0] if value else None
+                if isinstance(value, int | float | str):
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        pass
+        for value in node.values():
+            found = _find_float(value, keys, depth + 1)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_float(value, keys, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+_UTC_KEYS = ("utc0_s", "utc0", "utc_epoch_s")
+_LSL_KEYS = ("lsl_t0_s", "lsl_start_s", "lsl_time_at_start_s")
+
+
+@dataclass(frozen=True)
+class TimeAnchor:
+    """The Unix epoch that corresponds to a known LSL-domain instant.
+
+    ``utc0_s`` is the wall-clock time at LSL time ``lsl_t0_s``. A session gate
+    report (or the XDF stream metadata) carries both; relying on manual CLI
+    flags for real sessions is what made exports undateable in practice.
+    """
+
+    utc0_s: float
+    lsl_t0_s: float | None = None
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> TimeAnchor | None:
+        """Read an anchor from a gate report / session metadata dict."""
+        utc0 = _find_float(data, _UTC_KEYS)
+        if utc0 is None:
+            return None
+        return cls(utc0_s=utc0, lsl_t0_s=_find_float(data, _LSL_KEYS))
+
+
+def _anchor_from_xdf_info(info: dict[str, Any]) -> TimeAnchor | None:
+    """Read an anchor declared in the stream's own XDF ``<desc>`` metadata."""
+    desc = info.get("desc", [])
+    utc0 = _find_float(desc, _UTC_KEYS)
+    if utc0 is None:
+        return None
+    return TimeAnchor(utc0_s=utc0, lsl_t0_s=_find_float(desc, _LSL_KEYS))
+
+
 @dataclass(frozen=True)
 class StreamView:
     """One stream of an XDF session."""
@@ -62,6 +125,8 @@ class StreamView:
     timestamps: np.ndarray
     data: np.ndarray
     nominal_srate: float
+    #: anchor declared by the file itself, if any (self-describing session).
+    time_anchor: TimeAnchor | None = None
 
     @property
     def n_samples(self) -> int:
@@ -136,6 +201,7 @@ def load_xdf_streams(path: Path | str) -> list[StreamView]:
                 timestamps=np.asarray(time_stamps, dtype=np.float64).ravel(),
                 data=data,
                 nominal_srate=float(_first("nominal_srate", 0.0) or 0.0),
+                time_anchor=_anchor_from_xdf_info(info),
             )
         )
     return out
@@ -169,6 +235,9 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     serial: str = "SYN-000000",
     window_s: float = 30.0,
     utc0_s: float | None = None,
+    *,
+    session_metadata: dict[str, Any] | Path | str | None = None,
+    lsl_t0_s: float | None = None,
 ) -> ExportSummary:
     """Export an XDF session to a FIT file with Synapse developer data.
 
@@ -186,7 +255,12 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
         serial: Device serial written in the FIT file id.
         window_s: Analysis window length, in seconds.
         utc0_s: Unix epoch seconds corresponding to LSL time ``t0`` (the
-            first sample timestamp). Required for a local LSL clock.
+            first sample timestamp). Required for a local LSL clock. Explicit
+            CLI values always override a recorded anchor.
+        session_metadata: Gate report / session metadata dict (or path to a
+            JSON file) carrying ``utc0_s`` and optionally ``lsl_t0_s``.
+        lsl_t0_s: LSL-domain instant corresponding to ``utc0_s``; overrides the
+            recorded value. Defaults to the first sample timestamp.
 
     Returns:
         An :class:`ExportSummary` describing what was written.
@@ -215,22 +289,54 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
     duration_s = t1 - t0
 
     # Anchor the timestamps to Unix epoch. LSL local_clock() is NOT Unix epoch (it counts from
-    # the machine's start), so a FIT written from it would be dated 1970. Two cases are told
-    # apart by the value itself, because nothing in the file says which clock wrote it:
-    #   * a caller-supplied anchor (utc0_s): used as given;
-    #   * timestamps after 2017: wall-clock time, as `synapse record` writes (an LSL clock
-    #     would need 54 years of uptime to read this): taken as Unix epoch;
-    #   * anything else: a local clock with no anchor. The date is unknown, and inventing
-    #     one (the export time was used, "approximate") puts a wrong date in a health record.
+    # the machine's start), so a FIT written from it would be dated 1970. The anchor is taken,
+    # in order: (1) the explicit utc0_s argument (CLI override), (2) a gate report / session
+    # metadata dict passed in, (3) metadata declared in the XDF stream itself, (4) the value
+    # itself when it is already wall-clock time (`synapse record`). A local clock with none of
+    # those is refused: inventing a date puts a wrong one in a health record.
     warnings: list[str] = []
+
+    anchor: TimeAnchor | None = None
+    if session_metadata is not None:
+        if isinstance(session_metadata, Path | str):
+            meta_path = Path(session_metadata)
+            if not meta_path.is_file():
+                raise ExportError(f"session metadata file not found: {meta_path}")
+            try:
+                metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ExportError(f"cannot read session metadata {meta_path}: {exc}") from exc
+        else:
+            metadata = session_metadata
+        if not isinstance(metadata, dict):
+            raise ExportError("session metadata must be a JSON object or a dict")
+        anchor = TimeAnchor.from_mapping(metadata)
+
+    if anchor is None and utc0_s is None:
+        # A self-describing XDF carries its own anchor; do not require a flag.
+        anchor = next((s.time_anchor for s in streams if s.time_anchor is not None), None)
+        if anchor is not None:
+            warnings.append("UTC anchor read from the XDF stream metadata")
+
+    lsl_anchor = lsl_t0_s
+    if anchor is not None:
+        if utc0_s is None:
+            utc0_s = anchor.utc0_s
+            warnings.append("UTC anchor read from session metadata")
+        if lsl_anchor is None:
+            lsl_anchor = anchor.lsl_t0_s
+    if lsl_anchor is None:
+        lsl_anchor = t0
 
     if utc0_s is None:
         if t0 < _UNIX_EPOCH_PLAUSIBLE_S:
             raise ExportError(
                 f"the XDF timestamps (t0={t0:.3f}) are a local LSL clock, not dates: "
-                "pass the Unix time of the first sample (--utc0-s) to date the FIT file"
+                "pass the Unix time of the first sample (--utc0-s), or a gate report "
+                "with utc0_s/lsl_t0_s via session_metadata, to date the FIT file"
             )
         utc0_s = t0
+        lsl_anchor = t0
         warnings.append(
             f"no UTC anchor given: the XDF timestamps (t0={t0:.3f}) are taken as Unix epoch "
             "(wall-clock timestamps, as `synapse record` writes them)"
@@ -238,7 +344,7 @@ def export_session_fit(  # noqa: PLR0915 - complex export pipeline (decode, anch
 
     def _utc(lsl_ts: float) -> float:
         """Map one LSL-domain timestamp to Unix epoch seconds."""
-        return utc0_s + (lsl_ts - t0)
+        return utc0_s + (lsl_ts - lsl_anchor)
 
     try:
         r_peaks = detect_r_peaks_neurokit(signal, int(round(fs)))
@@ -348,7 +454,19 @@ def main(argv: list[str] | None = None) -> int:
         "--utc0-s",
         type=float,
         default=None,
-        help="Unix epoch seconds at LSL time t0 (first sample). Required when the XDF timestamps are a local LSL clock; wall-clock timestamps (synapse record) need none.",
+        help="Unix epoch seconds at LSL time t0 (first sample). Overrides any recorded anchor; required only when the XDF timestamps are a local LSL clock with no recorded anchor or session metadata.",
+    )
+    parser.add_argument(
+        "--session-metadata",
+        type=Path,
+        default=None,
+        help="Gate report / session metadata JSON carrying utc0_s and optionally lsl_t0_s.",
+    )
+    parser.add_argument(
+        "--lsl-t0-s",
+        type=float,
+        default=None,
+        help="LSL time corresponding to utc0_s (overrides the recorded value).",
     )
     args = parser.parse_args(argv)
 
@@ -356,7 +474,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"XDF not found: {args.xdf}")
 
     try:
-        summary = export_session_fit(args.xdf, args.out, args.device_id, args.window_s, args.utc0_s)
+        summary = export_session_fit(
+            args.xdf,
+            args.out,
+            args.device_id,
+            args.window_s,
+            args.utc0_s,
+            session_metadata=args.session_metadata,
+            lsl_t0_s=args.lsl_t0_s,
+        )
     except ExportError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
